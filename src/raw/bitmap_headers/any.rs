@@ -20,7 +20,7 @@ impl BitmapHeader {
         match self {
             Self::Core(header) => header.validate(),
             Self::Info(header) => header.validate(),
-            Self::V4(header) => header.validate_v4(),
+            Self::V4(header) => header.validate(),
             Self::V5(header) => header.validate(),
         }
     }

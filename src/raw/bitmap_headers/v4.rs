@@ -62,12 +62,7 @@ pub struct BitmapV4Header {
 impl BitmapV4Header {
     pub const HEADER_SIZE: u32 = 108;
 
-    /// Validation logic specific to only the V4 header
-    ///
-    /// This validation does not apply to the newer headers, so it is split off
-    /// into this function, to allow the other headers that utilize this one
-    /// through composition to still re-use the validate function.
-    pub(crate) fn validate_v4(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> BmpResult<()> {
         self.validate_base()?;
 
         // Only the following color space type values are allowed for V4
@@ -81,6 +76,13 @@ impl BitmapV4Header {
         Ok(())
     }
 
+    /// Validation logic that's shared to this variant, and also any other
+    /// variants that contain this header as a composite value.
+    ///
+    /// This function only contains the non-specific validation that the other
+    /// variants can reliably call and re-use, without validation code duplication,
+    /// and without bringing in the invariants that do change between the header
+    /// versions.
     pub(crate) fn validate_base(&self) -> BmpResult<()> {
         self.info.validate()?;
         self.masks.validate()?;
