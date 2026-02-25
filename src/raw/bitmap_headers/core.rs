@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult};
+use crate::raw::{BmpError, BmpResult, types::BitsPerPixel};
 
 /// The BMP CORE (12 byte) header.
 ///
@@ -37,7 +37,7 @@ pub struct BitmapCoreHeader {
     pub planes: u16,
 
     /// The number of bits per pixel / color depth.
-    pub bit_count: u16,
+    pub bit_count: BitsPerPixel,
 }
 
 impl BitmapCoreHeader {
@@ -59,9 +59,12 @@ impl BitmapCoreHeader {
             return Err(BmpError::InvalidPlanes(self.planes));
         }
 
-        // For the core header, only values of: 1, 4, 8 or 24 are accepted
-        if !matches!(self.bit_count, 1 | 4 | 8 | 24) {
-            return Err(BmpError::InvalidBitCount(self.bit_count));
+        // For the core header, only bpp values of: 1, 4, 8 or 24 are accepted
+        if !matches!(
+            self.bit_count,
+            BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 | BitsPerPixel::Bpp24
+        ) {
+            return Err(BmpError::InvalidBitCount(self.bit_count.bit_count()));
         }
 
         Ok(())
@@ -72,7 +75,7 @@ impl BitmapCoreHeader {
             width: reader.read_u16::<LittleEndian>()?,
             height: reader.read_u16::<LittleEndian>()?,
             planes: reader.read_u16::<LittleEndian>()?,
-            bit_count: reader.read_u16::<LittleEndian>()?,
+            bit_count: BitsPerPixel::read(reader)?,
         })
     }
 
@@ -80,7 +83,7 @@ impl BitmapCoreHeader {
         writer.write_u16::<LittleEndian>(self.width)?;
         writer.write_u16::<LittleEndian>(self.height)?;
         writer.write_u16::<LittleEndian>(self.planes)?;
-        writer.write_u16::<LittleEndian>(self.bit_count)?;
+        self.bit_count.write(writer)?;
         Ok(())
     }
 }

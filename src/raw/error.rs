@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::raw::types::ColorMaskChannel;
+use crate::raw::types::{BitsPerPixel, ColorMaskChannel};
 
 #[derive(Error, Debug)]
 pub enum BmpError {
@@ -29,7 +29,7 @@ pub enum BmpError {
     InvalidCompressionForTopDown { compression: u32 },
 
     #[error("The compression variant {compression} cannot be used for bits-per-pixel value of {bpp}")]
-    InvalidCompressionForBpp { compression: u32, bpp: u16 },
+    InvalidCompressionForBpp { compression: u32, bpp: BitsPerPixel },
 
     #[error("The image size of {image_size} cannot be used with compression variant {compression}")]
     InvalidImageSizeForCompression { image_size: u32, compression: u32 },
@@ -52,7 +52,7 @@ pub enum BmpError {
     MaskExceedsBitDepth {
         mask: u32,
         channel: ColorMaskChannel,
-        bpp: u16,
+        bpp: BitsPerPixel,
     },
 
     #[error("Invalid value for the color space type field: {0}")]
