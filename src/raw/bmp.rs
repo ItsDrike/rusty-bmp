@@ -4,7 +4,7 @@ use crate::raw::{
     BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, BmpError, BmpResult, FileHeader,
     RgbMasks,
     helpers::BoundedReader,
-    types::{ColorSpaceType, RgbQuad, RgbTriple},
+    types::{ColorSpaceType, Compression, RgbQuad, RgbTriple},
     wingdi,
 };
 
@@ -132,7 +132,7 @@ impl Bmp {
         // the DIB header directly, and V2 / CORE doesn't have bitfields support
         // at all.
         let masks = if let BitmapHeader::Info(header) = bmp_header
-            && header.compression == wingdi::BI_BITFIELDS
+            && header.compression == Compression::BitFields
         {
             let masks = RgbMasks::read_unchecked(&mut reader)?;
             masks.validate_for_bpp(header.bit_count)?;

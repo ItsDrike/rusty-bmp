@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::raw::types::{BitsPerPixel, ColorMaskChannel, ColorSpaceType};
+use crate::raw::types::{BitsPerPixel, ColorMaskChannel, ColorSpaceType, Compression};
 
 #[derive(Error, Debug)]
 pub enum BmpError {
@@ -25,14 +25,17 @@ pub enum BmpError {
     #[error("The bit count (bits-per-pixel) value of {0} is invalid")]
     InvalidBitCount(u16),
 
-    #[error("Top-Down images (with height < 0) support only RGB or BITFIELDS compression, got {compression}")]
-    InvalidCompressionForTopDown { compression: u32 },
+    #[error("Top-Down images (with height < 0) support only RGB or BITFIELDS compression, got {compression:?}")]
+    InvalidCompressionForTopDown { compression: Compression },
 
-    #[error("The compression variant {compression} cannot be used for bits-per-pixel value of {bpp}")]
-    InvalidCompressionForBpp { compression: u32, bpp: BitsPerPixel },
+    #[error("The compression variant {compression:?} cannot be used for bits-per-pixel value of {bpp}")]
+    InvalidCompressionForBpp {
+        compression: Compression,
+        bpp: BitsPerPixel,
+    },
 
-    #[error("The image size of {image_size} cannot be used with compression variant {compression}")]
-    InvalidImageSizeForCompression { image_size: u32, compression: u32 },
+    #[error("The image size of {image_size} cannot be used with compression variant {compression:?}")]
+    InvalidImageSizeForCompression { image_size: u32, compression: Compression },
 
     #[error("Non-contiguous {channel} color mask: {mask:#010X}")]
     NonContiguousColorMask { mask: u32, channel: ColorMaskChannel },
@@ -70,8 +73,8 @@ pub enum BmpError {
     #[error("Color Table size of {0} entries exceeds file bounds or cannot be loaded/represented safely")]
     PaletteTooLarge(u32),
 
-    #[error("Color table with {colors_used} entries is not allowed for compression {compression}")]
-    PaletteNotAllowedForCompression { compression: u32, colors_used: u32 },
+    #[error("Color table with {colors_used} entries is not allowed for compression {compression:?}")]
+    PaletteNotAllowedForCompression { compression: Compression, colors_used: u32 },
 
     #[error(
         "Invalid image size for uncompressed bitmap: header value {header} does not match \

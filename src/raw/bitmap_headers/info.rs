@@ -2,7 +2,10 @@ use std::io::{Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult, types::BitsPerPixel, wingdi};
+use crate::raw::{
+    BmpError, BmpResult,
+    types::{BitsPerPixel, Compression},
+};
 
 /// The BMP INFO (40 byte) header.
 ///
@@ -45,10 +48,14 @@ pub struct BitmapInfoHeader {
     pub planes: u16,
 
     /// The number of bits per pixel / color depth.
+    ///
+    /// See the [`BitsPerPixel`] enum for more info.
     pub bit_count: BitsPerPixel,
 
     /// The compression (or encoding) method used for the bitmap data.
-    pub compression: u32,
+    ///
+    /// See the [`Compression`] enum for more info.
+    pub compression: Compression,
 
     /// The size, in bytes, of the image.
     ///
@@ -143,7 +150,7 @@ impl BitmapInfoHeader {
         }
 
         // Top-down dibs cannot be compressed
-        if (self.height < 0) && !matches!(self.compression, wingdi::BI_RGB | wingdi::BI_BITFIELDS) {
+        if (self.height < 0) && !matches!(self.compression, Compression::Rgb | Compression::BitFields) {
             return Err(BmpError::InvalidCompressionForTopDown {
                 compression: self.compression,
             });
@@ -152,11 +159,12 @@ impl BitmapInfoHeader {
         // The RLE compression can only be used with their expected bpp values
         // The BITFIELDS compression can only be used with bpp of 16 or 32
         // The JPEG/PNG compression can only be used with bpp of 0
-        if (self.compression == wingdi::BI_RLE4 && self.bit_count != BitsPerPixel::Bpp4)
-            || (self.compression == wingdi::BI_RLE8 && self.bit_count != BitsPerPixel::Bpp8)
-            || (self.compression == wingdi::BI_BITFIELDS
+        if (self.compression == Compression::Rle4 && self.bit_count != BitsPerPixel::Bpp4)
+            || (self.compression == Compression::Rle8 && self.bit_count != BitsPerPixel::Bpp8)
+            || (self.compression == Compression::BitFields
                 && !matches!(self.bit_count, BitsPerPixel::Bpp16 | BitsPerPixel::Bpp32))
-            || (matches!(self.compression, wingdi::BI_PNG | wingdi::BI_JPEG) && self.bit_count != BitsPerPixel::Bpp0)
+            || (matches!(self.compression, Compression::Png | Compression::Jpeg)
+                && self.bit_count != BitsPerPixel::Bpp0)
         {
             return Err(BmpError::InvalidCompressionForBpp {
                 compression: self.compression,
@@ -165,7 +173,7 @@ impl BitmapInfoHeader {
         }
 
         // Image size of 0 is valid only for uncompressed images (RGB or BITFIELDS)
-        if self.image_size == 0 && !matches!(self.compression, wingdi::BI_RGB | wingdi::BI_BITFIELDS) {
+        if self.image_size == 0 && !matches!(self.compression, Compression::Rgb | Compression::BitFields) {
             return Err(BmpError::InvalidImageSizeForCompression {
                 image_size: self.image_size,
                 compression: self.compression,
@@ -181,7 +189,7 @@ impl BitmapInfoHeader {
             height: reader.read_i32::<LittleEndian>()?,
             planes: reader.read_u16::<LittleEndian>()?,
             bit_count: BitsPerPixel::read(reader)?,
-            compression: reader.read_u32::<LittleEndian>()?,
+            compression: Compression::read(reader)?,
             image_size: reader.read_u32::<LittleEndian>()?,
             x_resolution_ppm: reader.read_i32::<LittleEndian>()?,
             y_resolution_ppm: reader.read_i32::<LittleEndian>()?,
@@ -195,7 +203,7 @@ impl BitmapInfoHeader {
         writer.write_i32::<LittleEndian>(self.height)?;
         writer.write_u16::<LittleEndian>(self.planes)?;
         self.bit_count.write(writer)?;
-        writer.write_u32::<LittleEndian>(self.compression)?;
+        self.compression.write(writer)?;
         writer.write_u32::<LittleEndian>(self.image_size)?;
         writer.write_i32::<LittleEndian>(self.x_resolution_ppm)?;
         writer.write_i32::<LittleEndian>(self.y_resolution_ppm)?;

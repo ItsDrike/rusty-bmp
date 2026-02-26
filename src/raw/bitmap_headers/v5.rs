@@ -2,9 +2,7 @@ use std::io::{Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{
-    BmpError, BmpResult, bitmap_headers::BitmapV4Header, helpers::read_array, types::ColorSpaceType, wingdi,
-};
+use crate::raw::{BmpError, BmpResult, bitmap_headers::BitmapV4Header, helpers::read_array, types::ColorSpaceType};
 
 /// The BMP V5 (124 byte) header.
 ///

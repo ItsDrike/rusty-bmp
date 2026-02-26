@@ -5,7 +5,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::raw::{
     BitmapCoreHeader, BmpError, BmpResult,
     bitmap_headers::{BitmapInfoHeader, BitmapV4Header, BitmapV5Header},
-    types::BitsPerPixel,
+    types::{BitsPerPixel, Compression},
     wingdi,
 };
 
@@ -74,9 +74,9 @@ impl BitmapHeader {
         }
     }
 
-    pub(crate) fn compression(&self) -> u32 {
+    pub(crate) fn compression(&self) -> Compression {
         match self {
-            Self::Core(_) => wingdi::BI_RGB,
+            Self::Core(_) => Compression::Rgb,
             Self::Info(h) => h.compression,
             Self::V4(h) => h.info.compression,
             Self::V5(h) => h.v4.info.compression,
@@ -127,7 +127,7 @@ impl BitmapHeader {
         // This is a special case, only valid when compression is JPEG/PNG
         if bit_count == BitsPerPixel::Bpp0 {
             let compression = self.compression();
-            if !matches!(compression, wingdi::BI_JPEG | wingdi::BI_PNG) {
+            if !matches!(compression, Compression::Jpeg | Compression::Png) {
                 return Err(BmpError::InvalidCompressionForBpp {
                     compression: self.compression(),
                     bpp: bit_count,
@@ -190,7 +190,7 @@ impl BitmapHeader {
 
         match compression {
             // uncompressed
-            wingdi::BI_RGB | wingdi::BI_BITFIELDS => {
+            Compression::Rgb | Compression::BitFields => {
                 let width = self.width().unsigned_abs();
                 let height = self.height().unsigned_abs();
 
