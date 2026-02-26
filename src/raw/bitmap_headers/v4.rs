@@ -85,7 +85,6 @@ impl BitmapV4Header {
     /// versions.
     pub(crate) fn validate_base(&self) -> BmpResult<()> {
         self.info.validate()?;
-        self.masks.validate()?;
         self.masks.validate_for_bpp(self.info.bit_count)?;
 
         Ok(())

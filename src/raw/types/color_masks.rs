@@ -209,7 +209,7 @@ impl RgbMasks {
         ]
     }
 
-    pub(crate) fn validate_for_bpp(&self, bpp: u16) -> BmpResult<()> {
+    pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> BmpResult<()> {
         validate_masks_for_bpp(&self.as_slice(), bpp)
     }
 

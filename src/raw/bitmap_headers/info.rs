@@ -128,10 +128,11 @@ impl BitmapInfoHeader {
             return Err(BmpError::InvalidPlanes(self.planes));
         }
 
-        // For the info header, only bpp values of 1, 4, 8, 16, 24 and 32 are allowed
+        // For the info header, only bpp values of 0, 1, 4, 8, 16, 24 and 32 are allowed
         if !matches!(
             self.bit_count,
-            BitsPerPixel::Bpp1
+            BitsPerPixel::Bpp0
+                | BitsPerPixel::Bpp1
                 | BitsPerPixel::Bpp4
                 | BitsPerPixel::Bpp8
                 | BitsPerPixel::Bpp16
@@ -150,10 +151,12 @@ impl BitmapInfoHeader {
 
         // The RLE compression can only be used with their expected bpp values
         // The BITFIELDS compression can only be used with bpp of 16 or 32
+        // The JPEG/PNG compression can only be used with bpp of 0
         if (self.compression == wingdi::BI_RLE4 && self.bit_count != BitsPerPixel::Bpp4)
             || (self.compression == wingdi::BI_RLE8 && self.bit_count != BitsPerPixel::Bpp8)
             || (self.compression == wingdi::BI_BITFIELDS
                 && !matches!(self.bit_count, BitsPerPixel::Bpp16 | BitsPerPixel::Bpp32))
+            || (matches!(self.compression, wingdi::BI_PNG | wingdi::BI_JPEG) && self.bit_count != BitsPerPixel::Bpp0)
         {
             return Err(BmpError::InvalidCompressionForBpp {
                 compression: self.compression,

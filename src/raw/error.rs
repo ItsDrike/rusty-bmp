@@ -58,7 +58,7 @@ pub enum BmpError {
     #[error("Invalid value for the color space type field: {0}")]
     InvalidColorSpaceType(u32),
 
-    #[error("")]
+    #[error("")] // TODO: figure out what to put here
     InvalidProfileOffset(u32),
 
     #[error(
@@ -69,6 +69,9 @@ pub enum BmpError {
 
     #[error("Color Table size of {0} entries exceeds file bounds or cannot be loaded/represented safely")]
     PaletteTooLarge(u32),
+
+    #[error("Color table with {colors_used} entries is not allowed for compression {compression}")]
+    PaletteNotAllowedForCompression { compression: u32, colors_used: u32 },
 
     #[error(
         "Invalid image size for uncompressed bitmap: header value {header} does not match \
