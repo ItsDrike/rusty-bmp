@@ -5,7 +5,6 @@ use crate::raw::{
     RgbMasks,
     helpers::BoundedReader,
     types::{ColorSpaceType, Compression, RgbQuad, RgbTriple},
-    wingdi,
 };
 
 pub(crate) const MAX_COLOR_TABLE_ENTRIES: usize = 1 << 16;
@@ -66,9 +65,6 @@ pub struct BitmapInfoData {
 
     // TODO: We might want to make this just ColorMasks (enum) instead, depending on whether or not
     // we want to support BI_ALPHABITFIELDS
-    // TODO: This being an option is perhaps somewhat odd, this structure could also be split up
-    // into variant enums for whether or not BI_BITFIELDS is used, and hold this only then. But
-    // then again, that might just be overengineering for these raw structs.
     pub color_masks: Option<RgbMasks>,
 
     pub color_table: Vec<RgbQuad>,
@@ -94,12 +90,6 @@ pub struct BitmapV5Data {
 
     pub bitmap_array: Vec<u8>,
 
-    // TODO: Similarly to color_masks in INFO, this can only be present if cs_type is
-    // PROFILE_EMBEDDED or PROFILE_LINKED, and will always be present in those cases,
-    // yet it will never be present otherwise. It might make sense to split this up
-    // into an enum and hold this only conditionally with two distinct structs, insted
-    // of using an Option regardless. Then again, it might be overengineering for just
-    // the raw structs.
     pub icc_profile: Option<Vec<u8>>,
 }
 

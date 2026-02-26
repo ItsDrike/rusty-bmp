@@ -6,7 +6,6 @@ use crate::raw::{
     BitmapCoreHeader, BmpError, BmpResult,
     bitmap_headers::{BitmapInfoHeader, BitmapV4Header, BitmapV5Header},
     types::{BitsPerPixel, Compression},
-    wingdi,
 };
 
 pub enum BitmapHeader {
