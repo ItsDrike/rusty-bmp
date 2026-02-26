@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::raw::types::{BitsPerPixel, ColorMaskChannel};
+use crate::raw::types::{BitsPerPixel, ColorMaskChannel, ColorSpaceType};
 
 #[derive(Error, Debug)]
 pub enum BmpError {
@@ -55,8 +55,8 @@ pub enum BmpError {
         bpp: BitsPerPixel,
     },
 
-    #[error("Invalid value for the color space type field: {0}")]
-    InvalidColorSpaceType(u32),
+    #[error("Invalid value for the color space type field: {0:?}")]
+    InvalidColorSpaceType(ColorSpaceType),
 
     #[error("")] // TODO: figure out what to put here
     InvalidProfileOffset(u32),

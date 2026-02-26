@@ -1,12 +1,9 @@
 use std::io::{Read, Write};
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-
 use crate::raw::{
     BmpError, BmpResult,
     bitmap_headers::BitmapInfoHeader,
-    types::{CieXyzTriple, GammaTriple, RgbaMasks},
-    wingdi,
+    types::{CieXyzTriple, ColorSpaceType, GammaTriple, RgbaMasks},
 };
 
 /// The BMP V4 (108 byte) header.
@@ -44,7 +41,9 @@ pub struct BitmapV4Header {
     /// The color type does not change how the pixel data is stored in the bitmap.
     /// Instead, it defines how the stored RGB values should be interpreted by a
     /// color-managed system.
-    pub cs_type: u32,
+    ///
+    /// See the [`ColorSpaceType`] enum for more info.
+    pub cs_type: ColorSpaceType,
 
     /// Defines the CIE XYZ endpoints for red, green and blue.
     ///
@@ -68,7 +67,7 @@ impl BitmapV4Header {
         // Only the following color space type values are allowed for V4
         if !matches!(
             self.cs_type,
-            wingdi::LCS_CALIBRATED_RGB | wingdi::LCS_sRGB | wingdi::LCS_WINDOWS_COLOR_SPACE
+            ColorSpaceType::CalibratedRgb | ColorSpaceType::SRgb | ColorSpaceType::WindowsColorSpace,
         ) {
             return Err(BmpError::InvalidColorSpaceType(self.cs_type));
         }
@@ -94,7 +93,7 @@ impl BitmapV4Header {
         Ok(Self {
             info: BitmapInfoHeader::read_unchecked(reader)?,
             masks: RgbaMasks::read_unchecked(reader)?,
-            cs_type: reader.read_u32::<LittleEndian>()?,
+            cs_type: ColorSpaceType::read(reader)?,
             endpoints: CieXyzTriple::read(reader)?,
             gamma: GammaTriple::read(reader)?,
         })
@@ -103,7 +102,7 @@ impl BitmapV4Header {
     pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         self.info.write_unchecked(writer)?;
         self.masks.write_unchecked(writer)?;
-        writer.write_u32::<LittleEndian>(self.cs_type)?;
+        self.cs_type.write(writer)?;
         self.endpoints.write(writer)?;
         self.gamma.write(writer)?;
 

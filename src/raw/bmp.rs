@@ -4,7 +4,7 @@ use crate::raw::{
     BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, BmpError, BmpResult, FileHeader,
     RgbMasks,
     helpers::BoundedReader,
-    types::{RgbQuad, RgbTriple},
+    types::{ColorSpaceType, RgbQuad, RgbTriple},
     wingdi,
 };
 
@@ -216,13 +216,17 @@ impl Bmp {
             BitmapHeader::V5(header) => {
                 debug_assert_eq!(masks, None); // embedded into header directly
 
-                let icc_profile = if matches!(header.v4.cs_type, wingdi::PROFILE_EMBEDDED | wingdi::PROFILE_LINKED) {
-                    let offset = header.profile_data;
+                let icc_profile = if matches!(
+                    header.v4.cs_type,
+                    ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked
+                ) {
+                    let offset = header.profile_data as u64 + FileHeader::SIZE as u64;
                     let size = usize::try_from(header.profile_size).map_err(|_| BmpError::IccProfileTooLarge)?;
 
-                    // TODO: Handle potential issues with the values above
+                    // TODO: Maybe also validate that the offset isn't within the color table / dib header
+                    // though this isn't that important.
 
-                    reader.seek(std::io::SeekFrom::Start(FileHeader::SIZE as u64 + offset as u64))?;
+                    reader.seek(std::io::SeekFrom::Start(offset))?;
 
                     let mut data = vec![0u8; size];
                     reader.read_exact(&mut data)?;

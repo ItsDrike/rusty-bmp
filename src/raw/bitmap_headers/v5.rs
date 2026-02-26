@@ -2,7 +2,9 @@ use std::io::{Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult, bitmap_headers::BitmapV4Header, helpers::read_array, wingdi};
+use crate::raw::{
+    BmpError, BmpResult, bitmap_headers::BitmapV4Header, helpers::read_array, types::ColorSpaceType, wingdi,
+};
 
 /// The BMP V5 (124 byte) header.
 ///
@@ -83,11 +85,11 @@ impl BitmapV5Header {
         // Only the following values are allowed for the color space type field
         if !matches!(
             self.v4.cs_type,
-            wingdi::LCS_CALIBRATED_RGB
-                | wingdi::LCS_sRGB
-                | wingdi::LCS_WINDOWS_COLOR_SPACE
-                | wingdi::PROFILE_EMBEDDED
-                | wingdi::PROFILE_LINKED
+            ColorSpaceType::CalibratedRgb
+                | ColorSpaceType::SRgb
+                | ColorSpaceType::WindowsColorSpace
+                | ColorSpaceType::ProfileEmbedded
+                | ColorSpaceType::ProfileLinked
         ) {
             return Err(BmpError::InvalidColorSpaceType(self.v4.cs_type));
         }
@@ -96,8 +98,10 @@ impl BitmapV5Header {
         // for where they are, from the beginning of the header. That means it
         // should never be less than the header size (the profile data must be
         // outside of the header)
-        if matches!(self.v4.cs_type, wingdi::PROFILE_EMBEDDED | wingdi::PROFILE_LINKED)
-            && self.profile_data < Self::HEADER_SIZE
+        if matches!(
+            self.v4.cs_type,
+            ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked
+        ) && self.profile_data < Self::HEADER_SIZE
         {
             return Err(BmpError::InvalidProfileOffset(self.profile_data));
         }
