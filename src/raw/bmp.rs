@@ -10,6 +10,7 @@ use crate::raw::{
 
 pub(crate) const MAX_COLOR_TABLE_ENTRIES: usize = 1 << 16;
 pub(crate) const MAX_PIXEL_BYTES: usize = 512 * 1024 * 1024; // 512 MB
+pub(crate) const MAX_ICC_PROFILE_BYTES: usize = 16 * 1024 * 1024; // 16 MB
 
 enum ColorTable {
     Core(Vec<RgbTriple>),
@@ -63,8 +64,8 @@ pub struct BitmapInfoData {
 
     pub bmp_header: BitmapInfoHeader,
 
-    // TODO: We might want to make this just RgbMasks instead, depending on whether or not we want
-    // to support BI_ALPHABITFIELDS
+    // TODO: We might want to make this just ColorMasks (enum) instead, depending on whether or not
+    // we want to support BI_ALPHABITFIELDS
     // TODO: This being an option is perhaps somewhat odd, this structure could also be split up
     // into variant enums for whether or not BI_BITFIELDS is used, and hold this only then. But
     // then again, that might just be overengineering for these raw structs.
@@ -223,8 +224,17 @@ impl Bmp {
                     let offset = header.profile_data as u64 + FileHeader::SIZE as u64;
                     let size = usize::try_from(header.profile_size).map_err(|_| BmpError::IccProfileTooLarge)?;
 
-                    // TODO: Maybe also validate that the offset isn't within the color table / dib header
-                    // though this isn't that important.
+                    if size > MAX_ICC_PROFILE_BYTES {
+                        return Err(BmpError::IccProfileTooLarge);
+                    }
+
+                    // TODO: Maybe also validate that the offset isn't within the color table / color
+                    // masks / dib header, though this isn't that important, the BoundedReader takes
+                    // care of BMP boundaries already, this is therefore just about potentially
+                    // reading wrong data, though I'm not even certain that the standard forbids
+                    // this. In theory, if the color table bytes do resolve to a valid ICC profile
+                    // too, there's not real reason to prevent that, even if it's really dumb and
+                    // unlikely. Safety-wise, this isn't important.
 
                     reader.seek(std::io::SeekFrom::Start(offset))?;
 
