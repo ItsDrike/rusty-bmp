@@ -1,0 +1,3 @@
+[submodule "bmpsuite"]
+	path = bmpsuite
+	url = https://github.com/jsummers/bmpsuite.git
