@@ -13,28 +13,47 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 ///
 /// - If `start == 0`, behavior matches the underlying stream.
 /// - If `start > 0`, `SeekFrom::Start(0)` seeks to the window start.
+#[derive(Debug)]
 pub(crate) struct BoundedStream<R> {
     inner: R,
-    start: u64,
-    end: u64,
+    abs_start: u64,
+    abs_end: u64,
 }
 
 impl<R: Seek> BoundedStream<R> {
-    /// Creates a new `BoundedStream` over the entire underlying stream.
+    /// Creates a new `BoundedStream` over the underlying stream.
     ///
     /// The current position of the underlying stream is preserved.
-    /// The initial window is `[0, stream_length]`.
-    ///
-    /// This performs one temporary seek to end, to determine the stream length.
-    pub(crate) fn new(mut inner: R) -> io::Result<Self> {
-        let cur_pos = inner.stream_position()?;
-        let end = inner.seek(SeekFrom::End(0))?;
-        inner.seek(SeekFrom::Start(cur_pos))?;
-
-        Ok(Self { inner, start: 0, end })
+    /// The initial window is `[0, u64::MAX]`.
+    pub(crate) fn new(inner: R) -> Self {
+        Self {
+            inner,
+            abs_start: 0,
+            abs_end: u64::MAX,
+        }
     }
 
-    /// Shrinks the lower bound of the window to the current position.
+    /// Shrinks the window’s upper bound to the underlying stream’s end.
+    ///
+    /// If the stream end lies within the current bounds, the upper bound is
+    /// reduced. If it lies beyond the current upper bound, this is a no-op.
+    ///
+    /// This operation never expands the window.
+    pub(crate) fn cap_to_stream_end(mut self) -> io::Result<Self> {
+        let cur = self.inner.stream_position()?;
+        let end = self.inner.seek(SeekFrom::End(0))?;
+        self.inner.seek(SeekFrom::Start(cur))?;
+
+        // If the actual stream end is beyond our bounds, this is a no-op;
+        // otherwise, shrink the end.
+        if self.check_bounds(end).is_ok() {
+            self.abs_end = end;
+        }
+
+        Ok(self)
+    }
+
+    /// Shrinks the lower bound to the position resolved from `pos`.
     ///
     /// Fails if:
     ///
@@ -42,42 +61,22 @@ impl<R: Seek> BoundedStream<R> {
     /// - The current position is before the existing lower bound.
     ///
     /// This operation never expands the window.
-    pub(crate) fn with_start(mut self) -> io::Result<Self> {
-        let pos = self.inner.stream_position()?;
-
-        if pos > self.end {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "start beyond end bound"));
-        }
-        if pos < self.start {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "start beyond existing start bound",
-            ));
-        }
-
-        self.start = pos;
+    pub(crate) fn shrink_start(mut self, pos: SeekFrom) -> io::Result<Self> {
+        let absolute = self.get_absolute(pos)?;
+        self.check_bounds(absolute)?;
+        self.abs_start = absolute;
         Ok(self)
     }
 
-    /// Shrinks the upper bound of the window to `current_position + length`.
+    /// Shrinks the upper bound to the position resolved from `pos`.
     ///
     /// Fails if the new bound would exceed the existing upper bound.
     ///
     /// This operation never expands the window.
-    pub(crate) fn with_end(mut self, length: u64) -> io::Result<Self> {
-        let pos = self.inner.stream_position()?;
-        let new_end = pos
-            .checked_add(length)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "length overflow"))?;
-
-        if new_end > self.end {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "bounded region exceeds stream length",
-            ));
-        }
-
-        self.end = new_end;
+    pub(crate) fn shrink_end(mut self, pos: SeekFrom) -> io::Result<Self> {
+        let absolute = self.get_absolute(pos)?;
+        self.check_bounds(absolute)?;
+        self.abs_end = absolute;
         Ok(self)
     }
 
@@ -85,24 +84,76 @@ impl<R: Seek> BoundedStream<R> {
     pub(crate) fn remaining(&mut self) -> io::Result<u64> {
         let pos = self.inner.stream_position()?;
         // Invariant: inner pos is always within [start, end]
-        debug_assert!(pos <= self.end);
-        Ok(self.end - pos)
+        debug_assert!(pos <= self.abs_end);
+        Ok(self.abs_end - pos)
+    }
+
+    /// Convert a relative `SeekFrom` based position into an absolute position
+    ///
+    /// This will be the absolute position in the inner seekable stream.
+    fn get_absolute(&mut self, relative_pos: SeekFrom) -> io::Result<u64> {
+        Ok(match relative_pos {
+            SeekFrom::Start(off) => self
+                .abs_start
+                .checked_add(off)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?,
+            SeekFrom::End(off) => {
+                if off >= 0 {
+                    self.abs_end
+                        .checked_add(off as u64)
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
+                } else {
+                    self.abs_end
+                        .checked_sub(off.unsigned_abs())
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
+                }
+            }
+            SeekFrom::Current(off) => {
+                let cur = self.inner.stream_position()?;
+
+                if off >= 0 {
+                    cur.checked_add(off as u64)
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
+                } else {
+                    cur.checked_sub(off.unsigned_abs())
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
+                }
+            }
+        })
     }
 
     /// Validates that `absolute` lies within `[start, end]`.
     fn check_bounds(&self, absolute: u64) -> io::Result<()> {
-        if absolute < self.start {
+        if absolute < self.abs_start {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "position before start bound",
             ));
         }
 
-        if absolute > self.end {
+        if absolute > self.abs_end {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "position after end bound"));
         }
 
         Ok(())
+    }
+}
+
+impl<R: Seek> Seek for BoundedStream<R> {
+    /// Seeks within the current window.
+    ///
+    /// - `SeekFrom::Start(off)` is interpreted as `start + off`.
+    /// - `SeekFrom::End(off)` is interpreted as `end + off`.
+    /// - `SeekFrom::Current(off)` is relative to the current position.
+    ///
+    /// Fails if the resulting position would lie outside `[start, end]`.
+    ///
+    /// Returns the position relative to `start`.
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let absolute = self.get_absolute(pos)?;
+        self.check_bounds(absolute)?;
+        self.inner.seek(SeekFrom::Start(absolute))?;
+        Ok(absolute - self.abs_start)
     }
 }
 
@@ -139,52 +190,5 @@ impl<R: Seek + Write> Write for BoundedStream<R> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
-    }
-}
-
-impl<R: Seek> Seek for BoundedStream<R> {
-    /// Seeks within the current window.
-    ///
-    /// - `SeekFrom::Start(off)` is interpreted as `start + off`.
-    /// - `SeekFrom::End(off)` is interpreted as `end + off`.
-    /// - `SeekFrom::Current(off)` is relative to the current position.
-    ///
-    /// Fails if the resulting position would lie outside `[start, end]`.
-    ///
-    /// Returns the position relative to `start`.
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let absolute = match pos {
-            SeekFrom::Start(off) => self
-                .start
-                .checked_add(off)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?,
-            SeekFrom::End(off) => {
-                if off >= 0 {
-                    self.end
-                        .checked_add(off as u64)
-                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
-                } else {
-                    self.end
-                        .checked_sub(off.unsigned_abs())
-                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
-                }
-            }
-            SeekFrom::Current(off) => {
-                let cur = self.inner.stream_position()?;
-
-                if off >= 0 {
-                    cur.checked_add(off as u64)
-                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
-                } else {
-                    cur.checked_sub(off.unsigned_abs())
-                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
-                }
-            }
-        };
-
-        self.check_bounds(absolute)?;
-        self.inner.seek(SeekFrom::Start(absolute))?;
-        debug_assert!(absolute >= self.start);
-        Ok(absolute - self.start)
     }
 }

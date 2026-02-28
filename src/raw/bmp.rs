@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 
 use crate::raw::{
     BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, BmpError, BmpResult, FileHeader,
@@ -112,9 +112,10 @@ impl Bmp {
         // accidentally seeking somewhere outside of the file, e.g. if the BMP encodes
         // invalid offsets.
         reader.seek_relative(-(FileHeader::SIZE as i64))?;
-        let mut reader = BoundedStream::new(reader)?
-            .with_start()?
-            .with_end(file_header.file_size as u64)?;
+        let mut reader = BoundedStream::new(reader)
+            .shrink_start(std::io::SeekFrom::Current(0))?
+            .cap_to_stream_end()?
+            .shrink_end(std::io::SeekFrom::Current(file_header.file_size as i64))?;
         reader.seek_relative(FileHeader::SIZE as i64)?;
 
         let bmp_header = BitmapHeader::read_unchecked(&mut reader)?;
@@ -152,6 +153,10 @@ impl Bmp {
         // let gap_pos = reader.stream_position()?;
         // let metadata_size = pixel_data_pos - gap_pos;
 
+        if pixel_data_pos < FileHeader::SIZE as u64 || pixel_data_pos > file_header.file_size as u64 {
+            return Err(BmpError::InvalidPixelOffset);
+        }
+
         reader.seek(std::io::SeekFrom::Start(pixel_data_pos))?;
 
         let pixel_data_size = bmp_header.pixel_data_size()?;
@@ -164,7 +169,7 @@ impl Bmp {
         let mut pixel_data = vec![0u8; pixel_data_size];
         reader.read_exact(&mut pixel_data)?;
 
-        Ok(match bmp_header {
+        let bmp = match bmp_header {
             BitmapHeader::Core(header) => {
                 debug_assert_eq!(masks, None); // core always uses BI_RGB
 
@@ -213,7 +218,9 @@ impl Bmp {
                     header.v4.cs_type,
                     ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked
                 ) {
-                    let offset = header.profile_data as u64 + FileHeader::SIZE as u64;
+                    let offset = (header.profile_data as u64)
+                        .checked_add(FileHeader::SIZE as u64)
+                        .ok_or(BmpError::IccProfileTooLarge)?;
                     let size = usize::try_from(header.profile_size).map_err(|_| BmpError::IccProfileTooLarge)?;
 
                     if size > MAX_ICC_PROFILE_BYTES {
@@ -221,17 +228,24 @@ impl Bmp {
                     }
 
                     // TODO: Maybe also validate that the offset isn't within the color table / color
-                    // masks / dib header, though this isn't that important, the BoundedReader takes
-                    // care of BMP boundaries already, this is therefore just about potentially
+                    // masks / dib header, though this isn't that important, as we do validate that
+                    // it is within the file offset, so this is purely about preventing it from
                     // reading wrong data, though I'm not even certain that the standard forbids
                     // this. In theory, if the color table bytes do resolve to a valid ICC profile
                     // too, there's not real reason to prevent that, even if it's really dumb and
                     // unlikely. Safety-wise, this isn't important.
+                    let profile_end = offset
+                        .checked_add(size as u64)
+                        .ok_or(BmpError::InvalidIccProfileOffset)?;
+                    if profile_end > file_header.file_size as u64 {
+                        return Err(BmpError::InvalidIccProfileOffset);
+                    }
 
                     reader.seek(std::io::SeekFrom::Start(offset))?;
 
                     let mut data = vec![0u8; size];
                     reader.read_exact(&mut data)?;
+
                     Some(data)
                 } else {
                     None
@@ -249,7 +263,12 @@ impl Bmp {
                     unreachable!()
                 }
             }
-        })
+        };
+
+        // Leave the reader at the end of the BMP file
+        reader.seek(std::io::SeekFrom::End(0))?;
+
+        Ok(bmp)
     }
 }
 

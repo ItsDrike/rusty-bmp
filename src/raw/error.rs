@@ -91,8 +91,14 @@ pub enum BmpError {
     )]
     PixelDataTooLarge,
 
+    #[error("The pixel data (bitmap array) offset is outside the allowed bounds")]
+    InvalidPixelOffset,
+
     #[error("The ICC color profile exceeds loadable/representable limits")]
     IccProfileTooLarge,
+
+    #[error("The ICC color profile data offset is outside of the allowed bounds")]
+    InvalidIccProfileOffset,
 }
 
 pub type BmpResult<T> = Result<T, BmpError>;
