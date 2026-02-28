@@ -71,11 +71,26 @@ impl FileHeader {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> BmpResult<()> {
+    pub(crate) fn write_checked<W: Write>(&self, writer: &mut W) -> BmpResult<()> {
         if self.signature != *b"BM" {
             return Err(BmpError::InvalidFileSignature(self.signature));
         }
 
+        if self.reserved_1 != [0u8; 2] || self.reserved_2 != [0u8; 2] {
+            return Err(BmpError::InvalidFileReservedData([
+                self.reserved_1[0],
+                self.reserved_1[1],
+                self.reserved_2[0],
+                self.reserved_2[1],
+            ]));
+        }
+
+        self.write_unchecked(writer)?;
+
+        Ok(())
+    }
+
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.write_all(&self.signature)?;
         writer.write_u32::<LittleEndian>(self.file_size)?;
         writer.write_all(&self.reserved_1)?;

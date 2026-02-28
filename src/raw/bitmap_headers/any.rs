@@ -39,7 +39,7 @@ impl BitmapHeader {
         Ok(header)
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> BmpResult<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         match self {
             Self::Core(header) => {
                 writer.write_u32::<LittleEndian>(BitmapCoreHeader::HEADER_SIZE)?;

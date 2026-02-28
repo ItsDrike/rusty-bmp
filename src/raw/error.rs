@@ -10,6 +10,9 @@ pub enum BmpError {
     #[error("The BMP file signature: ({0:?}) is invalid, expected 0x4d42 ('BM')")]
     InvalidFileSignature([u8; 2]),
 
+    #[error("The BMP file header has non-zero reserved data: {0:?}")]
+    InvalidFileReservedData([u8; 4]),
+
     #[error("The BMP header size value of {0} did not match any supported BMP variant")]
     InvalidHeaderSize(u32),
 
