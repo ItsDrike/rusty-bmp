@@ -1,9 +1,9 @@
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, Write};
 
 use crate::raw::{
     BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, BmpError, BmpResult, FileHeader,
     RgbMasks,
-    helpers::BoundedReader,
+    helpers::BoundedStream,
     types::{ColorSpaceType, Compression, RgbQuad, RgbTriple},
 };
 
@@ -112,7 +112,9 @@ impl Bmp {
         // accidentally seeking somewhere outside of the file, e.g. if the BMP encodes
         // invalid offsets.
         reader.seek_relative(-(FileHeader::SIZE as i64))?;
-        let mut reader = BoundedReader::new(reader, file_header.file_size as u64)?;
+        let mut reader = BoundedStream::new(reader)?
+            .with_start()?
+            .with_end(file_header.file_size as u64)?;
         reader.seek_relative(FileHeader::SIZE as i64)?;
 
         let bmp_header = BitmapHeader::read_unchecked(&mut reader)?;
