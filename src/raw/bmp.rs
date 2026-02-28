@@ -1,4 +1,4 @@
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, Write};
 
 use crate::raw::{
     BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, BmpError, BmpResult, FileHeader,
@@ -270,6 +270,70 @@ impl Bmp {
 
         Ok(bmp)
     }
-}
 
-// TODO: Implement write
+    pub fn write_unchecked<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<()> {
+        let mut writer = BoundedStream::new(writer).shrink_start(std::io::SeekFrom::Current(0))?;
+
+        match self {
+            Self::Core(data) => {
+                data.file_header.write_unchecked(&mut writer)?;
+                BitmapHeader::Core(data.bmp_header).write_unchecked(&mut writer)?;
+
+                for entry in &data.color_table {
+                    entry.write(&mut writer)?;
+                }
+
+                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.write_all(&data.bitmap_array)?;
+            }
+            Self::Info(data) => {
+                data.file_header.write_unchecked(&mut writer)?;
+                BitmapHeader::Info(data.bmp_header).write_unchecked(&mut writer)?;
+
+                if let Some(masks) = &data.color_masks {
+                    masks.write_unchecked(&mut writer)?;
+                }
+
+                for entry in &data.color_table {
+                    entry.write(&mut writer)?;
+                }
+
+                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.write_all(&data.bitmap_array)?;
+            }
+            Self::V4(data) => {
+                data.file_header.write_unchecked(&mut writer)?;
+                BitmapHeader::V4(data.bmp_header).write_unchecked(&mut writer)?;
+
+                for entry in &data.color_table {
+                    entry.write(&mut writer)?;
+                }
+
+                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.write_all(&data.bitmap_array)?;
+            }
+            Self::V5(data) => {
+                data.file_header.write_unchecked(&mut writer)?;
+                BitmapHeader::V5(data.bmp_header).write_unchecked(&mut writer)?;
+
+                for entry in &data.color_table {
+                    entry.write(&mut writer)?;
+                }
+
+                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.write_all(&data.bitmap_array)?;
+
+                if let Some(profile) = &data.icc_profile {
+                    let profile_offset = data.bmp_header.profile_data + FileHeader::SIZE;
+                    writer.seek(std::io::SeekFrom::Start(profile_offset as u64))?;
+                    writer.write_all(profile)?;
+                }
+            }
+        }
+
+        // Leave the writer at the end of the BMP file
+        writer.seek(std::io::SeekFrom::End(0))?;
+
+        Ok(())
+    }
+}
