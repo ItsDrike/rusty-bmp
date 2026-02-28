@@ -50,6 +50,7 @@ impl ColorTable {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitmapCoreData {
     pub file_header: FileHeader,
 
@@ -60,6 +61,7 @@ pub struct BitmapCoreData {
     pub bitmap_array: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitmapInfoData {
     pub file_header: FileHeader,
 
@@ -73,6 +75,7 @@ pub struct BitmapInfoData {
 
     pub bitmap_array: Vec<u8>,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitmapV4Data {
     pub file_header: FileHeader,
 
@@ -83,6 +86,7 @@ pub struct BitmapV4Data {
     pub bitmap_array: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitmapV5Data {
     pub file_header: FileHeader,
 
@@ -95,6 +99,7 @@ pub struct BitmapV5Data {
     pub icc_profile: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bmp {
     Core(BitmapCoreData),
     Info(BitmapInfoData),
