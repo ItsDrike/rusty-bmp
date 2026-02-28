@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use crate::raw::{
     BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, BmpError, BmpResult, FileHeader,
@@ -113,9 +113,9 @@ impl Bmp {
         // invalid offsets.
         reader.seek_relative(-(FileHeader::SIZE as i64))?;
         let mut reader = BoundedStream::new(reader)
-            .shrink_start(std::io::SeekFrom::Current(0))?
+            .shrink_start(SeekFrom::Current(0))?
             .cap_to_stream_end()?
-            .shrink_end(std::io::SeekFrom::Current(file_header.file_size as i64))?;
+            .shrink_end(SeekFrom::Current(file_header.file_size as i64))?;
         reader.seek_relative(FileHeader::SIZE as i64)?;
 
         let bmp_header = BitmapHeader::read_unchecked(&mut reader)?;
@@ -157,7 +157,7 @@ impl Bmp {
             return Err(BmpError::InvalidPixelOffset);
         }
 
-        reader.seek(std::io::SeekFrom::Start(pixel_data_pos))?;
+        reader.seek(SeekFrom::Start(pixel_data_pos))?;
 
         let pixel_data_size = bmp_header.pixel_data_size()?;
         let pixel_data_size = usize::try_from(pixel_data_size).map_err(|_| BmpError::PixelDataTooLarge)?;
@@ -241,7 +241,7 @@ impl Bmp {
                         return Err(BmpError::InvalidIccProfileOffset);
                     }
 
-                    reader.seek(std::io::SeekFrom::Start(offset))?;
+                    reader.seek(SeekFrom::Start(offset))?;
 
                     let mut data = vec![0u8; size];
                     reader.read_exact(&mut data)?;
@@ -266,13 +266,13 @@ impl Bmp {
         };
 
         // Leave the reader at the end of the BMP file
-        reader.seek(std::io::SeekFrom::End(0))?;
+        reader.seek(SeekFrom::End(0))?;
 
         Ok(bmp)
     }
 
-    pub fn write_unchecked<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<()> {
-        let mut writer = BoundedStream::new(writer).shrink_start(std::io::SeekFrom::Current(0))?;
+    pub fn write_unchecked<W: Write + Seek>(&self, writer: &mut W) -> io::Result<()> {
+        let mut writer = BoundedStream::new(writer).shrink_start(SeekFrom::Current(0))?;
 
         match self {
             Self::Core(data) => {
@@ -283,7 +283,7 @@ impl Bmp {
                     entry.write(&mut writer)?;
                 }
 
-                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
                 writer.write_all(&data.bitmap_array)?;
             }
             Self::Info(data) => {
@@ -298,7 +298,7 @@ impl Bmp {
                     entry.write(&mut writer)?;
                 }
 
-                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
                 writer.write_all(&data.bitmap_array)?;
             }
             Self::V4(data) => {
@@ -309,7 +309,7 @@ impl Bmp {
                     entry.write(&mut writer)?;
                 }
 
-                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
                 writer.write_all(&data.bitmap_array)?;
             }
             Self::V5(data) => {
@@ -320,19 +320,19 @@ impl Bmp {
                     entry.write(&mut writer)?;
                 }
 
-                writer.seek(std::io::SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
+                writer.seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
                 writer.write_all(&data.bitmap_array)?;
 
                 if let Some(profile) = &data.icc_profile {
                     let profile_offset = data.bmp_header.profile_data + FileHeader::SIZE;
-                    writer.seek(std::io::SeekFrom::Start(profile_offset as u64))?;
+                    writer.seek(SeekFrom::Start(profile_offset as u64))?;
                     writer.write_all(profile)?;
                 }
             }
         }
 
         // Leave the writer at the end of the BMP file
-        writer.seek(std::io::SeekFrom::End(0))?;
+        writer.seek(SeekFrom::End(0))?;
 
         Ok(())
     }

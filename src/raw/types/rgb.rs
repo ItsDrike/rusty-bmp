@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
@@ -22,7 +22,7 @@ pub struct RgbTriple {
 }
 
 impl RgbTriple {
-    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             blue: reader.read_u8()?,
             green: reader.read_u8()?,
@@ -30,7 +30,7 @@ impl RgbTriple {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_u8(self.blue)?;
         writer.write_u8(self.green)?;
         writer.write_u8(self.red)?;
@@ -61,7 +61,7 @@ pub struct RgbQuad {
 }
 
 impl RgbQuad {
-    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             blue: reader.read_u8()?,
             green: reader.read_u8()?,
@@ -70,7 +70,7 @@ impl RgbQuad {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_u8(self.blue)?;
         writer.write_u8(self.green)?;
         writer.write_u8(self.red)?;

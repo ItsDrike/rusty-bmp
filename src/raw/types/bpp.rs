@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -88,7 +88,7 @@ pub enum BitsPerPixel {
 }
 
 impl BitsPerPixel {
-    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
         let raw = reader.read_u16::<LittleEndian>()?;
         Ok(match raw {
             0 => Self::Bpp0,
@@ -102,7 +102,7 @@ impl BitsPerPixel {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let raw: u16 = self.bit_count();
         writer.write_u16::<LittleEndian>(raw)
     }

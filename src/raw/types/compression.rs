@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -68,7 +68,7 @@ pub enum Compression {
 }
 
 impl Compression {
-    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
         let raw = reader.read_u32::<LittleEndian>()?;
         Ok(match raw {
             wingdi::BI_RGB => Self::Rgb,
@@ -81,7 +81,7 @@ impl Compression {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let raw = self.value();
         writer.write_u32::<LittleEndian>(raw)?;
         Ok(())

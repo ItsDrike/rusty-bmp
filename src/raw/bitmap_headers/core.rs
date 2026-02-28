@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -79,7 +79,7 @@ impl BitmapCoreHeader {
         })
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_u16::<LittleEndian>(self.width)?;
         writer.write_u16::<LittleEndian>(self.height)?;
         writer.write_u16::<LittleEndian>(self.planes)?;

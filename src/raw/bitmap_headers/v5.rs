@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -107,7 +107,7 @@ impl BitmapV5Header {
         Ok(())
     }
 
-    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             v4: BitmapV4Header::read_unchecked(reader)?,
             intent: reader.read_u32::<LittleEndian>()?,
@@ -117,7 +117,7 @@ impl BitmapV5Header {
         })
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         self.v4.write_unchecked(writer)?;
         writer.write_u32::<LittleEndian>(self.intent)?;
         writer.write_u32::<LittleEndian>(self.profile_data)?;

@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use crate::raw::{
     BmpError, BmpResult,
@@ -89,7 +89,7 @@ impl BitmapV4Header {
         Ok(())
     }
 
-    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             info: BitmapInfoHeader::read_unchecked(reader)?,
             masks: RgbaMasks::read_unchecked(reader)?,
@@ -99,7 +99,7 @@ impl BitmapV4Header {
         })
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         self.info.write_unchecked(writer)?;
         self.masks.write_unchecked(writer)?;
         self.cs_type.write(writer)?;

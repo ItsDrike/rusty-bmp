@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use crate::raw::FixedPoint2Dot30;
 
@@ -70,7 +70,7 @@ pub struct CieXyzTriple {
 }
 
 impl CieXyzTriple {
-    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             red: CieXyz::read(reader)?,
             green: CieXyz::read(reader)?,
@@ -78,7 +78,7 @@ impl CieXyzTriple {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         self.red.write(writer)?;
         self.green.write(writer)?;
         self.blue.write(writer)?;

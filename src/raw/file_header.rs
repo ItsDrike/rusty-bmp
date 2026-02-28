@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -90,7 +90,7 @@ impl FileHeader {
         Ok(())
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_all(&self.signature)?;
         writer.write_u32::<LittleEndian>(self.file_size)?;
         writer.write_all(&self.reserved_1)?;

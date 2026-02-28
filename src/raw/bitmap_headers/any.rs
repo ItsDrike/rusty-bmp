@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -39,7 +39,7 @@ impl BitmapHeader {
         Ok(header)
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         match self {
             Self::Core(header) => {
                 writer.write_u32::<LittleEndian>(BitmapCoreHeader::HEADER_SIZE)?;

@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -217,7 +217,7 @@ impl RgbMasks {
         validate_masks(&self.as_slice())
     }
 
-    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             red_mask: reader.read_u32::<LittleEndian>()?,
             green_mask: reader.read_u32::<LittleEndian>()?,
@@ -225,7 +225,7 @@ impl RgbMasks {
         })
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.red_mask)?;
         writer.write_u32::<LittleEndian>(self.green_mask)?;
         writer.write_u32::<LittleEndian>(self.blue_mask)?;
@@ -252,7 +252,7 @@ impl RgbaMasks {
         validate_masks(&self.as_slice())
     }
 
-    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             red_mask: reader.read_u32::<LittleEndian>()?,
             green_mask: reader.read_u32::<LittleEndian>()?,
@@ -261,7 +261,7 @@ impl RgbaMasks {
         })
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.red_mask)?;
         writer.write_u32::<LittleEndian>(self.green_mask)?;
         writer.write_u32::<LittleEndian>(self.blue_mask)?;

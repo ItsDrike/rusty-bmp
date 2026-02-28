@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -183,7 +183,7 @@ impl BitmapInfoHeader {
         Ok(())
     }
 
-    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             width: reader.read_i32::<LittleEndian>()?,
             height: reader.read_i32::<LittleEndian>()?,
@@ -198,7 +198,7 @@ impl BitmapInfoHeader {
         })
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_i32::<LittleEndian>(self.width)?;
         writer.write_i32::<LittleEndian>(self.height)?;
         writer.write_u16::<LittleEndian>(self.planes)?;

@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -248,12 +248,12 @@ impl core::fmt::Display for FixedPoint16Dot16 {
 }
 
 impl FixedPoint16Dot16 {
-    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    pub(crate) fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
         let raw = reader.read_u32::<LittleEndian>()?;
         Ok(Self { raw })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.raw)
     }
 }
