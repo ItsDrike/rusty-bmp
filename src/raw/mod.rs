@@ -10,7 +10,7 @@ pub use error::{BmpError, BmpResult};
 pub use file_header::FileHeader;
 pub use types::{
     CieXyz, CieXyzTriple, ColorMaskChannel, ColorMasks, FixedPoint2Dot30, FixedPoint16Dot16, GammaTriple, RgbMasks,
-    RgbaMasks,
+    RgbaMasks, BitsPerPixel, Compression,
 };
 
 // Private helpers
