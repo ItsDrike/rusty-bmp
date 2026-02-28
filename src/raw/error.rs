@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::raw::types::{BitsPerPixel, ColorMaskChannel, ColorSpaceType, Compression};
+use crate::raw::types::{BitsPerPixel, ColorMaskChannel, ColorSpaceType, Compression, RgbQuad};
 
 #[derive(Error, Debug)]
 pub enum BmpError {
@@ -99,6 +99,9 @@ pub enum BmpError {
 
     #[error("The ICC color profile data offset is outside of the allowed bounds")]
     InvalidIccProfileOffset,
+
+    #[error("Given RgbQuad structure breaks expected invariants")]
+    InvalidRgbQuad(RgbQuad),
 }
 
 pub type BmpResult<T> = Result<T, BmpError>;

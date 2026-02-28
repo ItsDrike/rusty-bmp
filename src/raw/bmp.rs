@@ -39,7 +39,9 @@ impl ColorTable {
                 let mut color_table: Vec<RgbQuad> = Vec::with_capacity(entry_count);
 
                 for _ in 0..entry_count {
-                    color_table.push(RgbQuad::read(reader)?);
+                    let rgb_quad = RgbQuad::read_unchecked(reader)?;
+                    rgb_quad.validate()?;
+                    color_table.push(rgb_quad);
                 }
 
                 Ok(Self::InfoOrLater(color_table))
@@ -295,7 +297,7 @@ impl Bmp {
                 }
 
                 for entry in &data.color_table {
-                    entry.write(&mut writer)?;
+                    entry.write_unchecked(&mut writer)?;
                 }
 
                 writer.seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
@@ -306,7 +308,7 @@ impl Bmp {
                 BitmapHeader::V4(data.bmp_header).write_unchecked(&mut writer)?;
 
                 for entry in &data.color_table {
-                    entry.write(&mut writer)?;
+                    entry.write_unchecked(&mut writer)?;
                 }
 
                 writer.seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
@@ -317,7 +319,7 @@ impl Bmp {
                 BitmapHeader::V5(data.bmp_header).write_unchecked(&mut writer)?;
 
                 for entry in &data.color_table {
-                    entry.write(&mut writer)?;
+                    entry.write_unchecked(&mut writer)?;
                 }
 
                 writer.seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))?;
