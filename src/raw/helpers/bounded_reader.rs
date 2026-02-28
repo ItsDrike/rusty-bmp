@@ -1,11 +1,5 @@
 use std::io::{self, Read, Seek, SeekFrom};
 
-pub(crate) fn read_array<const N: usize, R: Read>(reader: &mut R) -> std::io::Result<[u8; N]> {
-    let mut buf = [0u8; N];
-    reader.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
 pub(crate) struct BoundedReader<R> {
     inner: R,
     start: u64,

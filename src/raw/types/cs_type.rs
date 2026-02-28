@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::wingdi;
+use crate::raw::helpers::wingdi;
 
 /// Specifies how the RGB values in a V4/V5 DIB are to be interpreted with
 /// respect to color management.

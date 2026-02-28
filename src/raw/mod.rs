@@ -15,4 +15,3 @@ pub use types::{
 
 // Private helpers
 mod helpers;
-mod wingdi;
