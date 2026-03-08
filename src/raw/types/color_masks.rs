@@ -209,10 +209,6 @@ impl RgbMasks {
         validate_masks_for_bpp(&self.as_slice(), bpp)
     }
 
-    pub(crate) fn validate(&self) -> Result<(), ColorMaskError> {
-        validate_masks(&self.as_slice())
-    }
-
     pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {
         Ok(Self {
             red_mask: reader.read_u32::<LittleEndian>()?,
@@ -242,10 +238,6 @@ impl RgbaMasks {
 
     pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> Result<(), ColorMaskError> {
         validate_masks_for_bpp(&self.as_slice(), bpp)
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), ColorMaskError> {
-        validate_masks(&self.as_slice())
     }
 
     pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {

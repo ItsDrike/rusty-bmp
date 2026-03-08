@@ -13,6 +13,7 @@
 //! Or a github mirror:
 //! https://github.com/wine-mirror/wine/blob/master/include/wingdi.h
 #![allow(non_upper_case_globals)] // we want to match the windows constant naming
+#![allow(dead_code)] // we keep a broader set of spec constants than currently used
 
 pub const BI_RGB: u32 = 0;
 pub const BI_RLE8: u32 = 1;

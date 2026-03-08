@@ -8,38 +8,55 @@ use bmp::{
     },
 };
 
+#[allow(dead_code)]
 #[path = "bmpsuite/support.rs"]
 mod support;
+
+type SpotCase = (&'static str, [u8; 4], [u8; 4], [u8; 4]);
 
 fn decode_bmpsuite(rel_path: &str) -> DecodedImage {
     let path = support::bmpsuite_root().join(rel_path);
     let mut file = File::open(&path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
-    let bmp = Bmp::read_checked(&mut file)
-        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
+    let bmp = Bmp::read_checked(&mut file).unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
     decode_to_rgba(&bmp).unwrap_or_else(|err| panic!("failed to decode {}: {err}", path.display()))
 }
 
 fn pixel_rgba(img: &DecodedImage, x: usize, y: usize) -> [u8; 4] {
     let idx = (y * img.width as usize + x) * 4;
-    [
-        img.rgba[idx],
-        img.rgba[idx + 1],
-        img.rgba[idx + 2],
-        img.rgba[idx + 3],
-    ]
+    [img.rgba[idx], img.rgba[idx + 1], img.rgba[idx + 2], img.rgba[idx + 3]]
 }
 
 #[test]
 fn decode_spot_checks_across_encodings() {
     support::require_suite_generated();
 
-    let cases: [(&str, [u8; 4], [u8; 4], [u8; 4]); 5] = [
+    let cases: [SpotCase; 5] = [
         // (file, pixel @ (0,0), pixel @ (10,10), pixel @ (120,60))
         ("g/rgb24.bmp", [255, 0, 0, 255], [215, 82, 82, 255], [99, 99, 123, 255]),
-        ("g/pal8.bmp", [255, 0, 0, 255], [255, 85, 102, 255], [102, 128, 153, 255]),
-        ("g/pal8rle.bmp", [255, 0, 0, 255], [255, 85, 102, 255], [102, 128, 153, 255]),
-        ("g/rgb32bf.bmp", [255, 0, 0, 255], [215, 82, 82, 255], [99, 99, 123, 255]),
-        ("g/rgb16-565.bmp", [255, 0, 0, 255], [213, 80, 82, 255], [98, 97, 123, 255]),
+        (
+            "g/pal8.bmp",
+            [255, 0, 0, 255],
+            [255, 85, 102, 255],
+            [102, 128, 153, 255],
+        ),
+        (
+            "g/pal8rle.bmp",
+            [255, 0, 0, 255],
+            [255, 85, 102, 255],
+            [102, 128, 153, 255],
+        ),
+        (
+            "g/rgb32bf.bmp",
+            [255, 0, 0, 255],
+            [215, 82, 82, 255],
+            [99, 99, 123, 255],
+        ),
+        (
+            "g/rgb16-565.bmp",
+            [255, 0, 0, 255],
+            [213, 80, 82, 255],
+            [98, 97, 123, 255],
+        ),
     ];
 
     for (rel, p00, p1010, p12060) in cases {

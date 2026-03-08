@@ -102,38 +102,6 @@ impl BitmapHeader {
     }
 
     #[inline]
-    pub(crate) fn width(&self) -> i32 {
-        match self {
-            Self::Core(h) => h.width as i32,
-            Self::Info(h) => h.width,
-            Self::V4(h) => h.info.width,
-            Self::V5(h) => h.v4.info.width,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn height(&self) -> i32 {
-        match self {
-            Self::Core(h) => h.height as i32,
-            Self::Info(h) => h.height,
-            Self::V4(h) => h.info.height,
-            Self::V5(h) => h.v4.info.height,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn image_size(&self) -> u32 {
-        match self {
-            // doesn't hold image_size, but only has BI_RGB, so the image_size is
-            // computable and equivalent to being 0 in the other variants.
-            Self::Core(_) => 0,
-            Self::Info(h) => h.image_size,
-            Self::V4(h) => h.info.image_size,
-            Self::V5(h) => h.v4.info.image_size,
-        }
-    }
-
-    #[inline]
     pub(crate) fn color_table_size(&self) -> Result<u32, StructuralError> {
         match self {
             Self::Core(h) => h.color_table_size(),

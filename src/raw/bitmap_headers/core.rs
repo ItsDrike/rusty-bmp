@@ -92,15 +92,15 @@ impl BitmapCoreHeader {
             // colors for the bit count)
             BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 => {
                 let bits = self.bit_count.bit_count();
-                let max_colors = 1u32.checked_shl(bits as u32).ok_or_else(|| {
+
+                // compute max colors for this amount of bits
+                1u32.checked_shl(bits as u32).ok_or_else(|| {
                     // should never happen (1u32 << 1 | 4 | 8 cannot overflow)
                     StructuralError::ArithmeticOverflow(format!(
                         "bit count of {0} is too large to safely compute max colors for the color table size",
                         bits
                     ))
-                })?;
-
-                max_colors
+                })?
             }
             // direct / packed bitmap
             // (doesn't use the color table)

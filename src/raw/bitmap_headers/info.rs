@@ -153,21 +153,15 @@ impl BitmapInfoHeader {
         // For compressed images, the computed image size must always match the image size
         // reported in the header, if it was specified (non-zero). If it doesn't, it suggest
         // that the header is malformed.
-        if self.image_size != 0 && matches!(self.compression, Compression::Rgb | Compression::BitFields) {
-            match self.pixel_data_size() {
-                Ok(computed) => {
-                    if computed != self.image_size {
-                        return Err(ValidationError::UncompressedImageSizeMismatch {
-                            reported: self.image_size,
-                            computed,
-                        });
-                    }
-                }
-                // This indicates there's a structural error with the data, for validation,
-                // we can ignore this - it will almost certainly appear later on in the parsing
-                // chain to the user though.
-                Err(_) => {}
-            }
+        if self.image_size != 0
+            && matches!(self.compression, Compression::Rgb | Compression::BitFields)
+            && let Ok(computed) = self.pixel_data_size()
+            && computed != self.image_size
+        {
+            return Err(ValidationError::UncompressedImageSizeMismatch {
+                reported: self.image_size,
+                computed,
+            });
         }
 
         // This would suggest there is meant to be a color table with JPEG/PNG
@@ -227,15 +221,15 @@ impl BitmapInfoHeader {
                 // colors for the bit count)
                 BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 => {
                     let bits = self.bit_count.bit_count();
-                    let max_colors = 1u32.checked_shl(bits as u32).ok_or_else(|| {
+
+                    // compute max colors for this amount of bits
+                    1u32.checked_shl(bits as u32).ok_or_else(|| {
                         // should never happen (1u32 << 1 | 4 | 8 cannot overflow)
                         StructuralError::ArithmeticOverflow(format!(
                             "bit count of {0} is too large to safely compute max colors for the color table size",
                             bits
                         ))
-                    })?;
-
-                    max_colors
+                    })?
                 }
                 // direct / packed bitmap
                 // (doesn't use the color table)

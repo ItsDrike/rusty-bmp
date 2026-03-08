@@ -258,29 +258,32 @@ fn decode_bitfields_pixels(
     Ok(out)
 }
 
-fn write_indexed_pixel(
-    out: &mut [u8],
+struct IndexedPixelWriter<'a> {
     width: usize,
     height: usize,
     top_down: bool,
-    x: usize,
-    y: usize,
-    idx: usize,
-    palette: &[[u8; 4]],
-) -> Result<(), DecodeError> {
-    if x >= width || y >= height {
-        return Err(DecodeError::RleOutOfBounds);
+    palette: &'a [[u8; 4]],
+}
+
+impl IndexedPixelWriter<'_> {
+    fn write(&self, out: &mut [u8], x: usize, y: usize, idx: usize) -> Result<(), DecodeError> {
+        if x >= self.width || y >= self.height {
+            return Err(DecodeError::RleOutOfBounds);
+        }
+        let color = self
+            .palette
+            .get(idx)
+            .ok_or(DecodeError::PaletteIndexOutOfRange {
+                x,
+                y,
+                index: idx,
+                palette_len: self.palette.len(),
+            })?;
+        let y_out = if self.top_down { y } else { self.height - 1 - y };
+        let dst = (y_out * self.width + x) * 4;
+        out[dst..dst + 4].copy_from_slice(color);
+        Ok(())
     }
-    let color = palette.get(idx).ok_or(DecodeError::PaletteIndexOutOfRange {
-        x,
-        y,
-        index: idx,
-        palette_len: palette.len(),
-    })?;
-    let y_out = if top_down { y } else { height - 1 - y };
-    let dst = (y_out * width + x) * 4;
-    out[dst..dst + 4].copy_from_slice(color);
-    Ok(())
 }
 
 fn decode_rle8_pixels(
@@ -291,6 +294,12 @@ fn decode_rle8_pixels(
     palette: &[[u8; 4]],
 ) -> Result<Vec<u8>, DecodeError> {
     let mut out = vec![0_u8; width * height * 4];
+    let pixel_writer = IndexedPixelWriter {
+        width,
+        height,
+        top_down,
+        palette,
+    };
     let mut i = 0usize;
     let mut x = 0usize;
     let mut y = 0usize;
@@ -302,7 +311,7 @@ fn decode_rle8_pixels(
 
         if count > 0 {
             for _ in 0..count {
-                write_indexed_pixel(&mut out, width, height, top_down, x, y, value as usize, palette)?;
+                pixel_writer.write(&mut out, x, y, value as usize)?;
                 x += 1;
                 if x > width {
                     return Err(DecodeError::RleOutOfBounds);
@@ -339,7 +348,7 @@ fn decode_rle8_pixels(
                     return Err(DecodeError::InvalidRle("absolute run exceeds stream"));
                 }
                 for &idx in &pixel_data[i..i + n] {
-                    write_indexed_pixel(&mut out, width, height, top_down, x, y, idx as usize, palette)?;
+                    pixel_writer.write(&mut out, x, y, idx as usize)?;
                     x += 1;
                     if x > width {
                         return Err(DecodeError::RleOutOfBounds);
@@ -367,6 +376,12 @@ fn decode_rle4_pixels(
     palette: &[[u8; 4]],
 ) -> Result<Vec<u8>, DecodeError> {
     let mut out = vec![0_u8; width * height * 4];
+    let pixel_writer = IndexedPixelWriter {
+        width,
+        height,
+        top_down,
+        palette,
+    };
     let mut i = 0usize;
     let mut x = 0usize;
     let mut y = 0usize;
@@ -381,7 +396,7 @@ fn decode_rle4_pixels(
             let lo = (value & 0x0f) as usize;
             for k in 0..(count as usize) {
                 let idx = if (k & 1) == 0 { hi } else { lo };
-                write_indexed_pixel(&mut out, width, height, top_down, x, y, idx, palette)?;
+                pixel_writer.write(&mut out, x, y, idx)?;
                 x += 1;
                 if x > width {
                     return Err(DecodeError::RleOutOfBounds);
@@ -421,7 +436,7 @@ fn decode_rle4_pixels(
                 for p in 0..n {
                     let b = pixel_data[i + (p / 2)];
                     let idx = if (p & 1) == 0 { (b >> 4) as usize } else { (b & 0x0f) as usize };
-                    write_indexed_pixel(&mut out, width, height, top_down, x, y, idx, palette)?;
+                    pixel_writer.write(&mut out, x, y, idx)?;
                     x += 1;
                     if x > width {
                         return Err(DecodeError::RleOutOfBounds);
