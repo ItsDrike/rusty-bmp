@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 byteorder = "1.5.0"
+eframe = "0.31.1"
+rfd = "0.15.4"
 thiserror = "2.0.18"
 
 [dev-dependencies]
