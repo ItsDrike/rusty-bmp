@@ -19,12 +19,38 @@ struct BmpViewerApp {
     status: String,
     image_stats: String,
     decoded_stats: String,
+    palette_colors: Vec<[u8; 4]>,
     texture: Option<egui::TextureHandle>,
     transformed_image: Option<DecodedImage>,
     pipeline: TransformPipeline,
 }
 
 impl BmpViewerApp {
+    fn render_palette_grid(&self, ui: &mut egui::Ui) {
+        if self.palette_colors.is_empty() {
+            return;
+        }
+
+        ui.small(format!("{} colors", self.palette_colors.len()));
+
+        let swatch_size = 18.0f32;
+        let old_spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        ui.horizontal_wrapped(|ui| {
+            for (i, color) in self.palette_colors.iter().copied().enumerate() {
+                let rgba = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(swatch_size, swatch_size), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 2.0, rgba);
+
+                response.on_hover_text(format!(
+                    "#{i}\nRGB({}, {}, {})\n#{:02X}{:02X}{:02X}",
+                    color[0], color[1], color[2], color[0], color[1], color[2]
+                ));
+            }
+        });
+        ui.spacing_mut().item_spacing = old_spacing;
+    }
+
     fn set_display_image(&mut self, ctx: &egui::Context, image: DecodedImage, label: String) {
         let color =
             egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
@@ -61,6 +87,7 @@ impl BmpViewerApp {
         let info = gui::metadata::format_bmp_info_sections(&bmp, &decoded);
         self.image_stats = info.image_stats;
         self.decoded_stats = info.decoded_stats;
+        self.palette_colors = gui::palette::extract_palette_colors(&bmp);
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
         self.status = format!("Loaded {}", path.display());
     }
@@ -162,8 +189,12 @@ impl eframe::App for BmpViewerApp {
             }
         });
 
+        let window_width = ctx.available_rect().width();
+        let panel_max_width = (window_width - 220.0).clamp(220.0, 460.0);
+
         egui::SidePanel::right("bmp_info")
             .default_width(320.0)
+            .width_range(220.0..=panel_max_width)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.heading("BMP Details");
@@ -172,25 +203,45 @@ impl eframe::App for BmpViewerApp {
                     ui.label("Load a BMP file to inspect its metadata.");
                 } else {
                     let available_height = ui.available_height();
-                    let top_height = (available_height * 0.62).max(120.0);
-                    let bottom_height = (available_height - top_height).max(90.0);
+                    let has_palette = !self.palette_colors.is_empty();
+                    let (file_height, decoded_height, palette_height) = if has_palette {
+                        let file_h = (available_height * 0.38).max(100.0);
+                        let decoded_h = (available_height * 0.18).max(80.0);
+                        let palette_h = (available_height - file_h - decoded_h).max(120.0);
+                        (file_h, decoded_h, Some(palette_h))
+                    } else {
+                        let file_h = (available_height * 0.62).max(120.0);
+                        let decoded_h = (available_height - file_h).max(90.0);
+                        (file_h, decoded_h, None)
+                    };
 
-                    ui.label("Image Stats");
+                    ui.label("File Info");
                     egui::ScrollArea::vertical()
-                        .id_salt("image_stats_scroll")
-                        .max_height(top_height)
+                        .id_salt("file_info_scroll")
+                        .max_height(file_height)
                         .show(ui, |ui| {
                             ui.monospace(&self.image_stats);
                         });
 
                     ui.separator();
-                    ui.label("Decoded Stats");
+                    ui.label("Decoded Info");
                     egui::ScrollArea::vertical()
-                        .id_salt("decoded_stats_scroll")
-                        .max_height(bottom_height)
+                        .id_salt("decoded_info_scroll")
+                        .max_height(decoded_height)
                         .show(ui, |ui| {
                             ui.monospace(&self.decoded_stats);
                         });
+
+                    if let Some(palette_height) = palette_height {
+                        ui.separator();
+                        ui.label("Color Palette");
+                        egui::ScrollArea::vertical()
+                            .id_salt("palette_scroll")
+                            .max_height(palette_height)
+                            .show(ui, |ui| {
+                                self.render_palette_grid(ui);
+                            });
+                    }
                 }
             });
 
