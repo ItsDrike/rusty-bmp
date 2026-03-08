@@ -5,6 +5,11 @@ use bmp::{
     runtime::decode::DecodedImage,
 };
 
+pub struct BmpInfoSections {
+    pub image_stats: String,
+    pub decoded_stats: String,
+}
+
 fn with_grouping(value: u64) -> String {
     let s = value.to_string();
     let mut out = String::with_capacity(s.len() + (s.len() / 3));
@@ -45,7 +50,27 @@ fn compression_name(compression: Compression) -> &'static str {
     }
 }
 
-pub fn format_bmp_info(bmp: &Bmp, decoded: &DecodedImage) -> String {
+fn write_decode_stats(out: &mut String, decoded: &DecodedImage, encoded_pixel_bytes: usize) {
+    let decoded_bytes = decoded.rgba.len() as u64;
+    let _ = writeln!(out, "Decoded RGBA buffer: {}", format_bytes(decoded_bytes));
+    let _ = writeln!(out, "Decoded bytes per pixel: 4");
+
+    if encoded_pixel_bytes > 0 {
+        let ratio = decoded_bytes as f64 / encoded_pixel_bytes as f64;
+        let _ = writeln!(out, "Decode expansion ratio: {ratio:.2}x");
+    }
+}
+
+fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
+    match bmp {
+        Bmp::Core(data) => data.bitmap_array.len(),
+        Bmp::Info(data) => data.bitmap_array.len(),
+        Bmp::V4(data) => data.bitmap_array.len(),
+        Bmp::V5(data) => data.bitmap_array.len(),
+    }
+}
+
+pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSections {
     let mut out = String::new();
     match bmp {
         Bmp::Core(data) => {
@@ -216,13 +241,20 @@ pub fn format_bmp_info(bmp: &Bmp, decoded: &DecodedImage) -> String {
         }
     }
 
-    out
+    let mut decoded_stats = String::new();
+    write_decode_stats(&mut decoded_stats, decoded, encoded_pixel_bytes(bmp));
+
+    BmpInfoSections {
+        image_stats: out,
+        decoded_stats,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{compression_name, format_bytes, with_grouping};
+    use super::{compression_name, format_bytes, write_decode_stats, with_grouping};
     use bmp::raw::Compression;
+    use bmp::runtime::decode::DecodedImage;
 
     #[test]
     fn grouping_formats_with_commas() {
@@ -249,5 +281,20 @@ mod tests {
         assert_eq!(compression_name(Compression::Jpeg), "BI_JPEG");
         assert_eq!(compression_name(Compression::Png), "BI_PNG");
         assert_eq!(compression_name(Compression::Other(123)), "UNKNOWN");
+    }
+
+    #[test]
+    fn decode_stats_report_memory_and_ratio() {
+        let decoded = DecodedImage {
+            width: 2,
+            height: 1,
+            rgba: vec![0; 8],
+        };
+        let mut out = String::new();
+        write_decode_stats(&mut out, &decoded, 4);
+
+        assert!(out.contains("Decoded RGBA buffer: 8 B"));
+        assert!(out.contains("Decoded bytes per pixel: 4"));
+        assert!(out.contains("Decode expansion ratio: 2.00x"));
     }
 }

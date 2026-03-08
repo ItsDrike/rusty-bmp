@@ -17,7 +17,8 @@ mod gui;
 struct BmpViewerApp {
     path_input: String,
     status: String,
-    metadata: String,
+    image_stats: String,
+    decoded_stats: String,
     texture: Option<egui::TextureHandle>,
     transformed_image: Option<DecodedImage>,
     pipeline: TransformPipeline,
@@ -57,7 +58,9 @@ impl BmpViewerApp {
         };
 
         self.pipeline.clear();
-        self.metadata = gui::metadata::format_bmp_info(&bmp, &decoded);
+        let info = gui::metadata::format_bmp_info_sections(&bmp, &decoded);
+        self.image_stats = info.image_stats;
+        self.decoded_stats = info.decoded_stats;
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
         self.status = format!("Loaded {}", path.display());
     }
@@ -136,6 +139,7 @@ impl eframe::App for BmpViewerApp {
                 let rotate_left = ui.button("Rotate Left").clicked();
                 let rotate_right = ui.button("Rotate Right").clicked();
                 let mirror = ui.button("Mirror").clicked();
+                let invert = ui.button("Invert Colors").clicked();
                 let save_clicked = ui.button("Save As...").clicked();
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
@@ -145,6 +149,9 @@ impl eframe::App for BmpViewerApp {
                 }
                 if mirror {
                     self.apply_and_refresh(ctx, ImageTransform::MirrorHorizontal);
+                }
+                if invert {
+                    self.apply_and_refresh(ctx, ImageTransform::InvertColors);
                 }
                 if save_clicked {
                     self.save_current();
@@ -159,14 +166,31 @@ impl eframe::App for BmpViewerApp {
             .default_width(320.0)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading("BMP Info");
+                ui.heading("BMP Details");
                 ui.separator();
-                if self.metadata.is_empty() {
+                if self.image_stats.is_empty() {
                     ui.label("Load a BMP file to inspect its metadata.");
                 } else {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.monospace(&self.metadata);
-                    });
+                    let available_height = ui.available_height();
+                    let top_height = (available_height * 0.62).max(120.0);
+                    let bottom_height = (available_height - top_height).max(90.0);
+
+                    ui.label("Image Stats");
+                    egui::ScrollArea::vertical()
+                        .id_salt("image_stats_scroll")
+                        .max_height(top_height)
+                        .show(ui, |ui| {
+                            ui.monospace(&self.image_stats);
+                        });
+
+                    ui.separator();
+                    ui.label("Decoded Stats");
+                    egui::ScrollArea::vertical()
+                        .id_salt("decoded_stats_scroll")
+                        .max_height(bottom_height)
+                        .show(ui, |ui| {
+                            ui.monospace(&self.decoded_stats);
+                        });
                 }
             });
 
