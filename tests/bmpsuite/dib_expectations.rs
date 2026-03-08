@@ -33,15 +33,26 @@ fn assert_dib_expectation(rel_path: &str, expected: DibExpectation) {
             assert_eq!(i32::from(data.bmp_header.height), expected.height, "{rel_path}: height");
             assert_eq!(data.bmp_header.bit_count, expected.bpp, "{rel_path}: bpp");
             assert_eq!(Compression::Rgb, expected.compression, "{rel_path}: compression");
-            assert_eq!(data.color_table.len(), expected.color_table_len, "{rel_path}: color table");
+            assert_eq!(
+                data.color_table.len(),
+                expected.color_table_len,
+                "{rel_path}: color table"
+            );
         }
         Bmp::Info(data) => {
             assert_eq!(expected.variant, DibVariant::Info, "{rel_path}: variant");
             assert_eq!(data.bmp_header.width, expected.width, "{rel_path}: width");
             assert_eq!(data.bmp_header.height, expected.height, "{rel_path}: height");
             assert_eq!(data.bmp_header.bit_count, expected.bpp, "{rel_path}: bpp");
-            assert_eq!(data.bmp_header.compression, expected.compression, "{rel_path}: compression");
-            assert_eq!(data.color_table.len(), expected.color_table_len, "{rel_path}: color table");
+            assert_eq!(
+                data.bmp_header.compression, expected.compression,
+                "{rel_path}: compression"
+            );
+            assert_eq!(
+                data.color_table.len(),
+                expected.color_table_len,
+                "{rel_path}: color table"
+            );
 
             match (data.color_masks, expected.info_masks) {
                 (None, None) => {}
@@ -52,9 +63,9 @@ fn assert_dib_expectation(rel_path: &str, expected: DibExpectation) {
                         "{rel_path}: bitfield masks"
                     );
                 }
-                (actual, expected_masks) => panic!(
-                    "{rel_path}: mask mismatch, actual={actual:?}, expected={expected_masks:?}"
-                ),
+                (actual, expected_masks) => {
+                    panic!("{rel_path}: mask mismatch, actual={actual:?}, expected={expected_masks:?}")
+                }
             }
         }
         Bmp::V4(data) => {
@@ -63,11 +74,14 @@ fn assert_dib_expectation(rel_path: &str, expected: DibExpectation) {
             assert_eq!(data.bmp_header.info.height, expected.height, "{rel_path}: height");
             assert_eq!(data.bmp_header.info.bit_count, expected.bpp, "{rel_path}: bpp");
             assert_eq!(
-                data.bmp_header.info.compression,
-                expected.compression,
+                data.bmp_header.info.compression, expected.compression,
                 "{rel_path}: compression"
             );
-            assert_eq!(data.color_table.len(), expected.color_table_len, "{rel_path}: color table");
+            assert_eq!(
+                data.color_table.len(),
+                expected.color_table_len,
+                "{rel_path}: color table"
+            );
             assert_eq!(expected.info_masks, None, "{rel_path}: V4 masks are embedded in DIB");
         }
         Bmp::V5(data) => {
@@ -76,11 +90,14 @@ fn assert_dib_expectation(rel_path: &str, expected: DibExpectation) {
             assert_eq!(data.bmp_header.v4.info.height, expected.height, "{rel_path}: height");
             assert_eq!(data.bmp_header.v4.info.bit_count, expected.bpp, "{rel_path}: bpp");
             assert_eq!(
-                data.bmp_header.v4.info.compression,
-                expected.compression,
+                data.bmp_header.v4.info.compression, expected.compression,
                 "{rel_path}: compression"
             );
-            assert_eq!(data.color_table.len(), expected.color_table_len, "{rel_path}: color table");
+            assert_eq!(
+                data.color_table.len(),
+                expected.color_table_len,
+                "{rel_path}: color table"
+            );
             assert_eq!(expected.info_masks, None, "{rel_path}: V5 masks are embedded in DIB");
         }
     }
@@ -219,10 +236,7 @@ fn assert_dib_expectation(rel_path: &str, expected: DibExpectation) {
         info_masks: None,
     }
 )]
-fn bmpsuite_selected_dib_fields_match_expected_values(
-    #[case] rel_path: &str,
-    #[case] expected: DibExpectation,
-) {
+fn bmpsuite_selected_dib_fields_match_expected_values(#[case] rel_path: &str, #[case] expected: DibExpectation) {
     require_suite_generated();
     assert_dib_expectation(rel_path, expected);
 }

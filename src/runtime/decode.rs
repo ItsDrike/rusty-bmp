@@ -270,15 +270,12 @@ impl IndexedPixelWriter<'_> {
         if x >= self.width || y >= self.height {
             return Err(DecodeError::RleOutOfBounds);
         }
-        let color = self
-            .palette
-            .get(idx)
-            .ok_or(DecodeError::PaletteIndexOutOfRange {
-                x,
-                y,
-                index: idx,
-                palette_len: self.palette.len(),
-            })?;
+        let color = self.palette.get(idx).ok_or(DecodeError::PaletteIndexOutOfRange {
+            x,
+            y,
+            index: idx,
+            palette_len: self.palette.len(),
+        })?;
         let y_out = if self.top_down { y } else { self.height - 1 - y };
         let dst = (y_out * self.width + x) * 4;
         out[dst..dst + 4].copy_from_slice(color);
@@ -435,7 +432,11 @@ fn decode_rle4_pixels(
                 }
                 for p in 0..n {
                     let b = pixel_data[i + (p / 2)];
-                    let idx = if (p & 1) == 0 { (b >> 4) as usize } else { (b & 0x0f) as usize };
+                    let idx = if (p & 1) == 0 {
+                        (b >> 4) as usize
+                    } else {
+                        (b & 0x0f) as usize
+                    };
                     pixel_writer.write(&mut out, x, y, idx)?;
                     x += 1;
                     if x > width {

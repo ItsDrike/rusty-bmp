@@ -207,11 +207,13 @@ impl Bmp {
         pixel_data_size: usize,
     ) -> Result<u64, BmpError> {
         if file_header.pixel_data_offset < min_pixel_offset {
-            return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
-                pixel_offset_header: file_header.pixel_data_offset,
-                min_offset: min_pixel_offset,
-            })
-            .into());
+            return Err(
+                ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
+                    pixel_offset_header: file_header.pixel_data_offset,
+                    min_offset: min_pixel_offset,
+                })
+                .into(),
+            );
         }
         (file_header.pixel_data_offset as u64)
             .checked_add(pixel_data_size as u64)
@@ -220,10 +222,12 @@ impl Bmp {
 
     fn validate_file_end(file_size: u32, required_end: u64) -> Result<(), ValidationError> {
         if required_end > file_size as u64 {
-            return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
-                pixel_end: required_end,
-                file_size,
-            }));
+            return Err(ValidationError::PixelDataLayout(
+                PixelDataLayoutError::ExceedsFileSize {
+                    pixel_end: required_end,
+                    file_size,
+                },
+            ));
         }
         if required_end != file_size as u64 {
             return Err(ValidationError::PixelDataLayout(
@@ -313,7 +317,8 @@ impl Bmp {
                 let pixel_data_size_header = Self::header_pixel_data_size(&header)?;
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
-                let min_pixel_offset = Self::min_pixel_offset(BitmapV4Header::HEADER_SIZE, data.color_table.len(), 4, 0)?;
+                let min_pixel_offset =
+                    Self::min_pixel_offset(BitmapV4Header::HEADER_SIZE, data.color_table.len(), 4, 0)?;
                 let pixel_end =
                     Self::pixel_end_with_overlap_check(&data.file_header, min_pixel_offset, pixel_data_size_header)?;
                 Self::validate_file_end(data.file_header.file_size, pixel_end)?;
@@ -330,7 +335,8 @@ impl Bmp {
                 let pixel_data_size_header = Self::header_pixel_data_size(&header)?;
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
-                let min_pixel_offset = Self::min_pixel_offset(BitmapV5Header::HEADER_SIZE, data.color_table.len(), 4, 0)?;
+                let min_pixel_offset =
+                    Self::min_pixel_offset(BitmapV5Header::HEADER_SIZE, data.color_table.len(), 4, 0)?;
                 let pixel_end =
                     Self::pixel_end_with_overlap_check(&data.file_header, min_pixel_offset, pixel_data_size_header)?;
 
@@ -652,11 +658,13 @@ impl Bmp {
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
                 if data.file_header.pixel_data_offset < FileHeader::SIZE {
-                    return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
-                        pixel_offset_header: data.file_header.pixel_data_offset,
-                        min_offset: FileHeader::SIZE,
-                    })
-                    .into());
+                    return Err(
+                        ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
+                            pixel_offset_header: data.file_header.pixel_data_offset,
+                            min_offset: FileHeader::SIZE,
+                        })
+                        .into(),
+                    );
                 }
                 let pixel_end = (data.file_header.pixel_data_offset as u64)
                     .checked_add(pixel_data_size_header as u64)
@@ -677,11 +685,13 @@ impl Bmp {
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
                 if data.file_header.pixel_data_offset < FileHeader::SIZE {
-                    return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
-                        pixel_offset_header: data.file_header.pixel_data_offset,
-                        min_offset: FileHeader::SIZE,
-                    })
-                    .into());
+                    return Err(
+                        ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
+                            pixel_offset_header: data.file_header.pixel_data_offset,
+                            min_offset: FileHeader::SIZE,
+                        })
+                        .into(),
+                    );
                 }
                 let pixel_end = (data.file_header.pixel_data_offset as u64)
                     .checked_add(pixel_data_size_header as u64)
@@ -702,11 +712,13 @@ impl Bmp {
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
                 if data.file_header.pixel_data_offset < FileHeader::SIZE {
-                    return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
-                        pixel_offset_header: data.file_header.pixel_data_offset,
-                        min_offset: FileHeader::SIZE,
-                    })
-                    .into());
+                    return Err(
+                        ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
+                            pixel_offset_header: data.file_header.pixel_data_offset,
+                            min_offset: FileHeader::SIZE,
+                        })
+                        .into(),
+                    );
                 }
                 let pixel_end = (data.file_header.pixel_data_offset as u64)
                     .checked_add(pixel_data_size_header as u64)
@@ -727,11 +739,13 @@ impl Bmp {
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
                 if data.file_header.pixel_data_offset < FileHeader::SIZE {
-                    return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
-                        pixel_offset_header: data.file_header.pixel_data_offset,
-                        min_offset: FileHeader::SIZE,
-                    })
-                    .into());
+                    return Err(
+                        ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
+                            pixel_offset_header: data.file_header.pixel_data_offset,
+                            min_offset: FileHeader::SIZE,
+                        })
+                        .into(),
+                    );
                 }
                 let pixel_end = (data.file_header.pixel_data_offset as u64)
                     .checked_add(pixel_data_size_header as u64)

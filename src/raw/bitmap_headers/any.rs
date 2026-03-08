@@ -51,7 +51,7 @@ impl BitmapHeader {
             _ => {
                 return Err(StructuralError::UnsupportedStructure(format!(
                     "The BMP header size value of {size} did not match any supported BMP variant"
-                )))
+                )));
             }
         };
 

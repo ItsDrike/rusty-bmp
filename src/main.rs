@@ -11,6 +11,8 @@ use bmp::{
 use eframe::egui;
 use rfd::FileDialog;
 
+mod gui;
+
 #[derive(Default)]
 struct BmpViewerApp {
     path_input: String,
@@ -23,12 +25,9 @@ struct BmpViewerApp {
 
 impl BmpViewerApp {
     fn set_display_image(&mut self, ctx: &egui::Context, image: DecodedImage, label: String) {
-        let color = egui::ColorImage::from_rgba_unmultiplied(
-            [image.width as usize, image.height as usize],
-            &image.rgba,
-        );
+        let color =
+            egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
         self.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
-        self.metadata = format!("{} x {}", image.width, image.height);
         self.transformed_image = Some(image);
     }
 
@@ -58,6 +57,7 @@ impl BmpViewerApp {
         };
 
         self.pipeline.clear();
+        self.metadata = gui::metadata::format_bmp_info(&bmp, &decoded);
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
         self.status = format!("Loaded {}", path.display());
     }
@@ -153,10 +153,22 @@ impl eframe::App for BmpViewerApp {
             if !self.status.is_empty() {
                 ui.label(&self.status);
             }
-            if !self.metadata.is_empty() {
-                ui.label(&self.metadata);
-            }
         });
+
+        egui::SidePanel::right("bmp_info")
+            .default_width(320.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.heading("BMP Info");
+                ui.separator();
+                if self.metadata.is_empty() {
+                    ui.label("Load a BMP file to inspect its metadata.");
+                } else {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.monospace(&self.metadata);
+                    });
+                }
+            });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(texture) = &self.texture {
