@@ -3,7 +3,8 @@ use std::io::{self, Read, Write};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::raw::{
-    BmpError, BmpResult,
+    DibVariant,
+    error::{StructuralError, ValidationError},
     types::{BitsPerPixel, Compression},
 };
 
@@ -119,64 +120,62 @@ pub struct BitmapInfoHeader {
 impl BitmapInfoHeader {
     pub const HEADER_SIZE: u32 = 40;
 
-    pub(crate) fn validate(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         // Width cannot be zero nor negative
         if self.width <= 0 {
-            return Err(BmpError::InvalidWidth(self.width));
+            Err(ValidationError::InvalidWidth(self.width))?;
         }
 
         // Height cannot be zero
         if self.height == 0 {
-            return Err(BmpError::InvalidHeight(self.height));
+            Err(ValidationError::InvalidHeight(self.height))?;
         }
 
         // Planes must always be 1
         if self.planes != 1 {
-            return Err(BmpError::InvalidPlanes(self.planes));
+            Err(ValidationError::InvalidPlanes(self.planes))?;
         }
 
-        // For the info header, only bpp values of 0, 1, 4, 8, 16, 24 and 32 are allowed
-        if !matches!(
-            self.bit_count,
-            BitsPerPixel::Bpp0
-                | BitsPerPixel::Bpp1
-                | BitsPerPixel::Bpp4
-                | BitsPerPixel::Bpp8
-                | BitsPerPixel::Bpp16
-                | BitsPerPixel::Bpp24
-                | BitsPerPixel::Bpp32
-        ) {
-            return Err(BmpError::InvalidBitCount(self.bit_count.bit_count()));
-        }
+        self.bit_count.validate(DibVariant::Info)?;
 
-        // Top-down dibs cannot be compressed
+        self.compression.validate_for_bpp(self.bit_count)?;
+
+        // Top-down dibscannot be compressed
         if (self.height < 0) && !matches!(self.compression, Compression::Rgb | Compression::BitFields) {
-            return Err(BmpError::InvalidCompressionForTopDown {
-                compression: self.compression,
-            });
-        }
-
-        // The RLE compression can only be used with their expected bpp values
-        // The BITFIELDS compression can only be used with bpp of 16 or 32
-        // The JPEG/PNG compression can only be used with bpp of 0
-        if (self.compression == Compression::Rle4 && self.bit_count != BitsPerPixel::Bpp4)
-            || (self.compression == Compression::Rle8 && self.bit_count != BitsPerPixel::Bpp8)
-            || (self.compression == Compression::BitFields
-                && !matches!(self.bit_count, BitsPerPixel::Bpp16 | BitsPerPixel::Bpp32))
-            || (matches!(self.compression, Compression::Png | Compression::Jpeg)
-                && self.bit_count != BitsPerPixel::Bpp0)
-        {
-            return Err(BmpError::InvalidCompressionForBpp {
-                compression: self.compression,
-                bpp: self.bit_count,
-            });
+            return Err(ValidationError::InvalidCompressionForTopDown(self.compression));
         }
 
         // Image size of 0 is valid only for uncompressed images (RGB or BITFIELDS)
         if self.image_size == 0 && !matches!(self.compression, Compression::Rgb | Compression::BitFields) {
-            return Err(BmpError::InvalidImageSizeForCompression {
-                image_size: self.image_size,
+            return Err(ValidationError::CompressedImageMissingSize(self.compression));
+        }
+
+        // For compressed images, the computed image size must always match the image size
+        // reported in the header, if it was specified (non-zero). If it doesn't, it suggest
+        // that the header is malformed.
+        if self.image_size != 0 && matches!(self.compression, Compression::Rgb | Compression::BitFields) {
+            match self.pixel_data_size() {
+                Ok(computed) => {
+                    if computed != self.image_size {
+                        return Err(ValidationError::UncompressedImageSizeMismatch {
+                            reported: self.image_size,
+                            computed,
+                        });
+                    }
+                }
+                // This indicates there's a structural error with the data, for validation,
+                // we can ignore this - it will almost certainly appear later on in the parsing
+                // chain to the user though.
+                Err(_) => {}
+            }
+        }
+
+        // This would suggest there is meant to be a color table with JPEG/PNG
+        // encoded image. That makes no sense though and we should refuse it.
+        if matches!(self.compression, Compression::Jpeg | Compression::Png) && self.colors_used != 0 {
+            return Err(ValidationError::PaletteNotAllowedForCompression {
                 compression: self.compression,
+                colors_used: self.colors_used,
             });
         }
 
@@ -210,5 +209,81 @@ impl BitmapInfoHeader {
         writer.write_u32::<LittleEndian>(self.colors_used)?;
         writer.write_u32::<LittleEndian>(self.colors_important)?;
         Ok(())
+    }
+
+    pub(crate) fn color_table_size(&self) -> Result<u32, StructuralError> {
+        // This is a special case, only valid when compression is JPEG/PNG
+        // (We don't validate it here, but this should mean colors_used = 0
+        // in the header too, validation does enforce this, we intentionally
+        // don't)
+        if self.bit_count == BitsPerPixel::Bpp0 {
+            return Ok(0);
+        }
+
+        if self.colors_used == 0 {
+            return Ok(match self.bit_count {
+                // indexed bitmap
+                // (the color table has as many entries as there are representable
+                // colors for the bit count)
+                BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 => {
+                    let bits = self.bit_count.bit_count();
+                    let max_colors = 1u32.checked_shl(bits as u32).ok_or_else(|| {
+                        // should never happen (1u32 << 1 | 4 | 8 cannot overflow)
+                        StructuralError::ArithmeticOverflow(format!(
+                            "bit count of {0} is too large to safely compute max colors for the color table size",
+                            bits
+                        ))
+                    })?;
+
+                    max_colors
+                }
+                // direct / packed bitmap
+                // (doesn't use the color table)
+                BitsPerPixel::Bpp16 | BitsPerPixel::Bpp24 | BitsPerPixel::Bpp32 => 0,
+                // no other bpp values are supported
+                // (no defined way to compute the color table size if not given)
+                _ => {
+                    return Err(StructuralError::UnsupportedStructure(format!(
+                        "cannot compute color table size for unsupported bits-per-pixel value: {0}",
+                        self.bit_count
+                    )));
+                }
+            });
+        }
+
+        Ok(self.colors_used)
+    }
+
+    pub(crate) fn pixel_data_size(&self) -> Result<u32, StructuralError> {
+        match self.compression {
+            // uncompressed formats: compute row stride and total size dynamically
+            Compression::Rgb | Compression::BitFields => {
+                let width = self.width.unsigned_abs();
+                let height = self.height.unsigned_abs();
+                let bits = self.bit_count.bit_count();
+
+                let row_stride = (bits as u32)
+                    .checked_mul(width)
+                    .and_then(|bits_per_row| bits_per_row.checked_add(31))
+                    .map(|x| (x / 32) * 4)
+                    .ok_or(StructuralError::ArithmeticOverflow(
+                        "row stride (pixel data size)".to_owned(),
+                    ))?;
+
+                let image_size_computed =
+                    row_stride
+                        .checked_mul(height)
+                        .ok_or(StructuralError::ArithmeticOverflow(
+                            "image size (pixel data size)".to_owned(),
+                        ))?;
+
+                // This intentionally ignores the image_size field from the header and uses the
+                // computed size, as that is the structurally valid size, size mismatch is checked
+                // during validation, if checking is desired.
+                Ok(image_size_computed)
+            }
+            // for other compressed formats, we can only obtain the size info from the header.
+            _ => Ok(self.image_size),
+        }
     }
 }

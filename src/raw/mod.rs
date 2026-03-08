@@ -5,12 +5,14 @@ mod file_header;
 mod types;
 
 pub use bitmap_headers::{BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header};
-pub use bmp::Bmp;
-pub use error::{BmpError, BmpResult};
+pub use bmp::{Bmp, DibVariant};
+pub use error::{
+    BmpError, ColorMaskError, IccProfileError, IoStage, PixelDataLayoutError, StructuralError, ValidationError,
+};
 pub use file_header::FileHeader;
 pub use types::{
-    CieXyz, CieXyzTriple, ColorMaskChannel, ColorMasks, FixedPoint2Dot30, FixedPoint16Dot16, GammaTriple, RgbMasks,
-    RgbaMasks, BitsPerPixel, Compression,
+    BitsPerPixel, CieXyz, CieXyzTriple, ColorMaskChannel, ColorMasks, Compression, FixedPoint2Dot30,
+    FixedPoint16Dot16, GammaTriple, RgbMasks, RgbaMasks,
 };
 
 // Private helpers

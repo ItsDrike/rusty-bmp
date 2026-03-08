@@ -2,6 +2,8 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
+use crate::raw::{DibVariant, error::ValidationError};
+
 /// Recognized valid Bits-Per-Pixel (color depth) values for a DIB
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitsPerPixel {
@@ -88,6 +90,26 @@ pub enum BitsPerPixel {
 }
 
 impl BitsPerPixel {
+    pub(crate) fn validate(&self, variant: DibVariant) -> Result<(), ValidationError> {
+        match (variant, self) {
+            (DibVariant::Core, BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 | BitsPerPixel::Bpp24) => {
+            }
+            (
+                DibVariant::Info | DibVariant::V4 | DibVariant::V5,
+                BitsPerPixel::Bpp0
+                | BitsPerPixel::Bpp1
+                | BitsPerPixel::Bpp4
+                | BitsPerPixel::Bpp8
+                | BitsPerPixel::Bpp16
+                | BitsPerPixel::Bpp24
+                | BitsPerPixel::Bpp32,
+            ) => {}
+            _ => return Err(ValidationError::InvalidBitCount(*self)),
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
         let raw = reader.read_u16::<LittleEndian>()?;
         Ok(match raw {

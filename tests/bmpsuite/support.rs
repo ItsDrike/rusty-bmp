@@ -1,6 +1,5 @@
 use std::{
     fs::File,
-    io::Cursor,
     path::{Path, PathBuf},
     process::Command,
     sync::OnceLock,
@@ -46,7 +45,7 @@ pub(crate) fn require_suite_generated() {
 
 pub(crate) fn parse_bmp(path: &Path) -> Result<Bmp, bmp::raw::BmpError> {
     let mut file = File::open(path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
-    Bmp::read(&mut file)
+    Bmp::read_checked(&mut file)
 }
 
 pub(crate) fn to_rel_suite_path(path: &Path) -> String {

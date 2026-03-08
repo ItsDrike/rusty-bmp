@@ -1,8 +1,8 @@
 use std::io::{self, Read, Write};
 
 use crate::raw::{
-    BmpError, BmpResult,
     bitmap_headers::BitmapInfoHeader,
+    error::ValidationError,
     types::{CieXyzTriple, ColorSpaceType, GammaTriple, RgbaMasks},
 };
 
@@ -61,7 +61,7 @@ pub struct BitmapV4Header {
 impl BitmapV4Header {
     pub const HEADER_SIZE: u32 = 108;
 
-    pub(crate) fn validate(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         self.validate_base()?;
 
         // Only the following color space type values are allowed for V4
@@ -69,7 +69,7 @@ impl BitmapV4Header {
             self.cs_type,
             ColorSpaceType::CalibratedRgb | ColorSpaceType::SRgb | ColorSpaceType::WindowsColorSpace,
         ) {
-            return Err(BmpError::InvalidColorSpaceType(self.cs_type));
+            return Err(ValidationError::InvalidColorSpaceType(self.cs_type));
         }
 
         Ok(())
@@ -82,7 +82,7 @@ impl BitmapV4Header {
     /// variants can reliably call and re-use, without validation code duplication,
     /// and without bringing in the invariants that do change between the header
     /// versions.
-    pub(crate) fn validate_base(&self) -> BmpResult<()> {
+    pub(crate) fn validate_base(&self) -> Result<(), ValidationError> {
         self.info.validate()?;
         self.masks.validate_for_bpp(self.info.bit_count)?;
 

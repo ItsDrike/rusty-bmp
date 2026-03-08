@@ -2,7 +2,11 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult, types::BitsPerPixel};
+use crate::raw::{
+    DibVariant,
+    error::{StructuralError, ValidationError},
+    types::BitsPerPixel,
+};
 
 /// The BMP CORE (12 byte) header.
 ///
@@ -43,29 +47,23 @@ pub struct BitmapCoreHeader {
 impl BitmapCoreHeader {
     pub const HEADER_SIZE: u32 = 12;
 
-    pub(crate) fn validate(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         // Width cannot be zero
         if self.width == 0 {
-            return Err(BmpError::InvalidWidth(i32::from(self.width)));
+            return Err(ValidationError::InvalidWidth(i32::from(self.width)));
         }
 
         // Height cannot be zero
         if self.height == 0 {
-            return Err(BmpError::InvalidHeight(i32::from(self.height)));
+            return Err(ValidationError::InvalidHeight(i32::from(self.height)));
         }
 
         // Planes must always be 1
         if self.planes != 1 {
-            return Err(BmpError::InvalidPlanes(self.planes));
+            return Err(ValidationError::InvalidPlanes(self.planes));
         }
 
-        // For the core header, only bpp values of: 1, 4, 8 or 24 are accepted
-        if !matches!(
-            self.bit_count,
-            BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 | BitsPerPixel::Bpp24
-        ) {
-            return Err(BmpError::InvalidBitCount(self.bit_count.bit_count()));
-        }
+        self.bit_count.validate(DibVariant::Core)?;
 
         Ok(())
     }
@@ -85,5 +83,54 @@ impl BitmapCoreHeader {
         writer.write_u16::<LittleEndian>(self.planes)?;
         self.bit_count.write(writer)?;
         Ok(())
+    }
+
+    pub(crate) fn color_table_size(&self) -> Result<u32, StructuralError> {
+        Ok(match self.bit_count {
+            // indexed bitmap
+            // (the color table has as many entries as there are representable
+            // colors for the bit count)
+            BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 => {
+                let bits = self.bit_count.bit_count();
+                let max_colors = 1u32.checked_shl(bits as u32).ok_or_else(|| {
+                    // should never happen (1u32 << 1 | 4 | 8 cannot overflow)
+                    StructuralError::ArithmeticOverflow(format!(
+                        "bit count of {0} is too large to safely compute max colors for the color table size",
+                        bits
+                    ))
+                })?;
+
+                max_colors
+            }
+            // direct / packed bitmap
+            // (doesn't use the color table)
+            BitsPerPixel::Bpp24 => 0,
+            _ => {
+                return Err(StructuralError::UnsupportedStructure(format!(
+                    "cannot compute color table size for unsupported bits-per-pixel value: {0}",
+                    self.bit_count
+                )));
+            }
+        })
+    }
+
+    pub(crate) fn pixel_data_size(&self) -> Result<u32, StructuralError> {
+        let bits = self.bit_count.bit_count();
+
+        let row_stride = (bits as u32)
+            .checked_mul(self.width as u32)
+            .and_then(|bits_per_row| bits_per_row.checked_add(31))
+            .map(|x| (x / 32) * 4)
+            .ok_or(StructuralError::ArithmeticOverflow(
+                "row stride (pixel data size)".to_owned(),
+            ))?;
+
+        let image_size = row_stride
+            .checked_mul(self.height as u32)
+            .ok_or(StructuralError::ArithmeticOverflow(
+                "image size (pixel data size)".to_owned(),
+            ))?;
+
+        Ok(image_size)
     }
 }

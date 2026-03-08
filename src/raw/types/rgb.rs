@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult};
+use crate::raw::error::ValidationError;
 
 /// Describes a color consisting of relative intensities of red, green, and blue.
 ///
@@ -71,9 +71,9 @@ pub struct RgbQuad {
 }
 
 impl RgbQuad {
-    pub(crate) fn validate(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         if self.reserved != 0 {
-            return Err(BmpError::InvalidRgbQuad(*self));
+            return Err(ValidationError::InvalidRgbQuad(*self));
         }
 
         Ok(())

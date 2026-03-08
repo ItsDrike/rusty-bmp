@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult, types::BitsPerPixel};
+use crate::raw::{error::ColorMaskError, types::BitsPerPixel};
 
 /// Returns `true` if the given bitmask consists of a single contiguous run of
 /// set bits.
@@ -48,16 +48,16 @@ fn find_overlapping_masks(
 /// - Each non-zero mask is contiguous.
 /// - No two masks overlap.
 ///
-/// Returns an appropriate [`BmpError`] if validation fails.
-fn validate_masks(masks: &[(u32, ColorMaskChannel)]) -> BmpResult<()> {
+/// Returns an appropriate [`ColorMaskError`] if validation fails.
+fn validate_masks(masks: &[(u32, ColorMaskChannel)]) -> Result<(), ColorMaskError> {
     for &(mask, channel) in masks {
         if mask != 0 && !check_bitmask_contiguous(mask) {
-            return Err(BmpError::NonContiguousColorMask { mask, channel });
+            return Err(ColorMaskError::NonContiguous { mask, channel });
         }
     }
 
     if let Some((mask_a, channel_a, mask_b, channel_b)) = find_overlapping_masks(masks) {
-        return Err(BmpError::OverlappingColorMasks {
+        return Err(ColorMaskError::Overlapping {
             mask_a,
             channel_a,
             mask_b,
@@ -73,27 +73,23 @@ fn validate_masks(masks: &[(u32, ColorMaskChannel)]) -> BmpResult<()> {
 /// Performs structural validation (contiguous, non-overlapping masks) and
 /// ensures that all mask bits fit within the specified number of bits per
 /// pixel.
-fn validate_masks_for_bpp(masks: &[(u32, ColorMaskChannel)], bpp: BitsPerPixel) -> BmpResult<()> {
+fn validate_masks_for_bpp(masks: &[(u32, ColorMaskChannel)], bpp: BitsPerPixel) -> Result<(), ColorMaskError> {
     // First perform structural validation
     validate_masks(masks)?;
 
+    // Construct a mask with the lowest `bit_count` bits set (e.g. bit_count=24 -> 0x00FFFFFF).
+    // Note that if bit_count is over 32, this will silently ignore it and assume 32 to avoid
+    // overflows. (bit_count validity should be checked elsewhere)
     let bit_count = bpp.bit_count();
-
-    // Check the BPP is actually something reasonable, otherwise we could
-    // run into overflows or other issues in our logic later.
-    if bit_count > 32 {
-        return Err(BmpError::InvalidBitCount(bit_count));
-    }
-
-    let pixel_mask = if bit_count == 32 {
-        u32::MAX
+    let pixel_mask = if bit_count == 0 {
+        0
     } else {
-        (1u32 << bit_count) - 1
+        u32::MAX >> (32u16.saturating_sub(bit_count))
     };
 
     for &(mask, channel) in masks {
         if mask & !pixel_mask != 0 {
-            return Err(BmpError::MaskExceedsBitDepth { mask, channel, bpp });
+            return Err(ColorMaskError::ExceedsBitDepth { mask, channel, bpp });
         }
     }
 
@@ -209,11 +205,11 @@ impl RgbMasks {
         ]
     }
 
-    pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> BmpResult<()> {
+    pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> Result<(), ColorMaskError> {
         validate_masks_for_bpp(&self.as_slice(), bpp)
     }
 
-    pub(crate) fn validate(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> Result<(), ColorMaskError> {
         validate_masks(&self.as_slice())
     }
 
@@ -244,11 +240,11 @@ impl RgbaMasks {
         ]
     }
 
-    pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> BmpResult<()> {
+    pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> Result<(), ColorMaskError> {
         validate_masks_for_bpp(&self.as_slice(), bpp)
     }
 
-    pub(crate) fn validate(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> Result<(), ColorMaskError> {
         validate_masks(&self.as_slice())
     }
 

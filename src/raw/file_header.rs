@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult, helpers::read_array};
+use crate::raw::{error::ValidationError, helpers::read_array};
 
 /// The BMP file header.
 ///
@@ -49,12 +49,25 @@ pub struct FileHeader {
 impl FileHeader {
     pub(crate) const SIZE: u32 = 14;
 
-    pub(crate) fn read<R: Read>(reader: &mut R) -> BmpResult<Self> {
-        let signature = read_array::<2, _>(reader)?;
-        if signature != *b"BM" {
-            return Err(BmpError::InvalidFileSignature(signature));
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
+        if self.signature != *b"BM" {
+            return Err(ValidationError::InvalidFileSignature(self.signature));
         }
 
+        if self.reserved_1 != [0u8; 2] || self.reserved_2 != [0u8; 2] {
+            return Err(ValidationError::InvalidFileReservedData([
+                self.reserved_1[0],
+                self.reserved_1[1],
+                self.reserved_2[0],
+                self.reserved_2[1],
+            ]));
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn read_unchecked<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let signature = read_array::<2, _>(reader)?;
         let file_size = reader.read_u32::<LittleEndian>()?;
 
         let reserved_1 = read_array::<2, _>(reader)?;
@@ -69,25 +82,6 @@ impl FileHeader {
             reserved_2,
             pixel_data_offset,
         })
-    }
-
-    pub(crate) fn write_checked<W: Write>(&self, writer: &mut W) -> BmpResult<()> {
-        if self.signature != *b"BM" {
-            return Err(BmpError::InvalidFileSignature(self.signature));
-        }
-
-        if self.reserved_1 != [0u8; 2] || self.reserved_2 != [0u8; 2] {
-            return Err(BmpError::InvalidFileReservedData([
-                self.reserved_1[0],
-                self.reserved_1[1],
-                self.reserved_2[0],
-                self.reserved_2[1],
-            ]));
-        }
-
-        self.write_unchecked(writer)?;
-
-        Ok(())
     }
 
     pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {

@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BmpError, BmpResult, bitmap_headers::BitmapV4Header, helpers::read_array, types::ColorSpaceType};
+use crate::raw::{bitmap_headers::BitmapV4Header, error::ValidationError, helpers::read_array, types::ColorSpaceType};
 
 /// The BMP V5 (124 byte) header.
 ///
@@ -77,7 +77,7 @@ pub struct BitmapV5Header {
 impl BitmapV5Header {
     pub const HEADER_SIZE: u32 = 124;
 
-    pub(crate) fn validate(&self) -> BmpResult<()> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         self.v4.validate_base()?;
 
         // Only the following values are allowed for the color space type field
@@ -89,19 +89,7 @@ impl BitmapV5Header {
                 | ColorSpaceType::ProfileEmbedded
                 | ColorSpaceType::ProfileLinked
         ) {
-            return Err(BmpError::InvalidColorSpaceType(self.v4.cs_type));
-        }
-
-        // If we have profile data in the DIB, `profile_data` holds an offset
-        // for where they are, from the beginning of the header. That means it
-        // should never be less than the header size (the profile data must be
-        // outside of the header)
-        if matches!(
-            self.v4.cs_type,
-            ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked
-        ) && self.profile_data < Self::HEADER_SIZE
-        {
-            return Err(BmpError::InvalidProfileOffset(self.profile_data));
+            return Err(ValidationError::InvalidColorSpaceType(self.v4.cs_type));
         }
 
         Ok(())

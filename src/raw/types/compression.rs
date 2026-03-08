@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::helpers::wingdi;
+use crate::raw::{BitsPerPixel, error::ValidationError, helpers::wingdi};
 
 /// Compression methods defined for BMP files.
 ///
@@ -97,5 +97,41 @@ impl Compression {
             Self::Png => wingdi::BI_PNG,
             Self::Other(x) => *x,
         }
+    }
+
+    /// Validates that the compression method is compatible with the given
+    /// bits-per-pixel (`bpp`) value.
+    ///
+    /// The following constraints are enforced:
+    /// - RLE4 compression requires 4 bits per pixel
+    /// - RLE8 compression requires 8 bits per pixel
+    /// - BITFIELDS compression is only valid for 16 or 32 bits per pixel
+    /// - RGB compression is only valid for 24 bits per pixel
+    /// - JPEG and PNG compression require `bpp = 0`
+    pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> Result<(), ValidationError> {
+        match (*self, bpp) {
+            (Self::Rle4, BitsPerPixel::Bpp4) => {}
+            (Self::Rle8, BitsPerPixel::Bpp8) => {}
+            (Self::BitFields, BitsPerPixel::Bpp16 | BitsPerPixel::Bpp32) => {}
+            (
+                Self::Rgb,
+                BitsPerPixel::Bpp1
+                | BitsPerPixel::Bpp4
+                | BitsPerPixel::Bpp8
+                | BitsPerPixel::Bpp16
+                | BitsPerPixel::Bpp24
+                | BitsPerPixel::Bpp32,
+            ) => {}
+            (Self::Png | Self::Jpeg, BitsPerPixel::Bpp0) => {}
+            (Self::Other(raw_bpp), _) => return Err(ValidationError::UnknownCompression(raw_bpp)),
+            _ => {
+                return Err(ValidationError::InvalidCompressionForBpp {
+                    compression: *self,
+                    bpp,
+                });
+            }
+        }
+
+        Ok(())
     }
 }
