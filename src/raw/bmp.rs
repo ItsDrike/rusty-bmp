@@ -901,9 +901,16 @@ impl Bmp {
             }
         }
 
-        // Leave the writer at the end of the BMP file
+        let file_end = match self {
+            Self::Core(data) => data.file_header.file_size as u64,
+            Self::Info(data) => data.file_header.file_size as u64,
+            Self::V4(data) => data.file_header.file_size as u64,
+            Self::V5(data) => data.file_header.file_size as u64,
+        };
+
+        // Leave the writer at the declared end of this BMP payload.
         writer
-            .seek(SeekFrom::End(0))
+            .seek(SeekFrom::Start(file_end))
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
         Ok(())
