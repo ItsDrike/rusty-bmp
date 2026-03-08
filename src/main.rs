@@ -142,8 +142,9 @@ impl eframe::App for BmpViewerApp {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("BMP Path:");
+                let path_edit_width = (ui.available_width() - 140.0).max(80.0);
                 let path_edit = ui.add_sized(
-                    [ui.available_width() - 140.0, 24.0],
+                    [path_edit_width, 24.0],
                     egui::TextEdit::singleline(&mut self.path_input)
                         .hint_text("C:\\images\\picture.bmp or /home/user/picture.bmp"),
                 );
