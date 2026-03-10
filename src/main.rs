@@ -166,8 +166,8 @@ impl BmpViewerApp {
     pub(crate) fn undo_transform(&mut self, ctx: &egui::Context) {
         if let Some(op) = self.pipeline.pop() {
             self.redo_stack.push(op);
-            if let Some(original) = &self.original_image {
-                let result = self.pipeline.apply(original);
+            if let Some(current) = self.transformed_image.as_ref() {
+                let result = apply_transform(current, op.inverse());
                 self.set_display_image(ctx, result, "transformed".to_owned());
             }
         }

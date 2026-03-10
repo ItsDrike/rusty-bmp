@@ -21,6 +21,18 @@ impl fmt::Display for ImageTransform {
     }
 }
 
+impl ImageTransform {
+    /// Returns the transform that reverses the effect of `self`.
+    pub fn inverse(self) -> Self {
+        match self {
+            Self::RotateLeft90 => Self::RotateRight90,
+            Self::RotateRight90 => Self::RotateLeft90,
+            Self::MirrorHorizontal => Self::MirrorHorizontal,
+            Self::InvertColors => Self::InvertColors,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TransformPipeline {
     ops: Vec<ImageTransform>,
@@ -159,7 +171,7 @@ pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
 
 #[cfg(test)]
 mod tests {
-    use super::invert_colors;
+    use super::{apply_transform, invert_colors, ImageTransform};
     use crate::runtime::decode::DecodedImage;
 
     #[test]
@@ -183,5 +195,45 @@ mod tests {
                 155, 105, 55, 250
             ]
         );
+    }
+
+    #[test]
+    fn inverse_of_rotate_left_is_rotate_right() {
+        assert_eq!(ImageTransform::RotateLeft90.inverse(), ImageTransform::RotateRight90);
+        assert_eq!(ImageTransform::RotateRight90.inverse(), ImageTransform::RotateLeft90);
+    }
+
+    #[test]
+    fn self_inverse_transforms() {
+        assert_eq!(
+            ImageTransform::MirrorHorizontal.inverse(),
+            ImageTransform::MirrorHorizontal
+        );
+        assert_eq!(ImageTransform::InvertColors.inverse(), ImageTransform::InvertColors);
+    }
+
+    #[test]
+    fn apply_then_inverse_is_identity() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
+                180, 255,
+            ],
+        };
+
+        for op in [
+            ImageTransform::RotateLeft90,
+            ImageTransform::RotateRight90,
+            ImageTransform::MirrorHorizontal,
+            ImageTransform::InvertColors,
+        ] {
+            let transformed = apply_transform(&image, op);
+            let restored = apply_transform(&transformed, op.inverse());
+            assert_eq!(restored.width, image.width, "width mismatch for {op}");
+            assert_eq!(restored.height, image.height, "height mismatch for {op}");
+            assert_eq!(restored.rgba, image.rgba, "pixel data mismatch for {op}");
+        }
     }
 }
