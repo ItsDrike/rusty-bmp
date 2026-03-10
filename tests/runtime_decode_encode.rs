@@ -29,6 +29,20 @@ fn pixel_rgba(img: &DecodedImage, x: usize, y: usize) -> [u8; 4] {
     [img.rgba[idx], img.rgba[idx + 1], img.rgba[idx + 2], img.rgba[idx + 3]]
 }
 
+/// Returns a copy of the image with all alpha channels forced to 255.
+/// BMP roundtrips drop alpha, so this creates the expected reference for comparison.
+fn with_opaque_alpha(image: &DecodedImage) -> DecodedImage {
+    let mut rgba = image.rgba.clone();
+    for px in rgba.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba,
+    }
+}
+
 #[test]
 fn decode_spot_checks_across_encodings() {
     support::require_suite_generated();
@@ -111,11 +125,8 @@ fn encode_decode_roundtrip_preserves_pixels() {
     assert_eq!(decoded.height, source.height);
 
     // Saved format is BI_RGB 32bpp (B,G,R,reserved), so alpha is always 255 after roundtrip.
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 // ---------------------------------------------------------------------------
@@ -177,11 +188,8 @@ fn roundtrip_rgb24_preserves_rgb_drops_alpha() {
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
     // Alpha is always 255 after roundtrip through 24-bit
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 #[test]
@@ -190,11 +198,8 @@ fn roundtrip_rgb32_preserves_rgb() {
     let decoded = roundtrip_format(&source, SaveFormat::Rgb32);
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 #[test]
@@ -203,11 +208,8 @@ fn roundtrip_bitfields32_preserves_rgb() {
     let decoded = roundtrip_format(&source, SaveFormat::BitFields32);
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,10 +224,7 @@ fn assert_lossy_roundtrip(format: SaveFormat, max_allowed_diff: u8) {
     assert_eq!(decoded.width, source.width, "{format:?} width");
     assert_eq!(decoded.height, source.height, "{format:?} height");
     // Force alpha to 255 in source for comparison
-    let mut reference = source.clone();
-    for px in reference.rgba.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
+    let reference = with_opaque_alpha(&source);
     let diff = max_channel_diff(&decoded, &reference);
     assert!(
         diff <= max_allowed_diff,
@@ -379,11 +378,8 @@ fn roundtrip_core_rgb24_preserves_pixels() {
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
     // RGB24 is lossless for RGB channels
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 #[test]
@@ -393,10 +389,7 @@ fn roundtrip_core_rgb8_within_tolerance() {
     assert!(matches!(bmp, Bmp::Core(_)), "expected Core variant");
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
-    let mut reference = source.clone();
-    for px in reference.rgba.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
+    let reference = with_opaque_alpha(&source);
     let diff = max_channel_diff(&decoded, &reference);
     assert!(diff <= 2, "Core Rgb8 max channel diff {diff} exceeds 2");
 }
@@ -448,11 +441,8 @@ fn roundtrip_v4_rgb24_preserves_pixels() {
     assert!(matches!(bmp, Bmp::V4(_)), "expected V4 variant");
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 #[test]
@@ -460,11 +450,8 @@ fn roundtrip_v4_bitfields32_preserves_pixels() {
     let source = small_test_image();
     let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::BitFields32, SaveHeaderVersion::V4, None);
     assert!(matches!(bmp, Bmp::V4(_)), "expected V4 variant");
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 #[test]
@@ -474,10 +461,7 @@ fn roundtrip_v4_rle8_within_tolerance() {
     assert!(matches!(bmp, Bmp::V4(_)), "expected V4 variant");
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
-    let mut reference = source.clone();
-    for px in reference.rgba.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
+    let reference = with_opaque_alpha(&source);
     let diff = max_channel_diff(&decoded, &reference);
     assert!(diff <= 2, "V4 Rle8 max channel diff {diff} exceeds 2");
 }
@@ -508,11 +492,8 @@ fn roundtrip_v5_rgb24_preserves_pixels() {
     assert!(matches!(bmp, Bmp::V5(_)), "expected V5 variant");
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
-    let mut expected = source.rgba.clone();
-    for px in expected.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    assert_eq!(decoded.rgba, expected);
+    let expected = with_opaque_alpha(&source);
+    assert_eq!(decoded.rgba, expected.rgba);
 }
 
 #[test]
@@ -522,10 +503,7 @@ fn roundtrip_v5_bitfields16_rgb565_within_tolerance() {
     assert!(matches!(bmp, Bmp::V5(_)), "expected V5 variant");
     assert_eq!(decoded.width, source.width);
     assert_eq!(decoded.height, source.height);
-    let mut reference = source.clone();
-    for px in reference.rgba.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
+    let reference = with_opaque_alpha(&source);
     let diff = max_channel_diff(&decoded, &reference);
     assert!(diff <= 9, "V5 BitFields16Rgb565 max channel diff {diff} exceeds 9");
 }
