@@ -25,6 +25,8 @@ struct BmpViewerApp {
     save_format: SaveFormat,
     save_header_version: SaveHeaderVersion,
     source_metadata: Option<SourceMetadata>,
+    /// Path of the currently loaded file (for "Save" without a dialog).
+    loaded_path: Option<PathBuf>,
 
     /// Current zoom level (1.0 = fit-to-window, >1.0 = zoomed in).
     zoom: f32,
@@ -46,6 +48,7 @@ impl Default for BmpViewerApp {
             save_format: SaveFormat::default(),
             save_header_version: SaveHeaderVersion::default(),
             source_metadata: None,
+            loaded_path: None,
             zoom: 1.0,
             pan_offset: egui::Vec2::ZERO,
         }
@@ -122,6 +125,7 @@ impl BmpViewerApp {
         self.decoded_stats = info.decoded_stats;
         self.palette_colors = gui::palette::extract_palette_colors(&bmp);
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
+        self.loaded_path = Some(path.clone());
         self.status = format!("Loaded {}", path.display());
     }
 
@@ -144,23 +148,14 @@ impl BmpViewerApp {
         }
     }
 
-    fn save_current(&mut self) {
+    fn save_to_path(&mut self, path: &std::path::Path) {
         let Some(image) = self.transformed_image.as_ref() else {
             self.status = "Nothing to save".to_owned();
             return;
         };
 
-        let Some(path) = FileDialog::new()
-            .add_filter("Bitmap image", &["bmp"])
-            .set_title("Save transformed BMP")
-            .set_file_name("transformed.bmp")
-            .save_file()
-        else {
-            return;
-        };
-
         match save_bmp_ext(
-            &path,
+            path,
             image,
             self.save_format,
             self.save_header_version,
@@ -178,6 +173,33 @@ impl BmpViewerApp {
                 self.status = format!("Save failed: {err}");
             }
         }
+    }
+
+    fn save_current(&mut self) {
+        if self.transformed_image.is_none() {
+            self.status = "Nothing to save".to_owned();
+            return;
+        }
+
+        let Some(path) = FileDialog::new()
+            .add_filter("Bitmap image", &["bmp"])
+            .set_title("Save transformed BMP")
+            .set_file_name("transformed.bmp")
+            .save_file()
+        else {
+            return;
+        };
+
+        self.save_to_path(&path);
+    }
+
+    fn save_overwrite(&mut self) {
+        let Some(path) = self.loaded_path.clone() else {
+            self.status = "No file to overwrite".to_owned();
+            return;
+        };
+
+        self.save_to_path(&path);
     }
 }
 
@@ -234,7 +256,9 @@ impl eframe::App for BmpViewerApp {
                             ui.selectable_value(&mut self.save_format, fmt, fmt.to_string());
                         }
                     });
-                let save_clicked = ui.button("Save As...").clicked();
+                let save_as_clicked = ui.button("Save As...").clicked();
+                let can_save = self.loaded_path.is_some() && self.transformed_image.is_some();
+                let save_clicked = ui.add_enabled(can_save, egui::Button::new("Save")).clicked();
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
                 }
@@ -247,8 +271,11 @@ impl eframe::App for BmpViewerApp {
                 if invert {
                     self.apply_and_refresh(ctx, ImageTransform::InvertColors);
                 }
-                if save_clicked {
+                if save_as_clicked {
                     self.save_current();
+                }
+                if save_clicked {
+                    self.save_overwrite();
                 }
             });
             if !self.status.is_empty() {
