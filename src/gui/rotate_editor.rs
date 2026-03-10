@@ -39,6 +39,11 @@ impl BmpViewerApp {
                                 RotationInterpolation::Bilinear,
                                 RotationInterpolation::Bilinear.to_string(),
                             );
+                            ui.selectable_value(
+                                &mut self.rotate_any_interpolation,
+                                RotationInterpolation::Bicubic,
+                                RotationInterpolation::Bicubic.to_string(),
+                            );
                         });
                 });
 

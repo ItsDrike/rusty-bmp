@@ -141,6 +141,7 @@ impl fmt::Display for ConvolutionFilter {
 pub enum RotationInterpolation {
     Nearest,
     Bilinear,
+    Bicubic,
 }
 
 impl fmt::Display for RotationInterpolation {
@@ -148,6 +149,7 @@ impl fmt::Display for RotationInterpolation {
         match self {
             Self::Nearest => write!(f, "Nearest"),
             Self::Bilinear => write!(f, "Bilinear"),
+            Self::Bicubic => write!(f, "Bicubic"),
         }
     }
 }
@@ -258,6 +260,7 @@ impl ImageTransform {
             Self::RotateAny { interpolation, .. } => match interpolation {
                 RotationInterpolation::Nearest => 3,
                 RotationInterpolation::Bilinear => 5,
+                RotationInterpolation::Bicubic => 7,
             },
             // Convolutions: N² multiply-accumulates per pixel per kernel element.
             Self::Convolution(_) | Self::CustomKernel(_) => 5,
@@ -529,6 +532,52 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
             }
             out
         }
+        RotationInterpolation::Bicubic => {
+            let x0 = x.floor() as i32;
+            let y0 = y.floor() as i32;
+            let tx = x - x0 as f32;
+            let ty = y - y0 as f32;
+
+            let wx = [
+                cubic_weight(1.0 + tx),
+                cubic_weight(tx),
+                cubic_weight(1.0 - tx),
+                cubic_weight(2.0 - tx),
+            ];
+            let wy = [
+                cubic_weight(1.0 + ty),
+                cubic_weight(ty),
+                cubic_weight(1.0 - ty),
+                cubic_weight(2.0 - ty),
+            ];
+
+            let mut out = [0_u8; 4];
+            for c in 0..4 {
+                let mut sum = 0.0f32;
+                for (j, &w_y) in wy.iter().enumerate() {
+                    let sy = (y0 + j as i32 - 1).clamp(0, h - 1);
+                    for (i, &w_x) in wx.iter().enumerate() {
+                        let sx = (x0 + i as i32 - 1).clamp(0, w - 1);
+                        sum += pixel_at(image, sx, sy)[c] as f32 * w_x * w_y;
+                    }
+                }
+                out[c] = sum.round().clamp(0.0, 255.0) as u8;
+            }
+            out
+        }
+    }
+}
+
+fn cubic_weight(t: f32) -> f32 {
+    // Catmull-Rom spline (a = -0.5), common bicubic kernel for image resampling.
+    let a = -0.5f32;
+    let x = t.abs();
+    if x <= 1.0 {
+        (a + 2.0) * x * x * x - (a + 3.0) * x * x + 1.0
+    } else if x < 2.0 {
+        a * x * x * x - 5.0 * a * x * x + 8.0 * a * x - 4.0 * a
+    } else {
+        0.0
     }
 }
 
@@ -874,8 +923,8 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHECKPOINT_COST_THRESHOLD, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation,
-        TransformPipeline, apply_convolution, apply_transform, invert_colors, rotate_any, sepia,
+        apply_convolution, apply_transform, invert_colors, rotate_any, sepia, ConvolutionFilter, ImageTransform,
+        Kernel, RotationInterpolation, TransformPipeline, CHECKPOINT_COST_THRESHOLD,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -1319,10 +1368,10 @@ mod tests {
     fn rotate_any_display_format() {
         let op = ImageTransform::RotateAny {
             angle_tenths: -125,
-            interpolation: RotationInterpolation::Nearest,
+            interpolation: RotationInterpolation::Bicubic,
             expand: false,
         };
-        assert_eq!(op.to_string(), "Rotate -12.5° (Nearest, Crop)");
+        assert_eq!(op.to_string(), "Rotate -12.5° (Bicubic, Crop)");
     }
 
     #[test]
@@ -1340,6 +1389,11 @@ mod tests {
         assert_eq!(out.width, image.width);
         assert_eq!(out.height, image.height);
         assert_eq!(out.rgba, image.rgba);
+
+        let out_bicubic = rotate_any(&image, 0.0, RotationInterpolation::Bicubic, true);
+        assert_eq!(out_bicubic.width, image.width);
+        assert_eq!(out_bicubic.height, image.height);
+        assert_eq!(out_bicubic.rgba, image.rgba);
     }
 
     #[test]
@@ -1586,7 +1640,14 @@ mod tests {
             expand: true,
         }
         .replay_cost();
+        let bicubic = ImageTransform::RotateAny {
+            angle_tenths: 123,
+            interpolation: RotationInterpolation::Bicubic,
+            expand: true,
+        }
+        .replay_cost();
         assert!(bilinear > nearest, "bilinear rotation should be costlier than nearest");
+        assert!(bicubic > bilinear, "bicubic rotation should be costlier than bilinear");
     }
 
     #[test]
