@@ -43,6 +43,57 @@ impl Kernel {
             bias,
         }
     }
+
+    /// Tries to decompose this kernel into two 1D vectors (column, row)
+    /// such that `column[y] * row[x] == weights[y * size + x]` for all y, x.
+    ///
+    /// Returns `Some((col_vec, row_vec))` if the kernel is separable (rank-1),
+    /// or `None` if it is not. The combined divisor for the two passes is
+    /// `sqrt(divisor)` per pass when divisor is a perfect square, but callers
+    /// should use the original `divisor` and `bias` for final normalization.
+    ///
+    /// A kernel is separable if every row is a scalar multiple of a single
+    /// reference row. The column vector holds those scalar factors.
+    pub fn separable(&self) -> Option<(Vec<i32>, Vec<i32>)> {
+        let n = self.size;
+        if n == 1 {
+            // 1x1 kernel is trivially separable: [w] = [1] × [w] (or [w] × [1]).
+            return Some((vec![1], self.weights.clone()));
+        }
+
+        // Find the first row with at least one non-zero weight to use as
+        // the reference row vector.
+        let ref_row_idx = (0..n).find(|&y| (0..n).any(|x| self.weights[y * n + x] != 0))?; // All-zero kernel is not usefully separable.
+
+        let row_vec: Vec<i32> = (0..n).map(|x| self.weights[ref_row_idx * n + x]).collect();
+
+        // Find the first non-zero element in the reference row. We need this
+        // to extract the column scale factors.
+        let ref_col_idx = (0..n).find(|&x| row_vec[x] != 0)?;
+        let ref_val = row_vec[ref_col_idx];
+
+        // Build the column vector: col[y] = weights[y][ref_col_idx] / ref_val.
+        // Each must divide evenly for integer separability.
+        let mut col_vec = Vec::with_capacity(n);
+        for y in 0..n {
+            let val = self.weights[y * n + ref_col_idx];
+            if val % ref_val != 0 {
+                return None; // Not separable with integers.
+            }
+            col_vec.push(val / ref_val);
+        }
+
+        // Verify: col[y] * row[x] must equal weights[y * n + x] for all y, x.
+        for y in 0..n {
+            for x in 0..n {
+                if col_vec[y] * row_vec[x] != self.weights[y * n + x] {
+                    return None;
+                }
+            }
+        }
+
+        Some((col_vec, row_vec))
+    }
 }
 
 /// Named convolution filter presets.
@@ -374,16 +425,102 @@ pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
 
 /// Apply an arbitrary NxN convolution kernel to an image.
 ///
-/// For each pixel, the kernel is centered on it and the weighted sum of
-/// neighboring pixel values is computed per channel (R, G, B). The result
-/// is divided by `kernel.divisor` and `kernel.bias` is added. Out-of-bounds
-/// neighbor coordinates are clamped to the nearest edge pixel.
+/// If the kernel is separable (rank-1), a faster two-pass approach is used
+/// (horizontal then vertical), reducing the per-pixel work from N² to 2N
+/// multiply-accumulates. Otherwise, the standard 2D convolution is applied.
 ///
-/// Alpha is passed through unchanged.
-///
-/// Rows are processed in parallel using rayon for better performance on
-/// larger images.
+/// Out-of-bounds neighbor coordinates are clamped to the nearest edge pixel.
+/// Alpha is passed through unchanged. Both paths are parallelized with rayon.
 pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
+    if let Some((col_vec, row_vec)) = kernel.separable() {
+        apply_convolution_separable(image, kernel, &col_vec, &row_vec)
+    } else {
+        apply_convolution_2d(image, kernel)
+    }
+}
+
+/// Two-pass separable convolution: horizontal pass with `row_vec`, then
+/// vertical pass with `col_vec`. The divisor and bias are applied only in
+/// the second pass to avoid double-rounding.
+///
+/// The intermediate buffer stores `i32` per channel to preserve precision
+/// between passes.
+fn apply_convolution_separable(
+    image: &DecodedImage,
+    kernel: &Kernel,
+    col_vec: &[i32],
+    row_vec: &[i32],
+) -> DecodedImage {
+    let w = image.width as usize;
+    let h = image.height as usize;
+    let half = (kernel.size / 2) as isize;
+
+    // --- Pass 1: horizontal (convolve each row with row_vec) ---
+    // Store intermediate results as i32 to avoid clamping between passes.
+    // Layout: 3 channels (R, G, B) per pixel, row-major.
+    let row_channels = w * 3;
+    let mut tmp = vec![0i32; h * row_channels];
+
+    tmp.par_chunks_mut(row_channels).enumerate().for_each(|(y, row)| {
+        for x in 0..w {
+            let mut sum_r: i32 = 0;
+            let mut sum_g: i32 = 0;
+            let mut sum_b: i32 = 0;
+
+            for k in 0..kernel.size {
+                let sx = (x as isize + k as isize - half).clamp(0, w as isize - 1) as usize;
+                let src = (y * w + sx) * 4;
+                let weight = row_vec[k];
+
+                sum_r += image.rgba[src] as i32 * weight;
+                sum_g += image.rgba[src + 1] as i32 * weight;
+                sum_b += image.rgba[src + 2] as i32 * weight;
+            }
+
+            let dst = x * 3;
+            row[dst] = sum_r;
+            row[dst + 1] = sum_g;
+            row[dst + 2] = sum_b;
+        }
+    });
+
+    // --- Pass 2: vertical (convolve each column with col_vec) ---
+    let row_bytes = w * 4;
+    let mut out = vec![0u8; h * row_bytes];
+
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
+        for x in 0..w {
+            let mut sum_r: i32 = 0;
+            let mut sum_g: i32 = 0;
+            let mut sum_b: i32 = 0;
+
+            for k in 0..kernel.size {
+                let sy = (y as isize + k as isize - half).clamp(0, h as isize - 1) as usize;
+                let src = sy * row_channels + x * 3;
+                let weight = col_vec[k];
+
+                sum_r += tmp[src] * weight;
+                sum_g += tmp[src + 1] * weight;
+                sum_b += tmp[src + 2] * weight;
+            }
+
+            let dst = x * 4;
+            row[dst] = (sum_r / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            row[dst + 1] = (sum_g / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            row[dst + 2] = (sum_b / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            row[dst + 3] = image.rgba[(y * w + x) * 4 + 3]; // alpha unchanged
+        }
+    });
+
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba: out,
+    }
+}
+
+/// Standard 2D convolution for non-separable kernels.
+fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
     let w = image.width as usize;
     let h = image.height as usize;
     let half = (kernel.size / 2) as isize;
@@ -784,6 +921,97 @@ mod tests {
         assert_eq!(
             ImageTransform::Convolution(ConvolutionFilter::Emboss).to_string(),
             "Emboss"
+        );
+    }
+
+    // --- Separable kernel tests ---
+
+    #[test]
+    fn blur_kernel_is_separable() {
+        let kernel = ConvolutionFilter::Blur.kernel();
+        let (col, row) = kernel.separable().expect("blur kernel should be separable");
+        // [1,2,1;2,4,2;1,2,1] = [1,2,1]^T × [1,2,1]
+        assert_eq!(col, vec![1, 2, 1]);
+        assert_eq!(row, vec![1, 2, 1]);
+    }
+
+    #[test]
+    fn sharpen_kernel_is_not_separable() {
+        let kernel = ConvolutionFilter::Sharpen.kernel();
+        assert!(kernel.separable().is_none(), "sharpen should not be separable");
+    }
+
+    #[test]
+    fn edge_detect_kernel_is_not_separable() {
+        let kernel = ConvolutionFilter::EdgeDetect.kernel();
+        assert!(kernel.separable().is_none(), "edge detect should not be separable");
+    }
+
+    #[test]
+    fn emboss_kernel_is_not_separable() {
+        let kernel = ConvolutionFilter::Emboss.kernel();
+        assert!(kernel.separable().is_none(), "emboss should not be separable");
+    }
+
+    #[test]
+    fn identity_1x1_kernel_is_separable() {
+        let kernel = Kernel::new(vec![1], 1, 1, 0);
+        let (col, row) = kernel.separable().expect("1x1 kernel should be separable");
+        assert_eq!(col, vec![1]);
+        assert_eq!(row, vec![1]);
+    }
+
+    #[test]
+    fn gaussian_5x5_is_separable() {
+        // 5x5 Gaussian: [1,4,6,4,1]^T × [1,4,6,4,1], divisor=256
+        let row_vec = vec![1, 4, 6, 4, 1];
+        let mut weights = Vec::with_capacity(25);
+        for &r in &row_vec {
+            for &c in &row_vec {
+                weights.push(r * c);
+            }
+        }
+        let kernel = Kernel::new(weights, 5, 256, 0);
+        let (col, row) = kernel.separable().expect("5x5 Gaussian should be separable");
+        assert_eq!(col, vec![1, 4, 6, 4, 1]);
+        assert_eq!(row, vec![1, 4, 6, 4, 1]);
+    }
+
+    #[test]
+    fn non_separable_arbitrary_kernel() {
+        // A 3x3 kernel that is clearly not rank-1.
+        let kernel = Kernel::new(vec![1, 0, 1, 0, 1, 0, 1, 0, 1], 3, 1, 0);
+        assert!(kernel.separable().is_none());
+    }
+
+    #[test]
+    fn separable_and_2d_paths_produce_identical_results() {
+        use super::apply_convolution_2d;
+
+        // Use the blur kernel (separable) on a non-trivial image.
+        // The dispatcher should use the separable path; we also force 2D and compare.
+        let image = DecodedImage {
+            width: 5,
+            height: 5,
+            // Gradient pattern so the result is non-trivial.
+            rgba: (0..25)
+                .flat_map(|i| {
+                    let v = (i * 10) as u8;
+                    [v, v.wrapping_add(30), v.wrapping_add(60), 255]
+                })
+                .collect(),
+        };
+        let kernel = ConvolutionFilter::Blur.kernel();
+        assert!(kernel.separable().is_some(), "precondition: blur is separable");
+
+        let result_separable = apply_convolution(&image, &kernel); // dispatches to separable
+        let result_2d = apply_convolution_2d(&image, &kernel); // force 2D path
+
+        assert_eq!(result_separable.width, result_2d.width);
+        assert_eq!(result_separable.height, result_2d.height);
+        assert_eq!(
+            result_separable.rgba, result_2d.rgba,
+            "separable and 2D convolution paths must produce identical output"
         );
     }
 }
