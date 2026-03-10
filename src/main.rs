@@ -157,7 +157,7 @@ impl BmpViewerApp {
     pub(crate) fn apply_and_refresh(&mut self, ctx: &egui::Context, op: ImageTransform) {
         if let Some(current) = self.transformed_image.as_ref() {
             let next = apply_transform(current, &op);
-            self.pipeline.push(op);
+            self.pipeline.push(op, Some(current));
             self.redo_stack.clear();
             self.set_display_image(ctx, next, "transformed".to_owned());
         }
@@ -187,7 +187,7 @@ impl BmpViewerApp {
         if let Some(op) = self.redo_stack.pop() {
             if let Some(current) = self.transformed_image.as_ref() {
                 let next = apply_transform(current, &op);
-                self.pipeline.push(op);
+                self.pipeline.push(op, Some(current));
                 self.set_display_image(ctx, next, "transformed".to_owned());
             }
         }

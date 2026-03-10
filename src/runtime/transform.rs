@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 
 use rayon::prelude::*;
@@ -200,20 +201,85 @@ impl ImageTransform {
             Self::Convolution(_) => None,
         }
     }
+
+    /// Estimated relative cost of replaying this transform, used to decide
+    /// when to create pipeline checkpoints.
+    ///
+    /// Invertible transforms return 0 because they never trigger a full
+    /// pipeline replay (undo applies the inverse directly). Cheap per-pixel
+    /// transforms return 1. Convolutions are significantly more expensive
+    /// and return a higher value.
+    pub fn replay_cost(&self) -> u32 {
+        match self {
+            // Invertible — never replayed on undo, so checkpoint cost is 0.
+            Self::RotateLeft90
+            | Self::RotateRight90
+            | Self::MirrorHorizontal
+            | Self::MirrorVertical
+            | Self::InvertColors => 0,
+            // Cheap per-pixel transforms.
+            Self::Grayscale | Self::Sepia | Self::Brightness(_) | Self::Contrast(_) => 1,
+            // Convolutions: N² multiply-accumulates per pixel per kernel element.
+            Self::Convolution(_) => 5,
+        }
+    }
 }
+
+/// Cost threshold that triggers creating a new checkpoint.
+/// Accumulated [`ImageTransform::replay_cost()`] since the last checkpoint
+/// must exceed this value before a new snapshot is stored.
+const CHECKPOINT_COST_THRESHOLD: u32 = 10;
+
+/// Maximum number of checkpoints stored simultaneously. When exceeded, the
+/// oldest checkpoint is evicted to bound memory usage.
+const MAX_CHECKPOINTS: usize = 5;
 
 #[derive(Debug, Default, Clone)]
 pub struct TransformPipeline {
     ops: Vec<ImageTransform>,
+    /// Cached intermediate images keyed by pipeline index. A checkpoint at
+    /// index `i` stores the image state *after* applying `ops[i]`.
+    checkpoints: BTreeMap<usize, DecodedImage>,
+    /// Accumulated replay cost since the last checkpoint (or pipeline start).
+    cost_since_checkpoint: u32,
 }
 
 impl TransformPipeline {
-    pub fn push(&mut self, op: ImageTransform) {
+    /// Appends a transform and optionally creates a checkpoint if the
+    /// accumulated cost since the last checkpoint exceeds the threshold.
+    ///
+    /// `current_image` is the image state *before* this transform is applied.
+    /// If a checkpoint is warranted, `current_image` is cloned into the cache
+    /// (representing the state after the *previous* op, i.e. one index before
+    /// the new op).
+    pub fn push(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
+        let cost = op.replay_cost();
+        self.cost_since_checkpoint += cost;
+
+        // Only create checkpoints for non-invertible ops (invertible ops
+        // never trigger replay, so checkpoints don't help them).
+        if cost > 0 && self.cost_since_checkpoint >= CHECKPOINT_COST_THRESHOLD && !self.ops.is_empty() {
+            if let Some(img) = current_image {
+                // Store the state *before* this new op (= after the last op).
+                let checkpoint_idx = self.ops.len() - 1;
+                self.checkpoints.insert(checkpoint_idx, img.clone());
+
+                // Evict oldest if we exceed the cap.
+                while self.checkpoints.len() > MAX_CHECKPOINTS {
+                    let oldest = *self.checkpoints.keys().next().unwrap();
+                    self.checkpoints.remove(&oldest);
+                }
+            }
+            self.cost_since_checkpoint = 0;
+        }
+
         self.ops.push(op);
     }
 
     pub fn clear(&mut self) {
         self.ops.clear();
+        self.checkpoints.clear();
+        self.cost_since_checkpoint = 0;
     }
 
     pub fn ops(&self) -> &[ImageTransform] {
@@ -228,20 +294,55 @@ impl TransformPipeline {
         self.ops.len()
     }
 
+    /// Removes an op at `index` and invalidates all checkpoints at or after
+    /// that index (they are based on a pipeline that no longer exists).
     pub fn remove(&mut self, index: usize) {
         self.ops.remove(index);
+        // Remove checkpoints >= index. After removal, ops shift down, so
+        // any checkpoint at index or later is invalid.
+        self.checkpoints.retain(|&k, _| k < index);
+        self.recompute_cost_since_checkpoint();
     }
 
+    /// Pops the last op and removes its checkpoint if one exists at that index.
     pub fn pop(&mut self) -> Option<ImageTransform> {
-        self.ops.pop()
+        let op = self.ops.pop()?;
+        let len = self.ops.len();
+        // Remove the checkpoint at the (now gone) index.
+        self.checkpoints.remove(&len);
+        self.recompute_cost_since_checkpoint();
+        Some(op)
     }
 
-    pub fn apply(&self, image: &DecodedImage) -> DecodedImage {
-        let mut out = image.clone();
-        for op in &self.ops {
+    /// Replays the full pipeline starting from `original`, using the nearest
+    /// checkpoint to skip already-computed work.
+    pub fn apply(&self, original: &DecodedImage) -> DecodedImage {
+        self.apply_range(original, self.ops.len())
+    }
+
+    /// Replays ops `[0..count)` starting from `original`, using the nearest
+    /// checkpoint at or before the target range to skip work.
+    fn apply_range(&self, original: &DecodedImage, count: usize) -> DecodedImage {
+        // Find the best checkpoint: largest index that is < count.
+        let (start_idx, mut out) = self
+            .checkpoints
+            .range(..count)
+            .next_back()
+            .map(|(&idx, img)| (idx + 1, img.clone()))
+            .unwrap_or_else(|| (0, original.clone()));
+
+        for op in &self.ops[start_idx..count] {
             out = apply_transform(&out, op);
         }
         out
+    }
+
+    /// Recalculates `cost_since_checkpoint` based on the current ops and
+    /// checkpoint positions.
+    fn recompute_cost_since_checkpoint(&mut self) {
+        let last_cp = self.checkpoints.keys().next_back().copied();
+        let start = last_cp.map_or(0, |i| i + 1);
+        self.cost_since_checkpoint = self.ops[start..].iter().map(|op| op.replay_cost()).sum();
     }
 }
 
@@ -590,7 +691,10 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_convolution, apply_transform, invert_colors, sepia, ConvolutionFilter, ImageTransform, Kernel};
+    use super::{
+        apply_convolution, apply_transform, invert_colors, sepia, ConvolutionFilter, ImageTransform, Kernel,
+        TransformPipeline, CHECKPOINT_COST_THRESHOLD,
+    };
     use crate::runtime::decode::DecodedImage;
 
     #[test]
@@ -1104,6 +1208,213 @@ mod tests {
         assert_eq!(
             result_separable.rgba, result_2d.rgba,
             "separable and 2D convolution paths must produce identical output"
+        );
+    }
+
+    // --- Checkpoint / cost-based caching tests ---
+
+    fn test_image() -> DecodedImage {
+        DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        }
+    }
+
+    #[test]
+    fn replay_cost_invertible_is_zero() {
+        assert_eq!(ImageTransform::RotateLeft90.replay_cost(), 0);
+        assert_eq!(ImageTransform::RotateRight90.replay_cost(), 0);
+        assert_eq!(ImageTransform::MirrorHorizontal.replay_cost(), 0);
+        assert_eq!(ImageTransform::MirrorVertical.replay_cost(), 0);
+        assert_eq!(ImageTransform::InvertColors.replay_cost(), 0);
+    }
+
+    #[test]
+    fn replay_cost_lossy_pixel_ops() {
+        assert_eq!(ImageTransform::Grayscale.replay_cost(), 1);
+        assert_eq!(ImageTransform::Sepia.replay_cost(), 1);
+        assert_eq!(ImageTransform::Brightness(10).replay_cost(), 1);
+        assert_eq!(ImageTransform::Contrast(-5).replay_cost(), 1);
+    }
+
+    #[test]
+    fn replay_cost_convolution_is_higher() {
+        let cost = ImageTransform::Convolution(ConvolutionFilter::Blur).replay_cost();
+        assert!(cost > 1, "convolution should have higher cost than simple pixel ops");
+    }
+
+    #[test]
+    fn no_checkpoint_below_threshold() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        // Push cheap ops that won't reach the threshold.
+        for _ in 0..5 {
+            let cur = pipeline.apply(&img);
+            pipeline.push(ImageTransform::Brightness(1), Some(&cur));
+        }
+        // Cost = 5, threshold = 10 — no checkpoint yet.
+        assert!(pipeline.checkpoints.is_empty());
+    }
+
+    #[test]
+    fn checkpoint_created_at_threshold() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        let mut cur = img.clone();
+        // Accumulate cost to reach the threshold. Each brightness op costs 1,
+        // so we need CHECKPOINT_COST_THRESHOLD + 1 ops (the first op has no
+        // predecessor to checkpoint from, then we need threshold cost).
+        for _ in 0..=CHECKPOINT_COST_THRESHOLD {
+            pipeline.push(ImageTransform::Brightness(1), Some(&cur));
+            cur = apply_transform(&cur, &ImageTransform::Brightness(1));
+        }
+        assert!(
+            !pipeline.checkpoints.is_empty(),
+            "checkpoint should be created after reaching cost threshold"
+        );
+    }
+
+    #[test]
+    fn checkpoint_created_faster_with_convolutions() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        let mut cur = img.clone();
+        // 2 convolutions cost 10, plus one more op should trigger checkpoint.
+        let conv = ImageTransform::Convolution(ConvolutionFilter::Blur);
+        for _ in 0..3 {
+            pipeline.push(conv.clone(), Some(&cur));
+            cur = apply_transform(&cur, &conv);
+        }
+        assert!(
+            !pipeline.checkpoints.is_empty(),
+            "convolutions should trigger checkpoint faster than cheap ops"
+        );
+    }
+
+    #[test]
+    fn invertible_ops_do_not_trigger_checkpoint() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        // Push 50 invertible ops — none should create checkpoints since cost is 0.
+        for _ in 0..50 {
+            let cur = pipeline.apply(&img);
+            pipeline.push(ImageTransform::MirrorHorizontal, Some(&cur));
+        }
+        assert!(
+            pipeline.checkpoints.is_empty(),
+            "invertible ops should never trigger checkpoints"
+        );
+    }
+
+    #[test]
+    fn apply_uses_checkpoint_and_produces_correct_result() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        let mut cur = img.clone();
+
+        // Build up enough ops to create a checkpoint, then add more.
+        let n = (CHECKPOINT_COST_THRESHOLD + 5) as usize;
+        for _ in 0..n {
+            pipeline.push(ImageTransform::Brightness(1), Some(&cur));
+            cur = apply_transform(&cur, &ImageTransform::Brightness(1));
+        }
+        assert!(!pipeline.checkpoints.is_empty(), "precondition: checkpoint exists");
+
+        // apply() from original should produce the same result as sequential application.
+        let result = pipeline.apply(&img);
+        assert_eq!(
+            result.rgba, cur.rgba,
+            "checkpoint-accelerated apply must match sequential"
+        );
+    }
+
+    #[test]
+    fn pop_removes_checkpoint_at_popped_index() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        let mut cur = img.clone();
+
+        // Create enough ops to get a checkpoint.
+        for _ in 0..(CHECKPOINT_COST_THRESHOLD + 2) as usize {
+            pipeline.push(ImageTransform::Brightness(1), Some(&cur));
+            cur = apply_transform(&cur, &ImageTransform::Brightness(1));
+        }
+        let cp_count_before = pipeline.checkpoints.len();
+        assert!(cp_count_before > 0);
+
+        // Pop ops until we pop past the checkpoint.
+        while !pipeline.checkpoints.is_empty() {
+            pipeline.pop();
+        }
+        assert!(
+            pipeline.checkpoints.is_empty(),
+            "popping should eventually clear checkpoints"
+        );
+    }
+
+    #[test]
+    fn clear_removes_all_checkpoints() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        let mut cur = img.clone();
+
+        for _ in 0..(CHECKPOINT_COST_THRESHOLD + 2) as usize {
+            pipeline.push(ImageTransform::Brightness(1), Some(&cur));
+            cur = apply_transform(&cur, &ImageTransform::Brightness(1));
+        }
+        assert!(!pipeline.checkpoints.is_empty());
+
+        pipeline.clear();
+        assert!(pipeline.checkpoints.is_empty());
+        assert!(pipeline.ops.is_empty());
+    }
+
+    #[test]
+    fn max_checkpoints_enforced() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        let mut cur = img.clone();
+
+        // Push enough ops to create more than MAX_CHECKPOINTS checkpoints.
+        // Each batch of (threshold+1) ops creates one checkpoint.
+        let batches = super::MAX_CHECKPOINTS + 3;
+        for _ in 0..batches {
+            for _ in 0..=CHECKPOINT_COST_THRESHOLD {
+                pipeline.push(ImageTransform::Brightness(1), Some(&cur));
+                cur = apply_transform(&cur, &ImageTransform::Brightness(1));
+            }
+        }
+
+        assert!(
+            pipeline.checkpoints.len() <= super::MAX_CHECKPOINTS,
+            "should not exceed MAX_CHECKPOINTS ({}) but got {}",
+            super::MAX_CHECKPOINTS,
+            pipeline.checkpoints.len()
+        );
+
+        // Result should still be correct despite evictions.
+        let result = pipeline.apply(&img);
+        assert_eq!(result.rgba, cur.rgba);
+    }
+
+    #[test]
+    fn remove_invalidates_checkpoints_at_and_after_index() {
+        let img = test_image();
+        let mut pipeline = TransformPipeline::default();
+        let mut cur = img.clone();
+
+        for _ in 0..(CHECKPOINT_COST_THRESHOLD + 2) as usize {
+            pipeline.push(ImageTransform::Brightness(1), Some(&cur));
+            cur = apply_transform(&cur, &ImageTransform::Brightness(1));
+        }
+        assert!(!pipeline.checkpoints.is_empty());
+
+        // Remove op at index 0 — all checkpoints should be invalidated.
+        pipeline.remove(0);
+        assert!(
+            pipeline.checkpoints.is_empty(),
+            "removing index 0 should invalidate all checkpoints"
         );
     }
 }
