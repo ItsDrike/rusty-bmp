@@ -45,6 +45,9 @@ impl BmpViewerApp {
                 ui.separator();
                 let bright_down = ui.button("Brightness -").clicked();
                 let bright_up = ui.button("Brightness +").clicked();
+                ui.separator();
+                let contrast_down = ui.button("Contrast -").clicked();
+                let contrast_up = ui.button("Contrast +").clicked();
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
                 }
@@ -68,6 +71,12 @@ impl BmpViewerApp {
                 }
                 if bright_up {
                     self.apply_and_refresh(ctx, ImageTransform::Brightness(10));
+                }
+                if contrast_down {
+                    self.apply_and_refresh(ctx, ImageTransform::Contrast(-10));
+                }
+                if contrast_up {
+                    self.apply_and_refresh(ctx, ImageTransform::Contrast(10));
                 }
             });
 

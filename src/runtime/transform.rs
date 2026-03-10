@@ -12,6 +12,8 @@ pub enum ImageTransform {
     Grayscale,
     /// Adjust brightness by a signed delta (clamped to 0..=255 per channel).
     Brightness(i16),
+    /// Adjust contrast by a signed delta using the standard 259-based formula.
+    Contrast(i16),
 }
 
 impl fmt::Display for ImageTransform {
@@ -28,6 +30,13 @@ impl fmt::Display for ImageTransform {
                     write!(f, "Brightness +{delta}")
                 } else {
                     write!(f, "Brightness {delta}")
+                }
+            }
+            Self::Contrast(delta) => {
+                if *delta >= 0 {
+                    write!(f, "Contrast +{delta}")
+                } else {
+                    write!(f, "Contrast {delta}")
                 }
             }
         }
@@ -47,6 +56,7 @@ impl ImageTransform {
             // Lossy: clamping destroys information, requires pipeline replay.
             Self::Grayscale => None,
             Self::Brightness(_) => None,
+            Self::Contrast(_) => None,
         }
     }
 }
@@ -103,6 +113,7 @@ pub fn apply_transform(image: &DecodedImage, op: ImageTransform) -> DecodedImage
         ImageTransform::InvertColors => invert_colors(image),
         ImageTransform::Grayscale => grayscale(image),
         ImageTransform::Brightness(delta) => brightness(image, delta),
+        ImageTransform::Contrast(delta) => contrast(image, delta),
     }
 }
 
@@ -243,6 +254,29 @@ pub fn brightness(image: &DecodedImage, delta: i16) -> DecodedImage {
     }
 }
 
+pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
+    // Standard contrast formula:
+    //   factor = 259 * (delta + 255) / (255 * (259 - delta))
+    //   new = clamp(factor * (old - 128) + 128, 0, 255)
+    // The delta range is clamped to -255..=255 to avoid division by zero.
+    let delta_clamped = (delta as f32).clamp(-255.0, 255.0);
+    let factor = 259.0 * (delta_clamped + 255.0) / (255.0 * (259.0 - delta_clamped));
+
+    let mut out = image.rgba.clone();
+    for px in out.chunks_exact_mut(4) {
+        px[0] = (factor * (px[0] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
+        px[1] = (factor * (px[1] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
+        px[2] = (factor * (px[2] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
+        // Alpha unchanged.
+    }
+
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba: out,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{apply_transform, invert_colors, ImageTransform};
@@ -304,6 +338,8 @@ mod tests {
         assert_eq!(ImageTransform::Grayscale.inverse(), None);
         assert_eq!(ImageTransform::Brightness(10).inverse(), None);
         assert_eq!(ImageTransform::Brightness(-10).inverse(), None);
+        assert_eq!(ImageTransform::Contrast(10).inverse(), None);
+        assert_eq!(ImageTransform::Contrast(-10).inverse(), None);
     }
 
     #[test]
@@ -399,5 +435,60 @@ mod tests {
         assert_eq!(ImageTransform::Brightness(10).to_string(), "Brightness +10");
         assert_eq!(ImageTransform::Brightness(-10).to_string(), "Brightness -10");
         assert_eq!(ImageTransform::Brightness(0).to_string(), "Brightness +0");
+    }
+
+    #[test]
+    fn contrast_positive_increases_spread() {
+        // Positive contrast pushes values away from 128.
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            rgba: vec![
+                100, 128, 200, 255, // pixel 0: 100 < 128 → darker, 128 → same, 200 > 128 → brighter
+                0, 255, 64, 128, // pixel 1: extremes stay clamped
+            ],
+        };
+        let result = super::contrast(&image, 50);
+        // value < 128 should decrease, value > 128 should increase, 128 stays 128.
+        assert!(result.rgba[0] < 100, "dark channel should get darker");
+        assert_eq!(result.rgba[1], 128, "midpoint should stay at 128");
+        assert!(result.rgba[2] > 200, "bright channel should get brighter");
+        assert_eq!(result.rgba[3], 255, "alpha unchanged");
+        assert_eq!(result.rgba[4], 0, "already at 0, stays 0");
+        assert_eq!(result.rgba[5], 255, "already at 255, stays 255");
+        assert_eq!(result.rgba[7], 128, "alpha unchanged");
+    }
+
+    #[test]
+    fn contrast_negative_reduces_spread() {
+        // Negative contrast pulls values toward 128.
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![50, 200, 128, 255],
+        };
+        let result = super::contrast(&image, -50);
+        assert!(result.rgba[0] > 50, "dark channel should move toward 128");
+        assert!(result.rgba[1] < 200, "bright channel should move toward 128");
+        assert_eq!(result.rgba[2], 128, "midpoint stays at 128");
+        assert_eq!(result.rgba[3], 255, "alpha unchanged");
+    }
+
+    #[test]
+    fn contrast_zero_is_identity() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![42, 128, 200, 255],
+        };
+        let result = super::contrast(&image, 0);
+        assert_eq!(result.rgba, image.rgba);
+    }
+
+    #[test]
+    fn contrast_display_format() {
+        assert_eq!(ImageTransform::Contrast(10).to_string(), "Contrast +10");
+        assert_eq!(ImageTransform::Contrast(-10).to_string(), "Contrast -10");
+        assert_eq!(ImageTransform::Contrast(0).to_string(), "Contrast +0");
     }
 }
