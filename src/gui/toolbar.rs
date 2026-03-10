@@ -45,6 +45,7 @@ impl BmpViewerApp {
                 let mirror_v = ui.button("Mirror V").clicked();
                 let invert = ui.button("Invert Colors").clicked();
                 let gray = ui.button("Grayscale").clicked();
+                let sepia_btn = ui.button("Sepia").clicked();
                 ui.separator();
                 let bright_down = ui.button("Brightness -").clicked();
                 let bright_up = ui.button("Brightness +").clicked();
@@ -73,6 +74,9 @@ impl BmpViewerApp {
                 }
                 if gray {
                     self.apply_and_refresh(ctx, ImageTransform::Grayscale);
+                }
+                if sepia_btn {
+                    self.apply_and_refresh(ctx, ImageTransform::Sepia);
                 }
                 if bright_down {
                     self.apply_and_refresh(ctx, ImageTransform::Brightness(-10));

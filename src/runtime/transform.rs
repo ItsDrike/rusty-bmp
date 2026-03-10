@@ -144,6 +144,7 @@ pub enum ImageTransform {
     MirrorVertical,
     InvertColors,
     Grayscale,
+    Sepia,
     /// Adjust brightness by a signed delta (clamped to 0..=255 per channel).
     Brightness(i16),
     /// Adjust contrast by a signed delta using the standard 259-based formula.
@@ -161,6 +162,7 @@ impl fmt::Display for ImageTransform {
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
             Self::Grayscale => write!(f, "Grayscale"),
+            Self::Sepia => write!(f, "Sepia"),
             Self::Brightness(delta) => {
                 if *delta >= 0 {
                     write!(f, "Brightness +{delta}")
@@ -192,6 +194,7 @@ impl ImageTransform {
             Self::InvertColors => Some(Self::InvertColors),
             // Lossy: clamping destroys information, requires pipeline replay.
             Self::Grayscale => None,
+            Self::Sepia => None,
             Self::Brightness(_) => None,
             Self::Contrast(_) => None,
             Self::Convolution(_) => None,
@@ -250,6 +253,7 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
         ImageTransform::Grayscale => grayscale(image),
+        ImageTransform::Sepia => sepia(image),
         ImageTransform::Brightness(delta) => brightness(image, *delta),
         ImageTransform::Contrast(delta) => contrast(image, *delta),
         ImageTransform::Convolution(filter) => apply_convolution(image, &filter.kernel()),
@@ -374,6 +378,29 @@ pub fn grayscale(image: &DecodedImage) -> DecodedImage {
         px[0] = luma;
         px[1] = luma;
         px[2] = luma;
+        // Alpha unchanged.
+    });
+
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba: out,
+    }
+}
+
+pub fn sepia(image: &DecodedImage) -> DecodedImage {
+    let mut out = image.rgba.clone();
+    out.par_chunks_exact_mut(4).for_each(|px| {
+        let r = px[0] as f32;
+        let g = px[1] as f32;
+        let b = px[2] as f32;
+        // Standard sepia tone matrix (Microsoft-recommended coefficients).
+        let sr = (0.393 * r + 0.769 * g + 0.189 * b).round().min(255.0) as u8;
+        let sg = (0.349 * r + 0.686 * g + 0.168 * b).round().min(255.0) as u8;
+        let sb = (0.272 * r + 0.534 * g + 0.131 * b).round().min(255.0) as u8;
+        px[0] = sr;
+        px[1] = sg;
+        px[2] = sb;
         // Alpha unchanged.
     });
 
@@ -563,7 +590,7 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_convolution, apply_transform, invert_colors, ConvolutionFilter, ImageTransform, Kernel};
+    use super::{apply_convolution, apply_transform, invert_colors, sepia, ConvolutionFilter, ImageTransform, Kernel};
     use crate::runtime::decode::DecodedImage;
 
     #[test]
@@ -620,6 +647,7 @@ mod tests {
     #[test]
     fn lossy_transforms_have_no_inverse() {
         assert_eq!(ImageTransform::Grayscale.inverse(), None);
+        assert_eq!(ImageTransform::Sepia.inverse(), None);
         assert_eq!(ImageTransform::Brightness(10).inverse(), None);
         assert_eq!(ImageTransform::Brightness(-10).inverse(), None);
         assert_eq!(ImageTransform::Contrast(10).inverse(), None);
@@ -673,6 +701,70 @@ mod tests {
         assert_eq!(gray.rgba[1], 141);
         assert_eq!(gray.rgba[2], 141);
         assert_eq!(gray.rgba[3], 128); // alpha unchanged
+    }
+
+    #[test]
+    fn sepia_applies_correct_tone_matrix() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![100, 150, 200, 128],
+        };
+        let result = sepia(&image);
+        // R: 0.393*100 + 0.769*150 + 0.189*200 = 39.3 + 115.35 + 37.8 = 192.45 → 192
+        // G: 0.349*100 + 0.686*150 + 0.168*200 = 34.9 + 102.9  + 33.6 = 171.4  → 171
+        // B: 0.272*100 + 0.534*150 + 0.131*200 = 27.2 + 80.1   + 26.2 = 133.5  → 134
+        assert_eq!(result.rgba[0], 192);
+        assert_eq!(result.rgba[1], 171);
+        assert_eq!(result.rgba[2], 134);
+        assert_eq!(result.rgba[3], 128); // alpha unchanged
+    }
+
+    #[test]
+    fn sepia_clamps_to_255() {
+        // White pixel: all coefficients sum > 1.0 for R channel (0.393+0.769+0.189=1.351).
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 255, 255, 255],
+        };
+        let result = sepia(&image);
+        // R: 1.351 * 255 = 344.5 → clamped to 255
+        // G: 1.203 * 255 = 306.8 → clamped to 255
+        // B: 0.937 * 255 = 238.9 → 239
+        assert_eq!(result.rgba[0], 255);
+        assert_eq!(result.rgba[1], 255);
+        assert_eq!(result.rgba[2], 239);
+    }
+
+    #[test]
+    fn sepia_black_stays_black() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255],
+        };
+        let result = sepia(&image);
+        assert_eq!(result.rgba[0], 0);
+        assert_eq!(result.rgba[1], 0);
+        assert_eq!(result.rgba[2], 0);
+        assert_eq!(result.rgba[3], 255);
+    }
+
+    #[test]
+    fn sepia_preserves_dimensions_and_alpha() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: (0..6).flat_map(|i| [i * 40, i * 30, i * 20, 100 + i]).collect(),
+        };
+        let result = sepia(&image);
+        assert_eq!(result.width, 3);
+        assert_eq!(result.height, 2);
+        // Verify all alpha values are preserved.
+        for (i, chunk) in result.rgba.chunks_exact(4).enumerate() {
+            assert_eq!(chunk[3], 100 + i as u8, "alpha mismatch at pixel {i}");
+        }
     }
 
     #[test]
