@@ -33,12 +33,30 @@ impl BmpViewerApp {
                 }
             });
 
+            ui.separator();
+
             ui.horizontal(|ui| {
                 let rotate_left = ui.button("Rotate Left").clicked();
                 let rotate_right = ui.button("Rotate Right").clicked();
                 let mirror = ui.button("Mirror").clicked();
                 let invert = ui.button("Invert Colors").clicked();
-                ui.separator();
+                if rotate_left {
+                    self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
+                }
+                if rotate_right {
+                    self.apply_and_refresh(ctx, ImageTransform::RotateRight90);
+                }
+                if mirror {
+                    self.apply_and_refresh(ctx, ImageTransform::MirrorHorizontal);
+                }
+                if invert {
+                    self.apply_and_refresh(ctx, ImageTransform::InvertColors);
+                }
+            });
+
+            ui.separator();
+
+            ui.horizontal(|ui| {
                 ui.label("Header:");
                 egui::ComboBox::from_id_salt("save_header_version")
                     .selected_text(self.save_header_version.to_string())
@@ -63,18 +81,6 @@ impl BmpViewerApp {
                 let save_as_clicked = ui.button("Save As...").clicked();
                 let can_save = self.loaded_path.is_some() && self.transformed_image.is_some();
                 let save_clicked = ui.add_enabled(can_save, egui::Button::new("Save")).clicked();
-                if rotate_left {
-                    self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
-                }
-                if rotate_right {
-                    self.apply_and_refresh(ctx, ImageTransform::RotateRight90);
-                }
-                if mirror {
-                    self.apply_and_refresh(ctx, ImageTransform::MirrorHorizontal);
-                }
-                if invert {
-                    self.apply_and_refresh(ctx, ImageTransform::InvertColors);
-                }
                 if save_as_clicked {
                     self.save_current(ctx);
                 }
