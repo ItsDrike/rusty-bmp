@@ -1,0 +1,93 @@
+use eframe::egui;
+
+use bmp::runtime::transform::{ImageTransform, RotationInterpolation};
+
+use crate::BmpViewerApp;
+
+impl BmpViewerApp {
+    pub(crate) fn show_rotate_any_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
+        if !self.rotate_any_open {
+            return None;
+        }
+
+        let mut open = self.rotate_any_open;
+        let mut apply = false;
+        let mut close_requested = false;
+
+        egui::Window::new("Arbitrary Rotation")
+            .open(&mut open)
+            .resizable(false)
+            .default_width(320.0)
+            .show(ctx, |ui| {
+                ui.label("Rotate around image center.");
+                ui.add_space(6.0);
+
+                ui.add(egui::Slider::new(&mut self.rotate_any_angle, -180.0..=180.0).text("Angle (deg)"));
+
+                ui.horizontal(|ui| {
+                    ui.label("Interpolation:");
+                    egui::ComboBox::from_id_salt("rotate_any_interp")
+                        .selected_text(self.rotate_any_interpolation.to_string())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.rotate_any_interpolation,
+                                RotationInterpolation::Nearest,
+                                RotationInterpolation::Nearest.to_string(),
+                            );
+                            ui.selectable_value(
+                                &mut self.rotate_any_interpolation,
+                                RotationInterpolation::Bilinear,
+                                RotationInterpolation::Bilinear.to_string(),
+                            );
+                        });
+                });
+
+                ui.checkbox(&mut self.rotate_any_expand, "Expand canvas to fit full image");
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.small_button("-15 deg").clicked() {
+                        self.rotate_any_angle -= 15.0;
+                    }
+                    if ui.small_button("+15 deg").clicked() {
+                        self.rotate_any_angle += 15.0;
+                    }
+                    if ui.small_button("-45 deg").clicked() {
+                        self.rotate_any_angle -= 45.0;
+                    }
+                    if ui.small_button("+45 deg").clicked() {
+                        self.rotate_any_angle += 45.0;
+                    }
+                    if ui.small_button("Reset").clicked() {
+                        self.rotate_any_angle = 0.0;
+                    }
+                });
+
+                // Keep editor value bounded.
+                self.rotate_any_angle = self.rotate_any_angle.clamp(-3600.0, 3600.0);
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        close_requested = true;
+                    }
+                });
+            });
+
+        self.rotate_any_open = open && !close_requested;
+
+        if !apply {
+            return None;
+        }
+
+        let angle_tenths = (self.rotate_any_angle * 10.0).round().clamp(-36000.0, 36000.0) as i16;
+        Some(ImageTransform::RotateAny {
+            angle_tenths,
+            interpolation: self.rotate_any_interpolation,
+            expand: self.rotate_any_expand,
+        })
+    }
+}

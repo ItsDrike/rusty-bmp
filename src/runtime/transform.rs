@@ -137,10 +137,31 @@ impl fmt::Display for ConvolutionFilter {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RotationInterpolation {
+    Nearest,
+    Bilinear,
+}
+
+impl fmt::Display for RotationInterpolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Nearest => write!(f, "Nearest"),
+            Self::Bilinear => write!(f, "Bilinear"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageTransform {
     RotateLeft90,
     RotateRight90,
+    /// Rotate by an arbitrary angle in 0.1° units.
+    RotateAny {
+        angle_tenths: i16,
+        interpolation: RotationInterpolation,
+        expand: bool,
+    },
     MirrorHorizontal,
     MirrorVertical,
     InvertColors,
@@ -161,6 +182,15 @@ impl fmt::Display for ImageTransform {
         match self {
             Self::RotateLeft90 => write!(f, "Rotate Left"),
             Self::RotateRight90 => write!(f, "Rotate Right"),
+            Self::RotateAny {
+                angle_tenths,
+                interpolation,
+                expand,
+            } => {
+                let angle = *angle_tenths as f32 / 10.0;
+                let mode = if *expand { "Expand" } else { "Crop" };
+                write!(f, "Rotate {angle:+.1}° ({interpolation}, {mode})")
+            }
             Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
@@ -193,6 +223,7 @@ impl ImageTransform {
         match self {
             Self::RotateLeft90 => Some(Self::RotateRight90),
             Self::RotateRight90 => Some(Self::RotateLeft90),
+            Self::RotateAny { .. } => None,
             Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
             Self::MirrorVertical => Some(Self::MirrorVertical),
             Self::InvertColors => Some(Self::InvertColors),
@@ -223,6 +254,11 @@ impl ImageTransform {
             | Self::InvertColors => 0,
             // Cheap per-pixel transforms.
             Self::Grayscale | Self::Sepia | Self::Brightness(_) | Self::Contrast(_) => 1,
+            // Arbitrary-angle rotation needs interpolation and coordinate transforms.
+            Self::RotateAny { interpolation, .. } => match interpolation {
+                RotationInterpolation::Nearest => 3,
+                RotationInterpolation::Bilinear => 5,
+            },
             // Convolutions: N² multiply-accumulates per pixel per kernel element.
             Self::Convolution(_) | Self::CustomKernel(_) => 5,
         }
@@ -354,6 +390,11 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
     match op {
         ImageTransform::RotateLeft90 => rotate_left(image),
         ImageTransform::RotateRight90 => rotate_right(image),
+        ImageTransform::RotateAny {
+            angle_tenths,
+            interpolation,
+            expand,
+        } => rotate_any(image, *angle_tenths as f32 / 10.0, *interpolation, *expand),
         ImageTransform::MirrorHorizontal => mirror_horizontal(image),
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
@@ -364,6 +405,142 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
         ImageTransform::Convolution(filter) => apply_convolution(image, &filter.kernel()),
         ImageTransform::CustomKernel(kernel) => apply_convolution(image, kernel),
     }
+}
+
+pub fn rotate_any(
+    image: &DecodedImage,
+    angle_degrees: f32,
+    interpolation: RotationInterpolation,
+    expand: bool,
+) -> DecodedImage {
+    let src_w = image.width as usize;
+    let src_h = image.height as usize;
+    if src_w == 0 || src_h == 0 {
+        return image.clone();
+    }
+
+    if expand || src_w == src_h {
+        let turns = (angle_degrees / 90.0).round() as i32;
+        let snapped = turns as f32 * 90.0;
+        if (angle_degrees - snapped).abs() < 1e-4 {
+            match turns.rem_euclid(4) {
+                0 => return image.clone(),
+                1 => return rotate_left(image),
+                2 => return rotate_left(&rotate_left(image)),
+                3 => return rotate_right(image),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let angle = angle_degrees.to_radians();
+    let cos = angle.cos();
+    let sin = angle.sin();
+
+    let src_cx = (src_w as f32 - 1.0) * 0.5;
+    let src_cy = (src_h as f32 - 1.0) * 0.5;
+
+    let (dst_w, dst_h) = if expand {
+        let abs_cos = cos.abs();
+        let abs_sin = sin.abs();
+        let w_f = src_w as f32 * abs_cos + src_h as f32 * abs_sin;
+        let h_f = src_w as f32 * abs_sin + src_h as f32 * abs_cos;
+        let w = if (w_f - w_f.round()).abs() < 1e-4 {
+            w_f.round() as usize
+        } else {
+            w_f.ceil() as usize
+        };
+        let h = if (h_f - h_f.round()).abs() < 1e-4 {
+            h_f.round() as usize
+        } else {
+            h_f.ceil() as usize
+        };
+        (w.max(1), h.max(1))
+    } else {
+        (src_w, src_h)
+    };
+
+    let dst_cx = (dst_w as f32 - 1.0) * 0.5;
+    let dst_cy = (dst_h as f32 - 1.0) * 0.5;
+    let row_bytes = dst_w * 4;
+    let mut out = vec![0_u8; dst_w * dst_h * 4];
+
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
+        let y = dy as f32 - dst_cy;
+        for dx in 0..dst_w {
+            let x = dx as f32 - dst_cx;
+
+            // Inverse map from destination -> source.
+            let sx = x * cos + y * sin + src_cx;
+            let sy = -x * sin + y * cos + src_cy;
+
+            let dst = dx * 4;
+            let sample = sample_rgba(image, sx, sy, interpolation);
+            row[dst..dst + 4].copy_from_slice(&sample);
+        }
+    });
+
+    DecodedImage {
+        width: dst_w as u32,
+        height: dst_h as u32,
+        rgba: out,
+    }
+}
+
+fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInterpolation) -> [u8; 4] {
+    let w = image.width as i32;
+    let h = image.height as i32;
+    // Allow a tiny epsilon for floating-point error near borders (e.g. exact
+    // 90° rotations without canvas expansion), then clamp into valid bounds.
+    let max_x = (w - 1) as f32;
+    let max_y = (h - 1) as f32;
+    const EPS: f32 = 1e-3;
+    if x < -EPS || y < -EPS || x > max_x + EPS || y > max_y + EPS {
+        return [0, 0, 0, 0];
+    }
+    let x = x.clamp(0.0, max_x);
+    let y = y.clamp(0.0, max_y);
+
+    match interpolation {
+        RotationInterpolation::Nearest => {
+            let xi = x.round() as i32;
+            let yi = y.round() as i32;
+            pixel_at(image, xi, yi)
+        }
+        RotationInterpolation::Bilinear => {
+            let x0 = x.floor() as i32;
+            let y0 = y.floor() as i32;
+            let x1 = (x0 + 1).min(w - 1);
+            let y1 = (y0 + 1).min(h - 1);
+
+            let tx = x - x0 as f32;
+            let ty = y - y0 as f32;
+
+            let p00 = pixel_at(image, x0, y0);
+            let p10 = pixel_at(image, x1, y0);
+            let p01 = pixel_at(image, x0, y1);
+            let p11 = pixel_at(image, x1, y1);
+
+            let mut out = [0_u8; 4];
+            for c in 0..4 {
+                let a = p00[c] as f32 * (1.0 - tx) + p10[c] as f32 * tx;
+                let b = p01[c] as f32 * (1.0 - tx) + p11[c] as f32 * tx;
+                out[c] = (a * (1.0 - ty) + b * ty).round().clamp(0.0, 255.0) as u8;
+            }
+            out
+        }
+    }
+}
+
+fn pixel_at(image: &DecodedImage, x: i32, y: i32) -> [u8; 4] {
+    let w = image.width as usize;
+    let idx = (y as usize * w + x as usize) * 4;
+    [
+        image.rgba[idx],
+        image.rgba[idx + 1],
+        image.rgba[idx + 2],
+        image.rgba[idx + 3],
+    ]
 }
 
 pub fn rotate_left(image: &DecodedImage) -> DecodedImage {
@@ -697,8 +874,8 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_convolution, apply_transform, invert_colors, sepia, ConvolutionFilter, ImageTransform, Kernel,
-        TransformPipeline, CHECKPOINT_COST_THRESHOLD,
+        CHECKPOINT_COST_THRESHOLD, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation,
+        TransformPipeline, apply_convolution, apply_transform, invert_colors, rotate_any, sepia,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -757,6 +934,15 @@ mod tests {
     fn lossy_transforms_have_no_inverse() {
         assert_eq!(ImageTransform::Grayscale.inverse(), None);
         assert_eq!(ImageTransform::Sepia.inverse(), None);
+        assert_eq!(
+            ImageTransform::RotateAny {
+                angle_tenths: 125,
+                interpolation: RotationInterpolation::Bilinear,
+                expand: true,
+            }
+            .inverse(),
+            None
+        );
         assert_eq!(ImageTransform::Brightness(10).inverse(), None);
         assert_eq!(ImageTransform::Brightness(-10).inverse(), None);
         assert_eq!(ImageTransform::Contrast(10).inverse(), None);
@@ -1130,6 +1316,82 @@ mod tests {
     }
 
     #[test]
+    fn rotate_any_display_format() {
+        let op = ImageTransform::RotateAny {
+            angle_tenths: -125,
+            interpolation: RotationInterpolation::Nearest,
+            expand: false,
+        };
+        assert_eq!(op.to_string(), "Rotate -12.5° (Nearest, Crop)");
+    }
+
+    #[test]
+    fn rotate_any_zero_is_identity() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
+                180, 255,
+            ],
+        };
+
+        let out = rotate_any(&image, 0.0, RotationInterpolation::Bilinear, true);
+        assert_eq!(out.width, image.width);
+        assert_eq!(out.height, image.height);
+        assert_eq!(out.rgba, image.rgba);
+    }
+
+    #[test]
+    fn rotate_any_90_matches_rotate_left() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
+            ],
+        };
+
+        let expected = super::rotate_left(&image);
+        let got = rotate_any(&image, 90.0, RotationInterpolation::Nearest, true);
+        assert_eq!(got.width, expected.width);
+        assert_eq!(got.height, expected.height);
+        assert_eq!(got.rgba, expected.rgba);
+    }
+
+    #[test]
+    fn rotate_any_90_no_expand_square_matches_rotate_left() {
+        let image = DecodedImage {
+            width: 4,
+            height: 4,
+            rgba: vec![
+                255, 255, 255, 255, 10, 0, 0, 255, 20, 0, 0, 255, 255, 255, 255, 255, 30, 0, 0, 255, 40, 0, 0, 255,
+                50, 0, 0, 255, 60, 0, 0, 255, 70, 0, 0, 255, 80, 0, 0, 255, 90, 0, 0, 255, 100, 0, 0, 255, 255, 255,
+                255, 255, 110, 0, 0, 255, 120, 0, 0, 255, 255, 255, 255, 255,
+            ],
+        };
+
+        let expected = super::rotate_left(&image);
+        let got = rotate_any(&image, 90.0, RotationInterpolation::Nearest, false);
+        assert_eq!(got.width, expected.width);
+        assert_eq!(got.height, expected.height);
+        assert_eq!(got.rgba, expected.rgba);
+    }
+
+    #[test]
+    fn rotate_any_expand_grows_canvas_for_diagonal() {
+        let image = DecodedImage {
+            width: 4,
+            height: 4,
+            rgba: vec![255; 4 * 4 * 4],
+        };
+
+        let out = rotate_any(&image, 45.0, RotationInterpolation::Nearest, true);
+        assert!(out.width > image.width);
+        assert!(out.height > image.height);
+    }
+
+    #[test]
     fn custom_kernel_display_format() {
         let k3 = Kernel::new(vec![0; 9], 3, 1, 0);
         assert_eq!(ImageTransform::CustomKernel(k3).to_string(), "Custom 3x3");
@@ -1298,6 +1560,33 @@ mod tests {
     fn replay_cost_convolution_is_higher() {
         let cost = ImageTransform::Convolution(ConvolutionFilter::Blur).replay_cost();
         assert!(cost > 1, "convolution should have higher cost than simple pixel ops");
+        let rotate_cost = ImageTransform::RotateAny {
+            angle_tenths: 333,
+            interpolation: RotationInterpolation::Bilinear,
+            expand: true,
+        }
+        .replay_cost();
+        assert!(
+            rotate_cost > 1,
+            "arbitrary rotation should have higher cost than simple pixel ops"
+        );
+    }
+
+    #[test]
+    fn replay_cost_rotate_any_depends_on_interpolation() {
+        let nearest = ImageTransform::RotateAny {
+            angle_tenths: 123,
+            interpolation: RotationInterpolation::Nearest,
+            expand: true,
+        }
+        .replay_cost();
+        let bilinear = ImageTransform::RotateAny {
+            angle_tenths: 123,
+            interpolation: RotationInterpolation::Bilinear,
+            expand: true,
+        }
+        .replay_cost();
+        assert!(bilinear > nearest, "bilinear rotation should be costlier than nearest");
     }
 
     #[test]

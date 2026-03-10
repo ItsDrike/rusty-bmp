@@ -5,7 +5,7 @@ use bmp::{
     runtime::{
         decode::{decode_to_rgba, DecodedImage},
         encode::{save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
-        transform::{apply_transform, ConvolutionFilter, ImageTransform, TransformPipeline},
+        transform::{apply_transform, ConvolutionFilter, ImageTransform, RotationInterpolation, TransformPipeline},
     },
 };
 use eframe::egui;
@@ -83,6 +83,15 @@ pub(crate) struct BmpViewerApp {
     pub(crate) custom_kernel_divisor: String,
     /// Bias string for the kernel editor.
     pub(crate) custom_kernel_bias: String,
+
+    /// Whether the arbitrary-angle rotation window is open.
+    pub(crate) rotate_any_open: bool,
+    /// Angle in degrees used by arbitrary-angle rotation.
+    pub(crate) rotate_any_angle: f32,
+    /// Interpolation method for arbitrary-angle rotation.
+    pub(crate) rotate_any_interpolation: RotationInterpolation,
+    /// Whether to expand output canvas to fit the full rotated image.
+    pub(crate) rotate_any_expand: bool,
 }
 
 impl Default for BmpViewerApp {
@@ -112,6 +121,10 @@ impl Default for BmpViewerApp {
             custom_kernel_weights: vec!["0".to_owned(); 9],
             custom_kernel_divisor: "1".to_owned(),
             custom_kernel_bias: "0".to_owned(),
+            rotate_any_open: false,
+            rotate_any_angle: 0.0,
+            rotate_any_interpolation: RotationInterpolation::Bilinear,
+            rotate_any_expand: true,
         }
     }
 }
@@ -349,6 +362,9 @@ impl eframe::App for BmpViewerApp {
         self.show_toolbar(ctx);
 
         // --- Floating windows ---
+        if let Some(op) = self.show_rotate_any_window(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
         if let Some(op) = self.show_kernel_editor(ctx) {
             self.apply_and_refresh(ctx, op);
         }
