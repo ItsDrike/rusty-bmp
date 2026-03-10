@@ -242,7 +242,7 @@ fn row_stride(width: usize, bits_per_pixel: u16) -> Result<usize, EncodeError> {
 // Validate shared preconditions
 // ---------------------------------------------------------------------------
 
-fn validate_image(image: &DecodedImage) -> Result<usize, EncodeError> {
+fn validate_image(image: &DecodedImage) -> Result<(), EncodeError> {
     if image.width == 0 || image.height == 0 || image.width > i32::MAX as u32 || image.height > i32::MAX as u32 {
         return Err(EncodeError::InvalidDimensions {
             width: image.width,
@@ -261,7 +261,7 @@ fn validate_image(image: &DecodedImage) -> Result<usize, EncodeError> {
         });
     }
 
-    Ok(pixel_bytes)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
