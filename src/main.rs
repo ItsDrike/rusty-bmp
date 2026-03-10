@@ -156,7 +156,7 @@ impl BmpViewerApp {
 
     pub(crate) fn apply_and_refresh(&mut self, ctx: &egui::Context, op: ImageTransform) {
         if let Some(current) = self.transformed_image.as_ref() {
-            let next = apply_transform(current, op);
+            let next = apply_transform(current, &op);
             self.pipeline.push(op);
             self.redo_stack.clear();
             self.set_display_image(ctx, next, "transformed".to_owned());
@@ -165,14 +165,15 @@ impl BmpViewerApp {
 
     pub(crate) fn undo_transform(&mut self, ctx: &egui::Context) {
         if let Some(op) = self.pipeline.pop() {
-            self.redo_stack.push(op);
             if let Some(inv) = op.inverse() {
+                self.redo_stack.push(op);
                 // O(1) path: apply the inverse transform.
                 if let Some(current) = self.transformed_image.as_ref() {
-                    let result = apply_transform(current, inv);
+                    let result = apply_transform(current, &inv);
                     self.set_display_image(ctx, result, "transformed".to_owned());
                 }
             } else {
+                self.redo_stack.push(op);
                 // Lossy transform: replay the remaining pipeline from the original image.
                 if let Some(original) = self.original_image.as_ref() {
                     let result = self.pipeline.apply(original);
@@ -185,7 +186,7 @@ impl BmpViewerApp {
     pub(crate) fn redo_transform(&mut self, ctx: &egui::Context) {
         if let Some(op) = self.redo_stack.pop() {
             if let Some(current) = self.transformed_image.as_ref() {
-                let next = apply_transform(current, op);
+                let next = apply_transform(current, &op);
                 self.pipeline.push(op);
                 self.set_display_image(ctx, next, "transformed".to_owned());
             }

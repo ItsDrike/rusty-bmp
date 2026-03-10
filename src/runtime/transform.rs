@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::runtime::decode::DecodedImage;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageTransform {
     RotateLeft90,
     RotateRight90,
@@ -46,7 +46,7 @@ impl fmt::Display for ImageTransform {
 impl ImageTransform {
     /// Returns the transform that reverses the effect of `self`, or `None`
     /// if the transform is lossy and requires a full pipeline replay to undo.
-    pub fn inverse(self) -> Option<Self> {
+    pub fn inverse(&self) -> Option<Self> {
         match self {
             Self::RotateLeft90 => Some(Self::RotateRight90),
             Self::RotateRight90 => Some(Self::RotateLeft90),
@@ -98,13 +98,13 @@ impl TransformPipeline {
     pub fn apply(&self, image: &DecodedImage) -> DecodedImage {
         let mut out = image.clone();
         for op in &self.ops {
-            out = apply_transform(&out, *op);
+            out = apply_transform(&out, op);
         }
         out
     }
 }
 
-pub fn apply_transform(image: &DecodedImage, op: ImageTransform) -> DecodedImage {
+pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImage {
     match op {
         ImageTransform::RotateLeft90 => rotate_left(image),
         ImageTransform::RotateRight90 => rotate_right(image),
@@ -112,8 +112,8 @@ pub fn apply_transform(image: &DecodedImage, op: ImageTransform) -> DecodedImage
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
         ImageTransform::Grayscale => grayscale(image),
-        ImageTransform::Brightness(delta) => brightness(image, delta),
-        ImageTransform::Contrast(delta) => contrast(image, delta),
+        ImageTransform::Brightness(delta) => brightness(image, *delta),
+        ImageTransform::Contrast(delta) => contrast(image, *delta),
     }
 }
 
@@ -361,8 +361,8 @@ mod tests {
             ImageTransform::InvertColors,
         ] {
             let inv = op.inverse().expect("reversible transform should have an inverse");
-            let transformed = apply_transform(&image, op);
-            let restored = apply_transform(&transformed, inv);
+            let transformed = apply_transform(&image, &op);
+            let restored = apply_transform(&transformed, &inv);
             assert_eq!(restored.width, image.width, "width mismatch for {op}");
             assert_eq!(restored.height, image.height, "height mismatch for {op}");
             assert_eq!(restored.rgba, image.rgba, "pixel data mismatch for {op}");
