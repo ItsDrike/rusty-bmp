@@ -7,6 +7,7 @@ pub(crate) struct SidePanelActions {
     pub remove_transform: Option<usize>,
     pub do_undo: bool,
     pub do_redo: bool,
+    pub do_clear: bool,
 }
 
 impl BmpViewerApp {
@@ -21,6 +22,7 @@ impl BmpViewerApp {
         let mut remove_transform: Option<usize> = None;
         let mut do_undo = false;
         let mut do_redo = false;
+        let mut do_clear = false;
 
         egui::SidePanel::right("bmp_info")
             .default_width(320.0)
@@ -118,6 +120,15 @@ impl BmpViewerApp {
                                     {
                                         do_redo = true;
                                     }
+
+                                    let can_clear = !self.pipeline.is_empty();
+                                    if ui
+                                        .add_enabled(can_clear, egui::Button::new("Clear").small())
+                                        .on_hover_text("Remove all transforms")
+                                        .clicked()
+                                    {
+                                        do_clear = true;
+                                    }
                                 });
 
                                 for (i, op) in self.pipeline.ops().iter().enumerate() {
@@ -155,6 +166,7 @@ impl BmpViewerApp {
             remove_transform,
             do_undo,
             do_redo,
+            do_clear,
         }
     }
 
@@ -173,6 +185,14 @@ impl BmpViewerApp {
         }
         if actions.do_redo {
             self.redo_transform(ctx);
+        }
+        if actions.do_clear {
+            self.pipeline.clear();
+            self.redo_stack.clear();
+            if let Some(original) = &self.original_image {
+                let result = original.clone();
+                self.set_display_image(ctx, result, "transformed".to_owned());
+            }
         }
     }
 }
