@@ -95,6 +95,24 @@ impl Kernel {
 
         Some((col_vec, row_vec))
     }
+
+    /// Returns a heuristic replay cost for this convolution kernel.
+    ///
+    /// The cost approximates the amount of work per pixel and is used by the
+    /// transform pipeline to decide when to create checkpoints.
+    ///
+    /// Non-separable kernels require a full 2D convolution with `N × N` taps,
+    /// while separable kernels can be applied as two 1D passes (`2 × N` taps).
+    ///
+    /// Examples:
+    /// - 3×3 separable kernel -> `2N = 6`
+    /// - 3×3 non-separable kernel -> `N² = 9`
+    /// - 5×5 separable kernel -> `2N = 10`
+    /// - 5×5 non-separable kernel -> `N² = 25`
+    pub fn replay_cost(&self) -> u32 {
+        let n = self.size as u32;
+        if self.separable().is_some() { 2 * n } else { n * n }
+    }
 }
 
 /// Named convolution filter presets.
@@ -260,10 +278,11 @@ impl ImageTransform {
             Self::RotateAny { interpolation, .. } => match interpolation {
                 RotationInterpolation::Nearest => 3,
                 RotationInterpolation::Bilinear => 5,
-                RotationInterpolation::Bicubic => 7,
+                RotationInterpolation::Bicubic => 8,
             },
-            // Convolutions: N² multiply-accumulates per pixel per kernel element.
-            Self::Convolution(_) | Self::CustomKernel(_) => 5,
+            // Convolutions scale with kernel footprint.
+            Self::Convolution(filter) => filter.kernel().replay_cost(),
+            Self::CustomKernel(kernel) => kernel.replay_cost(),
         }
     }
 }
@@ -271,7 +290,7 @@ impl ImageTransform {
 /// Cost threshold that triggers creating a new checkpoint.
 /// Accumulated [`ImageTransform::replay_cost()`] since the last checkpoint
 /// must exceed this value before a new snapshot is stored.
-const CHECKPOINT_COST_THRESHOLD: u32 = 10;
+const CHECKPOINT_COST_THRESHOLD: u32 = 15;
 
 /// Maximum number of checkpoints stored simultaneously. When exceeded, the
 /// oldest checkpoint is evicted to bound memory usage.
@@ -923,8 +942,8 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_convolution, apply_transform, invert_colors, rotate_any, sepia, ConvolutionFilter, ImageTransform,
-        Kernel, RotationInterpolation, TransformPipeline, CHECKPOINT_COST_THRESHOLD,
+        CHECKPOINT_COST_THRESHOLD, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation,
+        TransformPipeline, apply_convolution, apply_transform, invert_colors, rotate_any, sepia,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -1456,9 +1475,12 @@ mod tests {
     }
 
     #[test]
-    fn custom_kernel_replay_cost_is_5() {
-        let k = Kernel::new(vec![0; 9], 3, 1, 0);
-        assert_eq!(ImageTransform::CustomKernel(k).replay_cost(), 5);
+    fn custom_kernel_replay_cost_scales_with_size() {
+        let k3 = Kernel::new(vec![0; 9], 3, 1, 0);
+        let k5 = Kernel::new(vec![0; 25], 5, 1, 0);
+        let c3 = ImageTransform::CustomKernel(k3).replay_cost();
+        let c5 = ImageTransform::CustomKernel(k5).replay_cost();
+        assert!(c5 > c3, "larger custom kernels should have higher replay cost");
     }
 
     #[test]
