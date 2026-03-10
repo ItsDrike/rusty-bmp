@@ -34,6 +34,9 @@ impl BmpViewerApp {
                         let color = egui::Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
                         let (swatch_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                         ui.painter().rect_filled(swatch_rect, 2.0, color);
+                    } else if self.last_effective_zoom < 8.0 {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Zoom in to inspect pixel values").weak().italics());
                     }
 
                     // Push buttons to the right.
