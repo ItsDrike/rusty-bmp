@@ -3,10 +3,10 @@ use std::io::{self, Read, Write};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::raw::{
-    BitmapCoreHeader,
     bitmap_headers::{BitmapInfoHeader, BitmapV4Header, BitmapV5Header},
     error::{IoStage, StructuralError, ValidationError},
     types::{BitsPerPixel, Compression},
+    BitmapCoreHeader,
 };
 
 pub enum BitmapHeader {

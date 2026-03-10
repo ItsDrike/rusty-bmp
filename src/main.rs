@@ -3,9 +3,9 @@ use std::{fs::File, path::PathBuf};
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{DecodedImage, decode_to_rgba},
-        encode::save_bmp,
-        transform::{ImageTransform, TransformPipeline, apply_transform},
+        decode::{decode_to_rgba, DecodedImage},
+        encode::{save_bmp_with_format, SaveFormat},
+        transform::{apply_transform, ImageTransform, TransformPipeline},
     },
 };
 use eframe::egui;
@@ -23,6 +23,7 @@ struct BmpViewerApp {
     texture: Option<egui::TextureHandle>,
     transformed_image: Option<DecodedImage>,
     pipeline: TransformPipeline,
+    save_format: SaveFormat,
 }
 
 impl BmpViewerApp {
@@ -39,7 +40,8 @@ impl BmpViewerApp {
         ui.horizontal_wrapped(|ui| {
             for (i, color) in self.palette_colors.iter().copied().enumerate() {
                 let rgba = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
-                let (rect, response) = ui.allocate_exact_size(egui::vec2(swatch_size, swatch_size), egui::Sense::hover());
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(swatch_size, swatch_size), egui::Sense::hover());
                 ui.painter().rect_filled(rect, 2.0, rgba);
 
                 response.on_hover_text(format!(
@@ -84,6 +86,7 @@ impl BmpViewerApp {
         };
 
         self.pipeline.clear();
+        self.save_format = SaveFormat::from_bmp(&bmp);
         let info = gui::metadata::format_bmp_info_sections(&bmp, &decoded);
         self.image_stats = info.image_stats;
         self.decoded_stats = info.decoded_stats;
@@ -126,9 +129,9 @@ impl BmpViewerApp {
             return;
         };
 
-        match save_bmp(&path, image) {
+        match save_bmp_with_format(&path, image, self.save_format) {
             Ok(()) => {
-                self.status = format!("Saved {}", path.display());
+                self.status = format!("Saved {} ({})", path.display(), self.save_format);
             }
             Err(err) => {
                 self.status = format!("Save failed: {err}");
@@ -168,6 +171,15 @@ impl eframe::App for BmpViewerApp {
                 let rotate_right = ui.button("Rotate Right").clicked();
                 let mirror = ui.button("Mirror").clicked();
                 let invert = ui.button("Invert Colors").clicked();
+                ui.separator();
+                ui.label("Format:");
+                egui::ComboBox::from_id_salt("save_format")
+                    .selected_text(self.save_format.to_string())
+                    .show_ui(ui, |ui| {
+                        for &fmt in SaveFormat::ALL {
+                            ui.selectable_value(&mut self.save_format, fmt, fmt.to_string());
+                        }
+                    });
                 let save_clicked = ui.button("Save As...").clicked();
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);

@@ -3,8 +3,8 @@ use std::{fs::File, io::Cursor};
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{DecodedImage, decode_to_rgba},
-        encode::encode_rgba_to_bmp,
+        decode::{decode_to_rgba, DecodedImage},
+        encode::{encode_rgba_to_bmp, encode_rgba_to_bmp_with_format, SaveFormat},
     },
 };
 
@@ -113,4 +113,228 @@ fn encode_decode_roundtrip_preserves_pixels() {
         px[3] = 255;
     }
     assert_eq!(decoded.rgba, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Roundtrip helpers for the new SaveFormat variants
+// ---------------------------------------------------------------------------
+
+/// Encode with the given format, write to an in-memory buffer, re-parse, and
+/// decode back to RGBA. Returns the decoded image.
+fn roundtrip_format(source: &DecodedImage, format: SaveFormat) -> DecodedImage {
+    let bmp =
+        encode_rgba_to_bmp_with_format(source, format).unwrap_or_else(|e| panic!("encode {format:?} failed: {e}"));
+
+    let mut buf = Cursor::new(Vec::<u8>::new());
+    bmp.write_unchecked(&mut buf)
+        .unwrap_or_else(|e| panic!("write {format:?} failed: {e}"));
+    buf.set_position(0);
+
+    let reparsed = Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read {format:?} failed: {e}"));
+    decode_to_rgba(&reparsed).unwrap_or_else(|e| panic!("decode {format:?} failed: {e}"))
+}
+
+/// A small test image with 6 distinct colors (enough to exercise palette
+/// quantization at low bit depths while remaining deterministic).
+fn small_test_image() -> DecodedImage {
+    DecodedImage {
+        width: 3,
+        height: 2,
+        rgba: vec![
+            255, 0, 0, 255, // red
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // blue
+            10, 20, 30, 255, // dark
+            200, 150, 100, 255, // warm
+            250, 250, 250, 255, // near-white
+        ],
+    }
+}
+
+/// Returns the maximum absolute per-channel difference between the two images.
+fn max_channel_diff(a: &DecodedImage, b: &DecodedImage) -> u8 {
+    assert_eq!(a.width, b.width);
+    assert_eq!(a.height, b.height);
+    a.rgba
+        .iter()
+        .zip(b.rgba.iter())
+        .map(|(&x, &y)| (x as i16 - y as i16).unsigned_abs() as u8)
+        .max()
+        .unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// Lossless (exact) roundtrip tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn roundtrip_rgb24_preserves_rgb_drops_alpha() {
+    let source = small_test_image();
+    let decoded = roundtrip_format(&source, SaveFormat::Rgb24);
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    // Alpha is always 255 after roundtrip through 24-bit
+    let mut expected = source.rgba.clone();
+    for px in expected.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    assert_eq!(decoded.rgba, expected);
+}
+
+#[test]
+fn roundtrip_rgb32_preserves_rgb() {
+    let source = small_test_image();
+    let decoded = roundtrip_format(&source, SaveFormat::Rgb32);
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    let mut expected = source.rgba.clone();
+    for px in expected.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    assert_eq!(decoded.rgba, expected);
+}
+
+#[test]
+fn roundtrip_bitfields32_preserves_rgb() {
+    let source = small_test_image();
+    let decoded = roundtrip_format(&source, SaveFormat::BitFields32);
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    let mut expected = source.rgba.clone();
+    for px in expected.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    assert_eq!(decoded.rgba, expected);
+}
+
+// ---------------------------------------------------------------------------
+// Lossy roundtrip tests (quantization or reduced bit depth)
+// ---------------------------------------------------------------------------
+
+/// For low-bpp formats, we allow some color error due to quantization.
+/// This test checks that dimensions match and the error is within reason.
+fn assert_lossy_roundtrip(format: SaveFormat, max_allowed_diff: u8) {
+    let source = small_test_image();
+    let decoded = roundtrip_format(&source, format);
+    assert_eq!(decoded.width, source.width, "{format:?} width");
+    assert_eq!(decoded.height, source.height, "{format:?} height");
+    // Force alpha to 255 in source for comparison
+    let mut reference = source.clone();
+    for px in reference.rgba.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    let diff = max_channel_diff(&decoded, &reference);
+    assert!(
+        diff <= max_allowed_diff,
+        "{format:?}: max channel diff {diff} exceeds allowed {max_allowed_diff}"
+    );
+}
+
+#[test]
+fn roundtrip_rgb16_within_tolerance() {
+    // 5 bits per channel -> max error around 8 (255/31)
+    assert_lossy_roundtrip(SaveFormat::Rgb16, 9);
+}
+
+#[test]
+fn roundtrip_bitfields16_rgb565_within_tolerance() {
+    assert_lossy_roundtrip(SaveFormat::BitFields16Rgb565, 9);
+}
+
+#[test]
+fn roundtrip_bitfields16_rgb555_within_tolerance() {
+    assert_lossy_roundtrip(SaveFormat::BitFields16Rgb555, 9);
+}
+
+#[test]
+fn roundtrip_rgb8_within_tolerance() {
+    // 256-color quantization on a 6-color image should be exact or very close
+    assert_lossy_roundtrip(SaveFormat::Rgb8, 2);
+}
+
+#[test]
+fn roundtrip_rgb4_within_tolerance() {
+    // 16-color palette for 6 distinct colors
+    assert_lossy_roundtrip(SaveFormat::Rgb4, 5);
+}
+
+#[test]
+fn roundtrip_rgb1_dimensions_preserved() {
+    let source = small_test_image();
+    let decoded = roundtrip_format(&source, SaveFormat::Rgb1);
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    // 1-bpp is monochrome: just make sure the roundtrip completes
+}
+
+#[test]
+fn roundtrip_rle8_within_tolerance() {
+    assert_lossy_roundtrip(SaveFormat::Rle8, 2);
+}
+
+#[test]
+fn roundtrip_rle4_within_tolerance() {
+    assert_lossy_roundtrip(SaveFormat::Rle4, 5);
+}
+
+// ---------------------------------------------------------------------------
+// Larger image roundtrip tests (exercises row padding and longer RLE streams)
+// ---------------------------------------------------------------------------
+
+fn gradient_image(width: u32, height: u32) -> DecodedImage {
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let r = ((x * 255) / width.max(1)) as u8;
+            let g = ((y * 255) / height.max(1)) as u8;
+            let b = (((x + y) * 127) / (width + height).max(1)) as u8;
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+    DecodedImage { width, height, rgba }
+}
+
+#[test]
+fn roundtrip_rgb24_gradient() {
+    let source = gradient_image(17, 11); // odd width to exercise row padding
+    let decoded = roundtrip_format(&source, SaveFormat::Rgb24);
+    assert_eq!(decoded.rgba, source.rgba);
+}
+
+#[test]
+fn roundtrip_rle8_gradient() {
+    let source = gradient_image(17, 11);
+    let decoded = roundtrip_format(&source, SaveFormat::Rle8);
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    // Quantization means we can't expect an exact match, but dimensions should
+    // match and the image should be decodable.
+    let diff = max_channel_diff(&decoded, &source);
+    assert!(diff <= 30, "rle8 gradient max diff {diff} too large");
+}
+
+#[test]
+fn roundtrip_rle4_gradient() {
+    let source = gradient_image(17, 11);
+    let decoded = roundtrip_format(&source, SaveFormat::Rle4);
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+}
+
+// ---------------------------------------------------------------------------
+// All formats should produce a valid BMP that passes read_checked
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_formats_produce_valid_bmp() {
+    let source = small_test_image();
+    for &fmt in SaveFormat::ALL {
+        let bmp =
+            encode_rgba_to_bmp_with_format(&source, fmt).unwrap_or_else(|e| panic!("encode {fmt:?} failed: {e}"));
+        let mut buf = Cursor::new(Vec::<u8>::new());
+        bmp.write_unchecked(&mut buf)
+            .unwrap_or_else(|e| panic!("write {fmt:?} failed: {e}"));
+        buf.set_position(0);
+        Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read_checked {fmt:?} failed: {e}"));
+    }
 }

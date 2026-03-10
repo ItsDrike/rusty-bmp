@@ -1,10 +1,10 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::raw::{
-    BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, FileHeader, RgbMasks,
     error::{BmpError, IccProfileError, IoStage, PixelDataLayoutError, StructuralError, ValidationError},
     helpers::BoundedStream,
     types::{ColorSpaceType, Compression, RgbQuad, RgbTriple},
+    BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, FileHeader, RgbMasks,
 };
 
 pub(crate) const MAX_COLOR_TABLE_ENTRIES: usize = 1 << 16;

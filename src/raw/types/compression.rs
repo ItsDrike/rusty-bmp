@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{BitsPerPixel, error::ValidationError, helpers::wingdi};
+use crate::raw::{error::ValidationError, helpers::wingdi, BitsPerPixel};
 
 /// Compression methods defined for BMP files.
 ///

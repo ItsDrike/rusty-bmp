@@ -252,7 +252,7 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
 
 #[cfg(test)]
 mod tests {
-    use super::{compression_name, format_bytes, write_decode_stats, with_grouping};
+    use super::{compression_name, format_bytes, with_grouping, write_decode_stats};
     use bmp::raw::Compression;
     use bmp::runtime::decode::DecodedImage;
 

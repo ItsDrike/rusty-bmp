@@ -3,9 +3,9 @@ use std::io::{self, Read, Write};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::raw::{
-    DibVariant,
     error::{StructuralError, ValidationError},
     types::{BitsPerPixel, Compression},
+    DibVariant,
 };
 
 /// The BMP INFO (40 byte) header.

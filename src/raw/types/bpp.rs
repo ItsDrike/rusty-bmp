@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::raw::{DibVariant, error::ValidationError};
+use crate::raw::{error::ValidationError, DibVariant};
 
 /// Recognized valid Bits-Per-Pixel (color depth) values for a DIB
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
