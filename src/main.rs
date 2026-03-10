@@ -205,6 +205,43 @@ impl BmpViewerApp {
 
 impl eframe::App for BmpViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // --- Global keyboard shortcuts ---
+        let text_has_focus = ctx.memory(|m| m.focused().is_some());
+        let kb = ctx.input(|i| {
+            let cmd = i.modifiers.command; // Ctrl on Linux/Windows, Cmd on macOS
+            let shift = i.modifiers.shift;
+            let plain = !text_has_focus && !cmd && !i.modifiers.alt;
+            (
+                cmd && i.key_pressed(egui::Key::O),                                            // Open
+                cmd && !shift && i.key_pressed(egui::Key::S),                                  // Save
+                cmd && shift && i.key_pressed(egui::Key::S),                                   // Save As
+                plain && (i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)), // Zoom In  (+, =, Shift+=)
+                plain && !shift && i.key_pressed(egui::Key::Minus),                            // Zoom Out
+                plain && !shift && i.key_pressed(egui::Key::Num0),                             // Reset Zoom
+            )
+        });
+        let (kb_open, kb_save, kb_save_as, kb_zoom_in, kb_zoom_out, kb_zoom_reset) = kb;
+
+        if kb_open {
+            self.pick_and_load(ctx);
+        }
+        if kb_save {
+            self.save_overwrite();
+        }
+        if kb_save_as {
+            self.save_current();
+        }
+        if kb_zoom_in {
+            self.zoom = (self.zoom * 1.25).clamp(0.1, 50.0);
+        }
+        if kb_zoom_out {
+            self.zoom = (self.zoom / 1.25).clamp(0.1, 50.0);
+        }
+        if kb_zoom_reset {
+            self.zoom = 1.0;
+            self.pan_offset = egui::Vec2::ZERO;
+        }
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("BMP Path:");
