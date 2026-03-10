@@ -28,8 +28,11 @@ struct BmpViewerApp {
     /// Path of the currently loaded file (for "Save" without a dialog).
     loaded_path: Option<PathBuf>,
 
-    /// Current zoom level (1.0 = fit-to-window, >1.0 = zoomed in).
+    /// Absolute zoom level: screen pixels per image pixel.
+    /// A value of 0.0 means "fit the image to the available panel space".
     zoom: f32,
+    /// The effective zoom level from the last frame (used for display in the zoom bar).
+    last_effective_zoom: f32,
     /// Pan offset in screen pixels (relative to the centered image position).
     pan_offset: egui::Vec2,
 }
@@ -49,7 +52,8 @@ impl Default for BmpViewerApp {
             save_header_version: SaveHeaderVersion::default(),
             source_metadata: None,
             loaded_path: None,
-            zoom: 1.0,
+            zoom: 0.0,
+            last_effective_zoom: 1.0,
             pan_offset: egui::Vec2::ZERO,
         }
     }
@@ -87,7 +91,7 @@ impl BmpViewerApp {
             egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
         self.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
         self.transformed_image = Some(image);
-        self.zoom = 1.0;
+        self.zoom = 0.0;
         self.pan_offset = egui::Vec2::ZERO;
     }
 
@@ -210,17 +214,13 @@ impl eframe::App for BmpViewerApp {
         let kb = ctx.input(|i| {
             let cmd = i.modifiers.command; // Ctrl on Linux/Windows, Cmd on macOS
             let shift = i.modifiers.shift;
-            let plain = !text_has_focus && !cmd && !i.modifiers.alt;
             (
-                cmd && i.key_pressed(egui::Key::O),                                            // Open
-                cmd && !shift && i.key_pressed(egui::Key::S),                                  // Save
-                cmd && shift && i.key_pressed(egui::Key::S),                                   // Save As
-                plain && (i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)), // Zoom In  (+, =, Shift+=)
-                plain && !shift && i.key_pressed(egui::Key::Minus),                            // Zoom Out
-                plain && !shift && i.key_pressed(egui::Key::Num0),                             // Reset Zoom
+                cmd && i.key_pressed(egui::Key::O),           // Open
+                cmd && !shift && i.key_pressed(egui::Key::S), // Save
+                cmd && shift && i.key_pressed(egui::Key::S),  // Save As
             )
         });
-        let (kb_open, kb_save, kb_save_as, kb_zoom_in, kb_zoom_out, kb_zoom_reset) = kb;
+        let (kb_open, kb_save, kb_save_as) = kb;
 
         if kb_open {
             self.pick_and_load(ctx);
@@ -230,16 +230,6 @@ impl eframe::App for BmpViewerApp {
         }
         if kb_save_as {
             self.save_current();
-        }
-        if kb_zoom_in {
-            self.zoom = (self.zoom * 1.25).clamp(0.1, 50.0);
-        }
-        if kb_zoom_out {
-            self.zoom = (self.zoom / 1.25).clamp(0.1, 50.0);
-        }
-        if kb_zoom_reset {
-            self.zoom = 1.0;
-            self.pan_offset = egui::Vec2::ZERO;
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
@@ -376,46 +366,108 @@ impl eframe::App for BmpViewerApp {
                 }
             });
 
+        // --- Zoom status bar (below the viewer, above CentralPanel) ---
+        if self.texture.is_some() {
+            egui::TopBottomPanel::bottom("zoom_bar")
+                .exact_height(24.0)
+                .show(ctx, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        // Zoom label on the left.
+                        let zoom_label = if self.zoom == 0.0 {
+                            format!("{:.0}% (Fit)", self.last_effective_zoom * 100.0)
+                        } else {
+                            format!("{:.0}%", self.zoom * 100.0)
+                        };
+                        ui.monospace(&zoom_label);
+
+                        // Push buttons to the right.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let is_1to1 = self.zoom == 1.0;
+                            if ui
+                                .add_enabled(!is_1to1, egui::Button::new("1:1").small())
+                                .on_hover_text("Actual pixel size (1)")
+                                .clicked()
+                            {
+                                self.zoom = 1.0;
+                                self.pan_offset = egui::Vec2::ZERO;
+                            }
+
+                            let is_fit = self.zoom == 0.0;
+                            if ui
+                                .add_enabled(!is_fit, egui::Button::new("Fit").small())
+                                .on_hover_text("Fit image to panel (0)")
+                                .clicked()
+                            {
+                                self.zoom = 0.0;
+                                self.pan_offset = egui::Vec2::ZERO;
+                            }
+                        });
+                    });
+                });
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(texture) = &self.texture {
                 let avail = ui.available_size();
                 let tex_size = texture.size_vec2();
 
-                // Compute the base scale that fits the image within the panel
-                // (same as the old logic, but now it's the "1x" baseline).
-                let base_scale = if tex_size.x > avail.x || tex_size.y > avail.y {
+                // Scale that fits the entire image within the panel (aspect-ratio preserving).
+                let fit_scale = {
                     let s = (avail.x / tex_size.x).min(avail.y / tex_size.y);
                     if s.is_finite() && s > 0.0 {
                         s
                     } else {
                         1.0
                     }
-                } else {
-                    1.0
                 };
 
-                let display_size = tex_size * base_scale * self.zoom;
+                // Resolve the effective zoom: 0.0 means "fit to panel".
+                let effective_zoom = if self.zoom == 0.0 { fit_scale } else { self.zoom };
 
                 // Allocate the full available area and sense drag + scroll.
                 let (panel_rect, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
+
+                // --- Keyboard zoom shortcuts (need panel context for fit_scale) ---
+                let (kb_zoom_in, kb_zoom_out, kb_zoom_fit, kb_zoom_1to1) = ui.input(|i| {
+                    let cmd = i.modifiers.command;
+                    let shift = i.modifiers.shift;
+                    let plain = !text_has_focus && !cmd && !i.modifiers.alt;
+                    (
+                        plain && (i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)), // Zoom In
+                        plain && !shift && i.key_pressed(egui::Key::Minus),                            // Zoom Out
+                        plain && !shift && i.key_pressed(egui::Key::Num0),                             // Fit to window
+                        plain && !shift && i.key_pressed(egui::Key::Num1), // 1:1 actual pixels
+                    )
+                });
+
+                if kb_zoom_in {
+                    self.zoom = (effective_zoom * 1.25).clamp(0.01, 50.0);
+                }
+                if kb_zoom_out {
+                    self.zoom = (effective_zoom / 1.25).clamp(0.01, 50.0);
+                }
+                if kb_zoom_fit {
+                    self.zoom = 0.0;
+                    self.pan_offset = egui::Vec2::ZERO;
+                }
+                if kb_zoom_1to1 {
+                    self.zoom = 1.0;
+                    self.pan_offset = egui::Vec2::ZERO;
+                }
 
                 // --- Scroll-to-zoom (anchored to cursor position) ---
                 let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll_delta != 0.0 && response.hovered() {
                     let zoom_factor = (scroll_delta * 0.002).exp();
-                    let new_zoom = (self.zoom * zoom_factor).clamp(0.1, 50.0);
+                    let new_zoom = (effective_zoom * zoom_factor).clamp(0.01, 50.0);
 
                     // Zoom towards the cursor: adjust pan so the point under
                     // the cursor stays fixed.
                     if let Some(pointer) = response.hover_pos() {
                         let panel_center = panel_rect.center();
-                        // The image center in screen space (before this zoom step):
                         let img_center = panel_center + self.pan_offset;
-                        // Cursor position relative to the image center:
                         let cursor_rel = pointer - img_center;
-                        // After zooming, the same image point should stay under
-                        // the cursor. Scale the offset accordingly.
-                        let ratio = new_zoom / self.zoom;
+                        let ratio = new_zoom / effective_zoom;
                         self.pan_offset = pointer - panel_center - cursor_rel * ratio;
                     }
 
@@ -427,14 +479,17 @@ impl eframe::App for BmpViewerApp {
                     self.pan_offset += response.drag_delta();
                 }
 
-                // --- Double-click to reset zoom ---
+                // --- Double-click to fit ---
                 if response.double_clicked() {
-                    self.zoom = 1.0;
+                    self.zoom = 0.0;
                     self.pan_offset = egui::Vec2::ZERO;
                 }
 
+                // Re-resolve after possible changes above.
+                let effective_zoom = if self.zoom == 0.0 { fit_scale } else { self.zoom };
+                let display_size = tex_size * effective_zoom;
+
                 // Clamp pan so the image can't be dragged entirely off-screen.
-                // Allow dragging until only 10% of the image remains visible.
                 let margin = display_size * 0.4;
                 let max_pan_x = ((display_size.x - avail.x) / 2.0 + margin.x).max(0.0);
                 let max_pan_y = ((display_size.y - avail.y) / 2.0 + margin.y).max(0.0);
@@ -454,18 +509,8 @@ impl eframe::App for BmpViewerApp {
                     egui::Color32::WHITE,
                 );
 
-                // Show zoom level indicator when zoomed.
-                if (self.zoom - 1.0).abs() > 0.01 {
-                    let zoom_text = format!("{:.0}%", self.zoom * base_scale * 100.0);
-                    let text_pos = panel_rect.left_bottom() + egui::vec2(8.0, -8.0);
-                    painter.text(
-                        text_pos,
-                        egui::Align2::LEFT_BOTTOM,
-                        zoom_text,
-                        egui::FontId::proportional(13.0),
-                        ui.visuals().text_color(),
-                    );
-                }
+                // Store effective zoom for the zoom bar (rendered before this panel).
+                self.last_effective_zoom = effective_zoom;
             } else {
                 ui.label("Load a BMP file to preview it.");
             }
