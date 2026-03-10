@@ -20,6 +20,8 @@ struct BmpViewerApp {
     decoded_stats: String,
     palette_colors: Vec<[u8; 4]>,
     texture: Option<egui::TextureHandle>,
+    /// The decoded image before any transforms (kept for pipeline reapply).
+    original_image: Option<DecodedImage>,
     transformed_image: Option<DecodedImage>,
     pipeline: TransformPipeline,
     save_format: SaveFormat,
@@ -48,6 +50,7 @@ impl Default for BmpViewerApp {
             decoded_stats: String::new(),
             palette_colors: Vec::new(),
             texture: None,
+            original_image: None,
             transformed_image: None,
             pipeline: TransformPipeline::default(),
             save_format: SaveFormat::default(),
@@ -131,6 +134,7 @@ impl BmpViewerApp {
         self.image_stats = info.image_stats;
         self.decoded_stats = info.decoded_stats;
         self.palette_colors = gui::palette::extract_palette_colors(&bmp);
+        self.original_image = Some(decoded.clone());
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
         self.loaded_path = Some(path.clone());
         self.status = format!("Loaded {}", path.display());
@@ -344,6 +348,8 @@ impl eframe::App for BmpViewerApp {
         let window_width = ctx.available_rect().width();
         let panel_max_width = (window_width - 220.0).clamp(220.0, 460.0);
 
+        let mut remove_transform: Option<usize> = None;
+
         egui::SidePanel::right("bmp_info")
             .default_width(320.0)
             .width_range(220.0..=panel_max_width)
@@ -356,14 +362,27 @@ impl eframe::App for BmpViewerApp {
                 } else {
                     let available_height = ui.available_height();
                     let has_palette = !self.palette_colors.is_empty();
+                    let has_transforms = !self.pipeline.is_empty();
+
+                    // Reserve a fixed height for the transforms section when present.
+                    // Each row is ~20px; cap the section at roughly 6 visible rows.
+                    let transform_height = if has_transforms {
+                        (self.pipeline.len() as f32 * 22.0 + 10.0).min(140.0)
+                    } else {
+                        0.0
+                    };
+                    // Account for separators/labels (~20px each section header).
+                    let overhead = if has_transforms { 24.0 } else { 0.0 };
+                    let remaining = (available_height - transform_height - overhead).max(200.0);
+
                     let (file_height, decoded_height, palette_height) = if has_palette {
-                        let file_h = (available_height * 0.38).max(100.0);
-                        let decoded_h = (available_height * 0.18).max(80.0);
-                        let palette_h = (available_height - file_h - decoded_h).max(120.0);
+                        let file_h = (remaining * 0.45).max(100.0);
+                        let decoded_h = (remaining * 0.20).max(80.0);
+                        let palette_h = (remaining - file_h - decoded_h).max(100.0);
                         (file_h, decoded_h, Some(palette_h))
                     } else {
-                        let file_h = (available_height * 0.62).max(120.0);
-                        let decoded_h = (available_height - file_h).max(90.0);
+                        let file_h = (remaining * 0.62).max(120.0);
+                        let decoded_h = (remaining - file_h).max(90.0);
                         (file_h, decoded_h, None)
                     };
 
@@ -384,6 +403,31 @@ impl eframe::App for BmpViewerApp {
                             ui.monospace(&self.decoded_stats);
                         });
 
+                    if has_transforms {
+                        ui.separator();
+                        ui.label(format!("Transforms ({})", self.pipeline.len()));
+                        egui::ScrollArea::vertical()
+                            .id_salt("transforms_scroll")
+                            .max_height(transform_height)
+                            .show(ui, |ui| {
+                                for (i, op) in self.pipeline.ops().iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(format!("{}.", i + 1));
+                                        ui.label(op.to_string());
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if ui
+                                                .small_button("\u{00d7}")
+                                                .on_hover_text("Remove this transform")
+                                                .clicked()
+                                            {
+                                                remove_transform = Some(i);
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                    }
+
                     if let Some(palette_height) = palette_height {
                         ui.separator();
                         ui.label("Color Palette");
@@ -396,6 +440,15 @@ impl eframe::App for BmpViewerApp {
                     }
                 }
             });
+
+        // Handle transform removal outside the panel closure (needs &mut self).
+        if let Some(index) = remove_transform {
+            self.pipeline.remove(index);
+            if let Some(original) = &self.original_image {
+                let result = self.pipeline.apply(original);
+                self.set_display_image(ctx, result, "transformed".to_owned());
+            }
+        }
 
         // --- Zoom status bar (below the viewer, above CentralPanel) ---
         if self.texture.is_some() {

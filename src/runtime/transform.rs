@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::runtime::decode::DecodedImage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -6,6 +8,17 @@ pub enum ImageTransform {
     RotateRight90,
     MirrorHorizontal,
     InvertColors,
+}
+
+impl fmt::Display for ImageTransform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RotateLeft90 => write!(f, "Rotate Left"),
+            Self::RotateRight90 => write!(f, "Rotate Right"),
+            Self::MirrorHorizontal => write!(f, "Mirror"),
+            Self::InvertColors => write!(f, "Invert Colors"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -20,6 +33,22 @@ impl TransformPipeline {
 
     pub fn clear(&mut self) {
         self.ops.clear();
+    }
+
+    pub fn ops(&self) -> &[ImageTransform] {
+        &self.ops
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    pub fn remove(&mut self, index: usize) {
+        self.ops.remove(index);
     }
 
     pub fn apply(&self, image: &DecodedImage) -> DecodedImage {
