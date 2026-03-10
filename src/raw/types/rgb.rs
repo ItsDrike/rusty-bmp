@@ -14,7 +14,7 @@ use crate::raw::error::ValidationError;
 ///
 /// Reference:
 /// <https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-rgbtriple>
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RgbTriple {
     /// The intensity of blue in the color.
     pub blue: u8,
@@ -55,7 +55,7 @@ impl RgbTriple {
 ///
 /// Reference:
 /// <https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-rgbquad>
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RgbQuad {
     /// The intensity of blue in the color.
     pub blue: u8,

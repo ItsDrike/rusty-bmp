@@ -9,7 +9,7 @@ pub struct DecodedImage {
     pub rgba: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompressionDecoder {
     Rgb,
     Rle4,

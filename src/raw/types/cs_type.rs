@@ -10,7 +10,7 @@ use crate::raw::helpers::wingdi;
 /// The color type does not change how the pixel data is stored in the bitmap.
 /// Instead, it defines how the stored RGB values should be interpreted by a
 /// color-managed system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorSpaceType {
     /// LCS_CALIBRATED_RGB
     ///

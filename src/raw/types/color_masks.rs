@@ -97,7 +97,7 @@ fn validate_masks_for_bpp(masks: &[(u32, ColorMaskChannel)], bpp: BitsPerPixel) 
 }
 
 /// Identifies which color channel a bitmask corresponds to.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorMaskChannel {
     Red,
     Green,
@@ -130,7 +130,7 @@ impl core::fmt::Display for ColorMaskChannel {
 /// Note that for the V3 embedded masks, some BMPs utilize a special compression
 /// variant called `BI_ALPHABITFIELDS`, which implies that the contained
 /// bitmasks do hold an alpha mask too.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorMasks {
     /// Red, green, and blue masks only.
     Rgb(RgbMasks),
@@ -149,7 +149,7 @@ pub enum ColorMasks {
 /// bits.
 ///
 /// Identical to [`RgbaMasks`], but without an alpha channel.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RgbMasks {
     pub red_mask: u32,
     pub green_mask: u32,
@@ -188,7 +188,7 @@ pub struct RgbMasks {
 /// green = 0b00000000_00000000_11111111_00000000  (0x0000FF00)
 /// blue  = 0b00000000_00000000_00000000_11111111  (0x000000FF)
 /// ```
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RgbaMasks {
     pub red_mask: u32,
     pub green_mask: u32,

@@ -18,7 +18,7 @@ use crate::raw::{
 ///
 /// Note:
 /// This is the most commonly used format for storing BMPs.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BitmapInfoHeader {
     /// The width of the bitmap, in pixels.
     ///

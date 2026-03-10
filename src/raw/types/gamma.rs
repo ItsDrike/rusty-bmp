@@ -7,7 +7,7 @@ use crate::raw::FixedPoint16Dot16;
 /// This is only meaningful when the color space type is CalibratedRgb.
 ///
 /// Values are in fixed-point 16.16 format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GammaTriple {
     /// Toned response curve for red.
     pub red: FixedPoint16Dot16,

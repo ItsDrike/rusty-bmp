@@ -9,7 +9,7 @@ use crate::raw::{error::ValidationError, helpers::wingdi, BitsPerPixel};
 /// The numeric values are part of the BMP file format specification.
 /// Not all compression methods are valid or meaningful for all DIB
 /// header versions or bits-per-pixel values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Compression {
     /// BI_RGB (0) – no compression.
     ///

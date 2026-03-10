@@ -14,7 +14,7 @@ use crate::raw::FixedPoint2Dot30;
 /// <https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-ciexyz>
 ///
 /// See the 1931 CIE XYZ standard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CieXyz {
     /// The x coordinate in fix point (2.30).
     pub x: FixedPoint2Dot30,
@@ -57,7 +57,7 @@ impl CieXyz {
 /// <https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-ciexyztriple>
 ///
 /// See the 1931 CIE XYZ standard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CieXyzTriple {
     /// The xyz coordinates of red endpoint.
     pub red: CieXyz,

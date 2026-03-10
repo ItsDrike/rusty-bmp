@@ -22,7 +22,7 @@ use crate::raw::{
 /// Note:
 /// This is a fairly commonly used format for storing modern BMPs, though not as
 /// common as the INFO header variant.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BitmapV4Header {
     /// This format fully contains all fields from the INFO header.
     ///

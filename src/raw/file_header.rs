@@ -14,7 +14,7 @@ use crate::raw::{error::ValidationError, helpers::read_array};
 ///
 /// Reference:
 /// <https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapfileheader>
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileHeader {
     /// The signature / file type must be 0x4d42 (the ASCII string "BM")
     pub signature: [u8; 2],

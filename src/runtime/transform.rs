@@ -1,6 +1,6 @@
 use crate::runtime::decode::DecodedImage;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageTransform {
     RotateLeft90,
     RotateRight90,

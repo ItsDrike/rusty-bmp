@@ -50,7 +50,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 /// fine, as again, CIE XYZ values should realistically be positive and never
 /// cross 2.0, so whether or not we represent it as signed or unsigned, it's
 /// likely that we won't even get to values where this becomes a concern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FixedPoint2Dot30 {
     /// The raw fixed point value.
     raw: u32,
@@ -167,7 +167,7 @@ impl FixedPoint2Dot30 {
 /// in the field descriptions.
 /// Reference:
 /// <https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapv4header>
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FixedPoint16Dot16 {
     /// The raw fixed point value.
     raw: u32,

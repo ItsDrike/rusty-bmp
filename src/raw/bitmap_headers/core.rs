@@ -24,7 +24,7 @@ use crate::raw::{
 ///
 /// Note:
 /// This format is obsolete and rarely encountered today.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BitmapCoreHeader {
     /// The width of the bitmap, in pixels.
     ///

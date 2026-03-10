@@ -5,7 +5,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::raw::{error::ValidationError, DibVariant};
 
 /// Recognized valid Bits-Per-Pixel (color depth) values for a DIB
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BitsPerPixel {
     /// The number of bits per pixel is specified or implied by the JPEG or PNG
     /// file format.

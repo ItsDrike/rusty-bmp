@@ -39,7 +39,7 @@ pub enum EncodeError {
 }
 
 /// Selects the BMP pixel format used when saving.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SaveFormat {
     /// BI_RGB, 1 bit per pixel (monochrome), palette of 2 colors.
     Rgb1,
@@ -162,7 +162,7 @@ impl std::fmt::Display for SaveFormat {
 // ===========================================================================
 
 /// Selects the BMP header version used when saving.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SaveHeaderVersion {
     /// BITMAPCOREHEADER (12 bytes). Only supports Rgb1/4/8/24.
     /// Dimensions limited to u16 (max 65535). Always bottom-up.

@@ -11,7 +11,7 @@ pub(crate) const MAX_COLOR_TABLE_ENTRIES: usize = 1 << 16;
 pub(crate) const MAX_PIXEL_BYTES: usize = 512 * 1024 * 1024; // 512 MB
 pub(crate) const MAX_ICC_PROFILE_BYTES: usize = 16 * 1024 * 1024; // 16 MB
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DibVariant {
     Core,
     Info,
@@ -82,7 +82,7 @@ impl ColorTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapCoreData {
     pub file_header: FileHeader,
 
@@ -93,7 +93,7 @@ pub struct BitmapCoreData {
     pub bitmap_array: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapInfoData {
     pub file_header: FileHeader,
 
@@ -107,7 +107,7 @@ pub struct BitmapInfoData {
 
     pub bitmap_array: Vec<u8>,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapV4Data {
     pub file_header: FileHeader,
 
@@ -118,7 +118,7 @@ pub struct BitmapV4Data {
     pub bitmap_array: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapV5Data {
     pub file_header: FileHeader,
 
@@ -131,7 +131,7 @@ pub struct BitmapV5Data {
     pub icc_profile: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Bmp {
     Core(BitmapCoreData),
     Info(BitmapInfoData),

@@ -3,7 +3,7 @@ use rstest::rstest;
 
 use super::support::{bmpsuite_root, parse_bmp, require_suite_generated};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum DibVariant {
     Core,
     Info,
@@ -11,7 +11,7 @@ enum DibVariant {
     V5,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DibExpectation {
     variant: DibVariant,
     width: i32,
