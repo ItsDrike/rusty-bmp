@@ -159,7 +159,7 @@ impl BmpViewerApp {
         }
     }
 
-    fn save_to_path(&mut self, path: &std::path::Path) {
+    fn save_to_path(&mut self, ctx: &egui::Context, path: &std::path::Path) {
         let Some(image) = self.transformed_image.as_ref() else {
             self.status = "Nothing to save".to_owned();
             return;
@@ -179,6 +179,9 @@ impl BmpViewerApp {
                     self.save_format,
                     self.save_header_version
                 );
+                // Re-load from disk so metadata, original_image, and pipeline
+                // all reflect the file as it was actually written.
+                self.load_path(ctx, path.to_path_buf());
             }
             Err(err) => {
                 self.status = format!("Save failed: {err}");
@@ -186,7 +189,7 @@ impl BmpViewerApp {
         }
     }
 
-    fn save_current(&mut self) {
+    fn save_current(&mut self, ctx: &egui::Context) {
         if self.transformed_image.is_none() {
             self.status = "Nothing to save".to_owned();
             return;
@@ -201,16 +204,16 @@ impl BmpViewerApp {
             return;
         };
 
-        self.save_to_path(&path);
+        self.save_to_path(ctx, &path);
     }
 
-    fn save_overwrite(&mut self) {
+    fn save_overwrite(&mut self, ctx: &egui::Context) {
         let Some(path) = self.loaded_path.clone() else {
             self.status = "No file to overwrite".to_owned();
             return;
         };
 
-        self.save_to_path(&path);
+        self.save_to_path(ctx, &path);
     }
 }
 
@@ -233,10 +236,10 @@ impl eframe::App for BmpViewerApp {
             self.pick_and_load(ctx);
         }
         if kb_save {
-            self.save_overwrite();
+            self.save_overwrite(ctx);
         }
         if kb_save_as {
-            self.save_current();
+            self.save_current(ctx);
         }
 
         // --- Drag & drop file loading ---
@@ -334,10 +337,10 @@ impl eframe::App for BmpViewerApp {
                     self.apply_and_refresh(ctx, ImageTransform::InvertColors);
                 }
                 if save_as_clicked {
-                    self.save_current();
+                    self.save_current(ctx);
                 }
                 if save_clicked {
-                    self.save_overwrite();
+                    self.save_overwrite(ctx);
                 }
             });
             if !self.status.is_empty() {
