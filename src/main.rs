@@ -235,6 +235,34 @@ impl eframe::App for BmpViewerApp {
             self.save_current();
         }
 
+        // --- Drag & drop file loading ---
+        // Note: this relies on winit's WindowEvent::DroppedFile, which is NOT
+        // implemented on Wayland as of winit 0.30.x (see winit#1881). It works
+        // fine on X11 and will work on Wayland once winit merges DnD support.
+        let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+        if let Some(file) = dropped_files.first() {
+            if let Some(path) = &file.path {
+                self.path_input = path.display().to_string();
+                self.load_path(ctx, path.clone());
+            }
+        }
+        if !dropped_files.is_empty() {
+            eprintln!(
+                "[dnd] dropped {} file(s): {:?}",
+                dropped_files.len(),
+                dropped_files
+                    .iter()
+                    .map(|f| (&f.path, &f.name, f.bytes.as_ref().map(|b| b.len())))
+                    .collect::<Vec<_>>()
+            );
+        }
+        if let Some(file) = dropped_files.first() {
+            if let Some(path) = &file.path {
+                self.path_input = path.display().to_string();
+                self.load_path(ctx, path.clone());
+            }
+        }
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("BMP Path:");
@@ -578,7 +606,34 @@ impl eframe::App for BmpViewerApp {
                 // Store effective zoom for the zoom bar (rendered before this panel).
                 self.last_effective_zoom = effective_zoom;
             } else {
-                ui.label("Load a BMP file to preview it.");
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() / 3.0);
+                    ui.heading("No image loaded");
+                    ui.add_space(8.0);
+                    ui.label("Use the Browse button or Ctrl+O to open a BMP file.");
+                    ui.label("You can also type a path into the text field above.");
+
+                    // Drag & drop hint — but warn on Wayland where it doesn't work.
+                    let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+                    let warn_color = egui::Color32::from_rgb(200, 170, 60);
+                    if on_wayland {
+                        ui.add_space(12.0);
+                        ui.colored_label(warn_color, "⚠ Drag & drop is not available under Wayland.");
+                        let exe = std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                            .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_owned());
+                        ui.colored_label(warn_color, "To enable it, restart in X11 mode (requires XWayland):");
+                        ui.label(
+                            egui::RichText::new(format!("env -u WAYLAND_DISPLAY {exe}"))
+                                .monospace()
+                                .color(warn_color),
+                        );
+                    } else {
+                        ui.add_space(12.0);
+                        ui.label("Or drag and drop a BMP file anywhere in this window.");
+                    }
+                });
             }
         });
     }
