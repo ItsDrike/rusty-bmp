@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use bmp::runtime::{encode::SaveHeaderVersion, transform::ImageTransform};
+use bmp::runtime::{
+    encode::SaveHeaderVersion,
+    transform::{ConvolutionFilter, ImageTransform},
+};
 
 use crate::BmpViewerApp;
 
@@ -48,6 +51,11 @@ impl BmpViewerApp {
                 ui.separator();
                 let contrast_down = ui.button("Contrast -").clicked();
                 let contrast_up = ui.button("Contrast +").clicked();
+                ui.separator();
+                let blur = ui.button("Blur").clicked();
+                let sharpen = ui.button("Sharpen").clicked();
+                let edge = ui.button("Edge Detect").clicked();
+                let emboss = ui.button("Emboss").clicked();
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
                 }
@@ -77,6 +85,18 @@ impl BmpViewerApp {
                 }
                 if contrast_up {
                     self.apply_and_refresh(ctx, ImageTransform::Contrast(10));
+                }
+                if blur {
+                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::Blur));
+                }
+                if sharpen {
+                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::Sharpen));
+                }
+                if edge {
+                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::EdgeDetect));
+                }
+                if emboss {
+                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::Emboss));
                 }
             });
 

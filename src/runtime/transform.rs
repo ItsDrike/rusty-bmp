@@ -2,6 +2,87 @@ use std::fmt;
 
 use crate::runtime::decode::DecodedImage;
 
+/// A convolution kernel of arbitrary odd size (3x3, 5x5, 7x7, ...).
+///
+/// Weights are stored in row-major order. The `divisor` normalizes the weighted
+/// sum, and `bias` is added after division (useful for emboss-style filters
+/// where output is centered around 128 instead of 0).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Kernel {
+    pub weights: Vec<i32>,
+    /// Side length of the kernel (must be odd, >= 1).
+    pub size: usize,
+    /// Normalization divisor applied after summing weighted neighbors.
+    pub divisor: i32,
+    /// Constant added after division (e.g. 128 for relief/emboss filters).
+    pub bias: i32,
+}
+
+impl Kernel {
+    /// Create a new kernel. Panics if `size` is even or zero, if `weights`
+    /// length does not equal `size * size`, or if `divisor` is zero.
+    pub fn new(weights: Vec<i32>, size: usize, divisor: i32, bias: i32) -> Self {
+        assert!(
+            size > 0 && size % 2 == 1,
+            "kernel size must be odd and positive, got {size}"
+        );
+        assert_eq!(
+            weights.len(),
+            size * size,
+            "expected {} weights for {size}x{size} kernel, got {}",
+            size * size,
+            weights.len()
+        );
+        assert_ne!(divisor, 0, "kernel divisor must not be zero");
+        Self {
+            weights,
+            size,
+            divisor,
+            bias,
+        }
+    }
+}
+
+/// Named convolution filter presets.
+///
+/// Each variant maps to a specific [`Kernel`] via [`ConvolutionFilter::kernel()`].
+/// New filters can be added by defining a variant here and returning the
+/// appropriate kernel.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConvolutionFilter {
+    Blur,
+    Sharpen,
+    EdgeDetect,
+    Emboss,
+}
+
+impl ConvolutionFilter {
+    /// Returns the convolution kernel for this filter preset.
+    pub fn kernel(&self) -> Kernel {
+        match self {
+            // Gaussian blur 3x3 — weighted average, softens image.
+            Self::Blur => Kernel::new(vec![1, 2, 1, 2, 4, 2, 1, 2, 1], 3, 16, 0),
+            // Sharpening — emphasizes differences from neighbors.
+            Self::Sharpen => Kernel::new(vec![0, -1, 0, -1, 5, -1, 0, -1, 0], 3, 1, 0),
+            // Laplacian edge detection — highlights regions of rapid intensity change.
+            Self::EdgeDetect => Kernel::new(vec![-1, -1, -1, -1, 8, -1, -1, -1, -1], 3, 1, 0),
+            // Emboss — directional relief effect, biased to gray midpoint.
+            Self::Emboss => Kernel::new(vec![-2, -1, 0, -1, 1, 1, 0, 1, 2], 3, 1, 128),
+        }
+    }
+}
+
+impl fmt::Display for ConvolutionFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Blur => write!(f, "Blur"),
+            Self::Sharpen => write!(f, "Sharpen"),
+            Self::EdgeDetect => write!(f, "Edge Detect"),
+            Self::Emboss => write!(f, "Emboss"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageTransform {
     RotateLeft90,
@@ -14,6 +95,8 @@ pub enum ImageTransform {
     Brightness(i16),
     /// Adjust contrast by a signed delta using the standard 259-based formula.
     Contrast(i16),
+    /// Apply a convolution filter (blur, sharpen, etc.).
+    Convolution(ConvolutionFilter),
 }
 
 impl fmt::Display for ImageTransform {
@@ -39,6 +122,7 @@ impl fmt::Display for ImageTransform {
                     write!(f, "Contrast {delta}")
                 }
             }
+            Self::Convolution(filter) => write!(f, "{filter}"),
         }
     }
 }
@@ -57,6 +141,7 @@ impl ImageTransform {
             Self::Grayscale => None,
             Self::Brightness(_) => None,
             Self::Contrast(_) => None,
+            Self::Convolution(_) => None,
         }
     }
 }
@@ -114,6 +199,7 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
         ImageTransform::Grayscale => grayscale(image),
         ImageTransform::Brightness(delta) => brightness(image, *delta),
         ImageTransform::Contrast(delta) => contrast(image, *delta),
+        ImageTransform::Convolution(filter) => apply_convolution(image, &filter.kernel()),
     }
 }
 
@@ -277,9 +363,57 @@ pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
     }
 }
 
+/// Apply an arbitrary NxN convolution kernel to an image.
+///
+/// For each pixel, the kernel is centered on it and the weighted sum of
+/// neighboring pixel values is computed per channel (R, G, B). The result
+/// is divided by `kernel.divisor` and `kernel.bias` is added. Out-of-bounds
+/// neighbor coordinates are clamped to the nearest edge pixel.
+///
+/// Alpha is passed through unchanged.
+pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
+    let w = image.width as usize;
+    let h = image.height as usize;
+    let half = (kernel.size / 2) as isize;
+    let mut out = vec![0u8; w * h * 4];
+
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum_r: i32 = 0;
+            let mut sum_g: i32 = 0;
+            let mut sum_b: i32 = 0;
+
+            for ky in 0..kernel.size {
+                for kx in 0..kernel.size {
+                    let sy = (y as isize + ky as isize - half).clamp(0, h as isize - 1) as usize;
+                    let sx = (x as isize + kx as isize - half).clamp(0, w as isize - 1) as usize;
+                    let src = (sy * w + sx) * 4;
+                    let weight = kernel.weights[ky * kernel.size + kx];
+
+                    sum_r += image.rgba[src] as i32 * weight;
+                    sum_g += image.rgba[src + 1] as i32 * weight;
+                    sum_b += image.rgba[src + 2] as i32 * weight;
+                }
+            }
+
+            let dst = (y * w + x) * 4;
+            out[dst] = (sum_r / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            out[dst + 1] = (sum_g / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            out[dst + 2] = (sum_b / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            out[dst + 3] = image.rgba[(y * w + x) * 4 + 3]; // alpha unchanged
+        }
+    }
+
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba: out,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{apply_transform, invert_colors, ImageTransform};
+    use super::{apply_convolution, apply_transform, invert_colors, ConvolutionFilter, ImageTransform, Kernel};
     use crate::runtime::decode::DecodedImage;
 
     #[test]
@@ -340,6 +474,13 @@ mod tests {
         assert_eq!(ImageTransform::Brightness(-10).inverse(), None);
         assert_eq!(ImageTransform::Contrast(10).inverse(), None);
         assert_eq!(ImageTransform::Contrast(-10).inverse(), None);
+        assert_eq!(ImageTransform::Convolution(ConvolutionFilter::Blur).inverse(), None);
+        assert_eq!(ImageTransform::Convolution(ConvolutionFilter::Sharpen).inverse(), None);
+        assert_eq!(
+            ImageTransform::Convolution(ConvolutionFilter::EdgeDetect).inverse(),
+            None
+        );
+        assert_eq!(ImageTransform::Convolution(ConvolutionFilter::Emboss).inverse(), None);
     }
 
     #[test]
@@ -490,5 +631,146 @@ mod tests {
         assert_eq!(ImageTransform::Contrast(10).to_string(), "Contrast +10");
         assert_eq!(ImageTransform::Contrast(-10).to_string(), "Contrast -10");
         assert_eq!(ImageTransform::Contrast(0).to_string(), "Contrast +0");
+    }
+
+    // --- Kernel validation ---
+
+    #[test]
+    #[should_panic(expected = "kernel size must be odd and positive")]
+    fn kernel_rejects_even_size() {
+        Kernel::new(vec![1; 4], 2, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "kernel size must be odd and positive")]
+    fn kernel_rejects_zero_size() {
+        Kernel::new(vec![], 0, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected 9 weights")]
+    fn kernel_rejects_wrong_weight_count() {
+        Kernel::new(vec![1, 2, 3, 4], 3, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "kernel divisor must not be zero")]
+    fn kernel_rejects_zero_divisor() {
+        Kernel::new(vec![1; 9], 3, 0, 0);
+    }
+
+    // --- Convolution engine ---
+
+    #[test]
+    fn convolution_identity_kernel_preserves_image() {
+        // Identity kernel: [0,0,0, 0,1,0, 0,0,0] / 1
+        let image = DecodedImage {
+            width: 3,
+            height: 3,
+            rgba: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
+                180, 255, 190, 200, 210, 255, 220, 230, 240, 255, 250, 240, 230, 255,
+            ],
+        };
+        let kernel = Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0);
+        let result = apply_convolution(&image, &kernel);
+        assert_eq!(result.rgba, image.rgba);
+    }
+
+    #[test]
+    fn convolution_preserves_alpha() {
+        let image = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![
+                100, 100, 100, 42, 100, 100, 100, 99, 100, 100, 100, 200, 100, 100, 100, 0,
+            ],
+        };
+        let kernel = Kernel::new(vec![1; 9], 3, 9, 0);
+        let result = apply_convolution(&image, &kernel);
+        // Alpha should be passed through unchanged.
+        assert_eq!(result.rgba[3], 42);
+        assert_eq!(result.rgba[7], 99);
+        assert_eq!(result.rgba[11], 200);
+        assert_eq!(result.rgba[15], 0);
+    }
+
+    #[test]
+    fn convolution_uniform_image_unchanged_by_blur() {
+        // A uniform-color image should be unchanged by any averaging filter.
+        let image = DecodedImage {
+            width: 4,
+            height: 4,
+            rgba: [120, 80, 200, 255].repeat(16),
+        };
+        let result = apply_convolution(&image, &ConvolutionFilter::Blur.kernel());
+        assert_eq!(result.rgba, image.rgba);
+    }
+
+    #[test]
+    fn convolution_blur_reduces_contrast() {
+        // A 3x3 image with a bright center pixel — blur should reduce the center value.
+        let image = DecodedImage {
+            width: 3,
+            height: 3,
+            rgba: vec![
+                0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0,
+                255, 0, 0, 0, 255, 0, 0, 0, 255,
+            ],
+        };
+        let result = apply_convolution(&image, &ConvolutionFilter::Blur.kernel());
+        let center = (1 * 3 + 1) * 4;
+        // Center was 255, should now be 255*4/16 = 63 (only center weight 4 hits the bright pixel).
+        assert_eq!(result.rgba[center], 63);
+        assert_eq!(result.rgba[center + 1], 63);
+        assert_eq!(result.rgba[center + 2], 63);
+    }
+
+    #[test]
+    fn convolution_bias_offsets_result() {
+        // With bias=128 and identity kernel, result should be original + 128 (clamped).
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![50, 100, 200, 255],
+        };
+        let kernel = Kernel::new(vec![1], 1, 1, 128);
+        let result = apply_convolution(&image, &kernel);
+        assert_eq!(result.rgba[0], 178); // 50+128
+        assert_eq!(result.rgba[1], 228); // 100+128
+        assert_eq!(result.rgba[2], 255); // 200+128=328 → clamped to 255
+    }
+
+    #[test]
+    fn convolution_clamps_negative_to_zero() {
+        // Edge detect on uniform image should produce zeros (all differences are 0).
+        let image = DecodedImage {
+            width: 3,
+            height: 3,
+            rgba: [100, 100, 100, 255].repeat(9),
+        };
+        let result = apply_convolution(&image, &ConvolutionFilter::EdgeDetect.kernel());
+        for chunk in result.rgba.chunks_exact(4) {
+            assert_eq!(chunk[0], 0);
+            assert_eq!(chunk[1], 0);
+            assert_eq!(chunk[2], 0);
+        }
+    }
+
+    #[test]
+    fn convolution_display_formats() {
+        assert_eq!(ImageTransform::Convolution(ConvolutionFilter::Blur).to_string(), "Blur");
+        assert_eq!(
+            ImageTransform::Convolution(ConvolutionFilter::Sharpen).to_string(),
+            "Sharpen"
+        );
+        assert_eq!(
+            ImageTransform::Convolution(ConvolutionFilter::EdgeDetect).to_string(),
+            "Edge Detect"
+        );
+        assert_eq!(
+            ImageTransform::Convolution(ConvolutionFilter::Emboss).to_string(),
+            "Emboss"
+        );
     }
 }
