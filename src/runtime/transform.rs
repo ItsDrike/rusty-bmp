@@ -51,6 +51,10 @@ impl TransformPipeline {
         self.ops.remove(index);
     }
 
+    pub fn pop(&mut self) -> Option<ImageTransform> {
+        self.ops.pop()
+    }
+
     pub fn apply(&self, image: &DecodedImage) -> DecodedImage {
         let mut out = image.clone();
         for op in &self.ops {

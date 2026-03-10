@@ -24,6 +24,8 @@ struct BmpViewerApp {
     original_image: Option<DecodedImage>,
     transformed_image: Option<DecodedImage>,
     pipeline: TransformPipeline,
+    /// Transforms that were undone, available for redo. Cleared on new transform or step removal.
+    redo_stack: Vec<ImageTransform>,
     save_format: SaveFormat,
     save_header_version: SaveHeaderVersion,
     source_metadata: Option<SourceMetadata>,
@@ -53,6 +55,7 @@ impl Default for BmpViewerApp {
             original_image: None,
             transformed_image: None,
             pipeline: TransformPipeline::default(),
+            redo_stack: Vec::new(),
             save_format: SaveFormat::default(),
             save_header_version: SaveHeaderVersion::default(),
             source_metadata: None,
@@ -155,7 +158,28 @@ impl BmpViewerApp {
         if let Some(current) = self.transformed_image.as_ref() {
             let next = apply_transform(current, op);
             self.pipeline.push(op);
+            self.redo_stack.clear();
             self.set_display_image(ctx, next, "transformed".to_owned());
+        }
+    }
+
+    fn undo_transform(&mut self, ctx: &egui::Context) {
+        if let Some(op) = self.pipeline.pop() {
+            self.redo_stack.push(op);
+            if let Some(original) = &self.original_image {
+                let result = self.pipeline.apply(original);
+                self.set_display_image(ctx, result, "transformed".to_owned());
+            }
+        }
+    }
+
+    fn redo_transform(&mut self, ctx: &egui::Context) {
+        if let Some(op) = self.redo_stack.pop() {
+            if let Some(current) = self.transformed_image.as_ref() {
+                let next = apply_transform(current, op);
+                self.pipeline.push(op);
+                self.set_display_image(ctx, next, "transformed".to_owned());
+            }
         }
     }
 
@@ -228,9 +252,12 @@ impl eframe::App for BmpViewerApp {
                 cmd && i.key_pressed(egui::Key::O),           // Open
                 cmd && !shift && i.key_pressed(egui::Key::S), // Save
                 cmd && shift && i.key_pressed(egui::Key::S),  // Save As
+                cmd && !shift && i.key_pressed(egui::Key::Z), // Undo
+                cmd && (shift && i.key_pressed(egui::Key::Z)  // Redo (Ctrl+Shift+Z)
+                    || i.key_pressed(egui::Key::Y)), // Redo (Ctrl+Y)
             )
         });
-        let (kb_open, kb_save, kb_save_as) = kb;
+        let (kb_open, kb_save, kb_save_as, kb_undo, kb_redo) = kb;
 
         if kb_open {
             self.pick_and_load(ctx);
@@ -240,6 +267,12 @@ impl eframe::App for BmpViewerApp {
         }
         if kb_save_as {
             self.save_current(ctx);
+        }
+        if kb_undo {
+            self.undo_transform(ctx);
+        }
+        if kb_redo {
+            self.redo_transform(ctx);
         }
 
         // --- Drag & drop file loading ---
@@ -352,6 +385,8 @@ impl eframe::App for BmpViewerApp {
         let panel_max_width = (window_width - 220.0).clamp(220.0, 460.0);
 
         let mut remove_transform: Option<usize> = None;
+        let mut do_undo = false;
+        let mut do_redo = false;
 
         egui::SidePanel::right("bmp_info")
             .default_width(320.0)
@@ -365,12 +400,15 @@ impl eframe::App for BmpViewerApp {
                 } else {
                     let available_height = ui.available_height();
                     let has_palette = !self.palette_colors.is_empty();
-                    let has_transforms = !self.pipeline.is_empty();
+                    let has_transforms = !self.pipeline.is_empty() || !self.redo_stack.is_empty();
 
                     // Reserve a fixed height for the transforms section when present.
                     // Each row is ~20px; cap the section at roughly 6 visible rows.
+                    // Add extra space for the undo/redo button row.
                     let transform_height = if has_transforms {
-                        (self.pipeline.len() as f32 * 22.0 + 10.0).min(140.0)
+                        let list_h = self.pipeline.len() as f32 * 22.0 + 10.0;
+                        let buttons_h = 26.0;
+                        (list_h + buttons_h).min(170.0)
                     } else {
                         0.0
                     };
@@ -408,11 +446,46 @@ impl eframe::App for BmpViewerApp {
 
                     if has_transforms {
                         ui.separator();
-                        ui.label(format!("Transforms ({})", self.pipeline.len()));
+                        ui.label(if self.pipeline.is_empty() {
+                            "Transforms".to_owned()
+                        } else {
+                            format!("Transforms ({})", self.pipeline.len())
+                        });
                         egui::ScrollArea::vertical()
                             .id_salt("transforms_scroll")
                             .max_height(transform_height)
                             .show(ui, |ui| {
+                                // Undo / Redo buttons.
+                                ui.horizontal(|ui| {
+                                    let can_undo = !self.pipeline.is_empty();
+                                    let undo_tooltip = if let Some(op) = self.pipeline.ops().last() {
+                                        format!("Undo {} (Ctrl+Z)", op)
+                                    } else {
+                                        "Nothing to undo".to_owned()
+                                    };
+                                    if ui
+                                        .add_enabled(can_undo, egui::Button::new("Undo").small())
+                                        .on_hover_text(&undo_tooltip)
+                                        .clicked()
+                                    {
+                                        do_undo = true;
+                                    }
+
+                                    let can_redo = !self.redo_stack.is_empty();
+                                    let redo_tooltip = if let Some(op) = self.redo_stack.last() {
+                                        format!("Redo {} (Ctrl+Shift+Z)", op)
+                                    } else {
+                                        "Nothing to redo".to_owned()
+                                    };
+                                    if ui
+                                        .add_enabled(can_redo, egui::Button::new("Redo").small())
+                                        .on_hover_text(&redo_tooltip)
+                                        .clicked()
+                                    {
+                                        do_redo = true;
+                                    }
+                                });
+
                                 for (i, op) in self.pipeline.ops().iter().enumerate() {
                                     ui.horizontal(|ui| {
                                         ui.monospace(format!("{}.", i + 1));
@@ -444,13 +517,20 @@ impl eframe::App for BmpViewerApp {
                 }
             });
 
-        // Handle transform removal outside the panel closure (needs &mut self).
+        // Handle transform removal / undo / redo outside the panel closure (needs &mut self).
         if let Some(index) = remove_transform {
             self.pipeline.remove(index);
+            self.redo_stack.clear();
             if let Some(original) = &self.original_image {
                 let result = self.pipeline.apply(original);
                 self.set_display_image(ctx, result, "transformed".to_owned());
             }
+        }
+        if do_undo {
+            self.undo_transform(ctx);
+        }
+        if do_redo {
+            self.redo_transform(ctx);
         }
 
         // --- Zoom status bar (below the viewer, above CentralPanel) ---
