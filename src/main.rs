@@ -13,7 +13,6 @@ use rfd::FileDialog;
 
 mod gui;
 
-#[derive(Default)]
 struct BmpViewerApp {
     path_input: String,
     status: String,
@@ -26,6 +25,31 @@ struct BmpViewerApp {
     save_format: SaveFormat,
     save_header_version: SaveHeaderVersion,
     source_metadata: Option<SourceMetadata>,
+
+    /// Current zoom level (1.0 = fit-to-window, >1.0 = zoomed in).
+    zoom: f32,
+    /// Pan offset in screen pixels (relative to the centered image position).
+    pan_offset: egui::Vec2,
+}
+
+impl Default for BmpViewerApp {
+    fn default() -> Self {
+        Self {
+            path_input: String::new(),
+            status: String::new(),
+            image_stats: String::new(),
+            decoded_stats: String::new(),
+            palette_colors: Vec::new(),
+            texture: None,
+            transformed_image: None,
+            pipeline: TransformPipeline::default(),
+            save_format: SaveFormat::default(),
+            save_header_version: SaveHeaderVersion::default(),
+            source_metadata: None,
+            zoom: 1.0,
+            pan_offset: egui::Vec2::ZERO,
+        }
+    }
 }
 
 impl BmpViewerApp {
@@ -60,6 +84,8 @@ impl BmpViewerApp {
             egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
         self.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
         self.transformed_image = Some(image);
+        self.zoom = 1.0;
+        self.pan_offset = egui::Vec2::ZERO;
     }
 
     fn load_path(&mut self, ctx: &egui::Context, path: PathBuf) {
@@ -289,14 +315,93 @@ impl eframe::App for BmpViewerApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(texture) = &self.texture {
                 let avail = ui.available_size();
-                let mut size = texture.size_vec2();
-                if size.x > avail.x || size.y > avail.y {
-                    let scale = (avail.x / size.x).min(avail.y / size.y);
-                    if scale.is_finite() && scale > 0.0 {
-                        size *= scale;
+                let tex_size = texture.size_vec2();
+
+                // Compute the base scale that fits the image within the panel
+                // (same as the old logic, but now it's the "1x" baseline).
+                let base_scale = if tex_size.x > avail.x || tex_size.y > avail.y {
+                    let s = (avail.x / tex_size.x).min(avail.y / tex_size.y);
+                    if s.is_finite() && s > 0.0 {
+                        s
+                    } else {
+                        1.0
                     }
+                } else {
+                    1.0
+                };
+
+                let display_size = tex_size * base_scale * self.zoom;
+
+                // Allocate the full available area and sense drag + scroll.
+                let (panel_rect, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
+
+                // --- Scroll-to-zoom (anchored to cursor position) ---
+                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll_delta != 0.0 && response.hovered() {
+                    let zoom_factor = (scroll_delta * 0.002).exp();
+                    let new_zoom = (self.zoom * zoom_factor).clamp(0.1, 50.0);
+
+                    // Zoom towards the cursor: adjust pan so the point under
+                    // the cursor stays fixed.
+                    if let Some(pointer) = response.hover_pos() {
+                        let panel_center = panel_rect.center();
+                        // The image center in screen space (before this zoom step):
+                        let img_center = panel_center + self.pan_offset;
+                        // Cursor position relative to the image center:
+                        let cursor_rel = pointer - img_center;
+                        // After zooming, the same image point should stay under
+                        // the cursor. Scale the offset accordingly.
+                        let ratio = new_zoom / self.zoom;
+                        self.pan_offset = pointer - panel_center - cursor_rel * ratio;
+                    }
+
+                    self.zoom = new_zoom;
                 }
-                ui.image((texture.id(), size));
+
+                // --- Drag to pan ---
+                if response.dragged() {
+                    self.pan_offset += response.drag_delta();
+                }
+
+                // --- Double-click to reset zoom ---
+                if response.double_clicked() {
+                    self.zoom = 1.0;
+                    self.pan_offset = egui::Vec2::ZERO;
+                }
+
+                // Clamp pan so the image can't be dragged entirely off-screen.
+                // Allow dragging until only 10% of the image remains visible.
+                let margin = display_size * 0.4;
+                let max_pan_x = ((display_size.x - avail.x) / 2.0 + margin.x).max(0.0);
+                let max_pan_y = ((display_size.y - avail.y) / 2.0 + margin.y).max(0.0);
+                self.pan_offset.x = self.pan_offset.x.clamp(-max_pan_x, max_pan_x);
+                self.pan_offset.y = self.pan_offset.y.clamp(-max_pan_y, max_pan_y);
+
+                // Position the image centered in the panel, offset by pan.
+                let img_center = panel_rect.center() + self.pan_offset;
+                let img_rect = egui::Rect::from_center_size(img_center, display_size);
+
+                // Clip to the panel and paint.
+                let painter = ui.painter_at(panel_rect);
+                painter.image(
+                    texture.id(),
+                    img_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+
+                // Show zoom level indicator when zoomed.
+                if (self.zoom - 1.0).abs() > 0.01 {
+                    let zoom_text = format!("{:.0}%", self.zoom * base_scale * 100.0);
+                    let text_pos = panel_rect.left_bottom() + egui::vec2(8.0, -8.0);
+                    painter.text(
+                        text_pos,
+                        egui::Align2::LEFT_BOTTOM,
+                        zoom_text,
+                        egui::FontId::proportional(13.0),
+                        ui.visuals().text_color(),
+                    );
+                }
             } else {
                 ui.label("Load a BMP file to preview it.");
             }
