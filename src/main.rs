@@ -5,13 +5,41 @@ use bmp::{
     runtime::{
         decode::{decode_to_rgba, DecodedImage},
         encode::{save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
-        transform::{apply_transform, ImageTransform, TransformPipeline},
+        transform::{apply_transform, ConvolutionFilter, ImageTransform, TransformPipeline},
     },
 };
 use eframe::egui;
 use rfd::FileDialog;
 
 mod gui;
+
+/// Selection in the convolution dropdown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConvolutionSelection {
+    Preset(ConvolutionFilter),
+    Custom,
+}
+
+impl ConvolutionSelection {
+    pub(crate) fn all() -> Vec<ConvolutionSelection> {
+        vec![
+            ConvolutionSelection::Preset(ConvolutionFilter::Blur),
+            ConvolutionSelection::Preset(ConvolutionFilter::Sharpen),
+            ConvolutionSelection::Preset(ConvolutionFilter::EdgeDetect),
+            ConvolutionSelection::Preset(ConvolutionFilter::Emboss),
+            ConvolutionSelection::Custom,
+        ]
+    }
+}
+
+impl std::fmt::Display for ConvolutionSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Preset(filter) => write!(f, "{filter}"),
+            Self::Custom => write!(f, "Custom..."),
+        }
+    }
+}
 
 pub(crate) struct BmpViewerApp {
     pub(crate) path_input: String,
@@ -41,6 +69,20 @@ pub(crate) struct BmpViewerApp {
     pub(crate) hovered_pixel: Option<(u32, u32, [u8; 4])>,
     /// Pan offset in screen pixels (relative to the centered image position).
     pub(crate) pan_offset: egui::Vec2,
+
+    // --- Convolution / custom kernel editor state ---
+    /// Which convolution is currently selected in the toolbar dropdown.
+    pub(crate) conv_selection: ConvolutionSelection,
+    /// Whether the custom kernel editor window is open.
+    pub(crate) custom_kernel_open: bool,
+    /// Side length of the custom kernel being edited (1, 3, 5, or 7).
+    pub(crate) custom_kernel_size: usize,
+    /// Per-cell weight strings for the kernel editor (size*size elements).
+    pub(crate) custom_kernel_weights: Vec<String>,
+    /// Divisor string for the kernel editor.
+    pub(crate) custom_kernel_divisor: String,
+    /// Bias string for the kernel editor.
+    pub(crate) custom_kernel_bias: String,
 }
 
 impl Default for BmpViewerApp {
@@ -64,6 +106,12 @@ impl Default for BmpViewerApp {
             last_effective_zoom: 1.0,
             hovered_pixel: None,
             pan_offset: egui::Vec2::ZERO,
+            conv_selection: ConvolutionSelection::Preset(ConvolutionFilter::Blur),
+            custom_kernel_open: false,
+            custom_kernel_size: 3,
+            custom_kernel_weights: vec!["0".to_owned(); 9],
+            custom_kernel_divisor: "1".to_owned(),
+            custom_kernel_bias: "0".to_owned(),
         }
     }
 }
@@ -299,6 +347,11 @@ impl eframe::App for BmpViewerApp {
 
         // --- Panels (order matters: top/side/bottom claim space before central) ---
         self.show_toolbar(ctx);
+
+        // --- Floating windows ---
+        if let Some(op) = self.show_kernel_editor(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
 
         let side_actions = self.show_side_panel(ctx);
         self.apply_side_panel_actions(ctx, side_actions);

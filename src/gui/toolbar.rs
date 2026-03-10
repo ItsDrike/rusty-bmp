@@ -2,12 +2,9 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use bmp::runtime::{
-    encode::SaveHeaderVersion,
-    transform::{ConvolutionFilter, ImageTransform},
-};
+use bmp::runtime::{encode::SaveHeaderVersion, transform::ImageTransform};
 
-use crate::BmpViewerApp;
+use crate::{BmpViewerApp, ConvolutionSelection};
 
 impl BmpViewerApp {
     /// Renders the top toolbar panel: path input, transform buttons, save options.
@@ -53,10 +50,27 @@ impl BmpViewerApp {
                 let contrast_down = ui.button("Contrast -").clicked();
                 let contrast_up = ui.button("Contrast +").clicked();
                 ui.separator();
-                let blur = ui.button("Blur").clicked();
-                let sharpen = ui.button("Sharpen").clicked();
-                let edge = ui.button("Edge Detect").clicked();
-                let emboss = ui.button("Emboss").clicked();
+                egui::ComboBox::from_id_salt("conv_filter")
+                    .selected_text(self.conv_selection.to_string())
+                    .width(100.0)
+                    .show_ui(ui, |ui| {
+                        for sel in ConvolutionSelection::all() {
+                            let label = sel.to_string();
+                            ui.selectable_value(&mut self.conv_selection, sel, label);
+                        }
+                    });
+                let apply_conv = ui.button("Apply").clicked();
+                if apply_conv {
+                    match &self.conv_selection {
+                        ConvolutionSelection::Preset(filter) => {
+                            let op = ImageTransform::Convolution(filter.clone());
+                            self.apply_and_refresh(ctx, op);
+                        }
+                        ConvolutionSelection::Custom => {
+                            self.custom_kernel_open = true;
+                        }
+                    }
+                }
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
                 }
@@ -89,18 +103,6 @@ impl BmpViewerApp {
                 }
                 if contrast_up {
                     self.apply_and_refresh(ctx, ImageTransform::Contrast(10));
-                }
-                if blur {
-                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::Blur));
-                }
-                if sharpen {
-                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::Sharpen));
-                }
-                if edge {
-                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::EdgeDetect));
-                }
-                if emboss {
-                    self.apply_and_refresh(ctx, ImageTransform::Convolution(ConvolutionFilter::Emboss));
                 }
             });
 

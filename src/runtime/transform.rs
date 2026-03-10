@@ -152,6 +152,8 @@ pub enum ImageTransform {
     Contrast(i16),
     /// Apply a convolution filter (blur, sharpen, etc.).
     Convolution(ConvolutionFilter),
+    /// Apply a user-defined convolution kernel.
+    CustomKernel(Kernel),
 }
 
 impl fmt::Display for ImageTransform {
@@ -179,6 +181,7 @@ impl fmt::Display for ImageTransform {
                 }
             }
             Self::Convolution(filter) => write!(f, "{filter}"),
+            Self::CustomKernel(k) => write!(f, "Custom {}x{}", k.size, k.size),
         }
     }
 }
@@ -199,6 +202,7 @@ impl ImageTransform {
             Self::Brightness(_) => None,
             Self::Contrast(_) => None,
             Self::Convolution(_) => None,
+            Self::CustomKernel(_) => None,
         }
     }
 
@@ -220,7 +224,7 @@ impl ImageTransform {
             // Cheap per-pixel transforms.
             Self::Grayscale | Self::Sepia | Self::Brightness(_) | Self::Contrast(_) => 1,
             // Convolutions: N² multiply-accumulates per pixel per kernel element.
-            Self::Convolution(_) => 5,
+            Self::Convolution(_) | Self::CustomKernel(_) => 5,
         }
     }
 }
@@ -358,6 +362,7 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
         ImageTransform::Brightness(delta) => brightness(image, *delta),
         ImageTransform::Contrast(delta) => contrast(image, *delta),
         ImageTransform::Convolution(filter) => apply_convolution(image, &filter.kernel()),
+        ImageTransform::CustomKernel(kernel) => apply_convolution(image, kernel),
     }
 }
 
@@ -763,6 +768,10 @@ mod tests {
             None
         );
         assert_eq!(ImageTransform::Convolution(ConvolutionFilter::Emboss).inverse(), None);
+        assert_eq!(
+            ImageTransform::CustomKernel(Kernel::new(vec![0, -1, 0, -1, 5, -1, 0, -1, 0], 3, 1, 0)).inverse(),
+            None
+        );
     }
 
     #[test]
@@ -1118,6 +1127,53 @@ mod tests {
             ImageTransform::Convolution(ConvolutionFilter::Emboss).to_string(),
             "Emboss"
         );
+    }
+
+    #[test]
+    fn custom_kernel_display_format() {
+        let k3 = Kernel::new(vec![0; 9], 3, 1, 0);
+        assert_eq!(ImageTransform::CustomKernel(k3).to_string(), "Custom 3x3");
+        let k5 = Kernel::new(vec![0; 25], 5, 1, 0);
+        assert_eq!(ImageTransform::CustomKernel(k5).to_string(), "Custom 5x5");
+        let k1 = Kernel::new(vec![1], 1, 1, 0);
+        assert_eq!(ImageTransform::CustomKernel(k1).to_string(), "Custom 1x1");
+    }
+
+    #[test]
+    fn custom_kernel_replay_cost_is_5() {
+        let k = Kernel::new(vec![0; 9], 3, 1, 0);
+        assert_eq!(ImageTransform::CustomKernel(k).replay_cost(), 5);
+    }
+
+    #[test]
+    fn custom_kernel_applies_same_as_preset() {
+        // Using the sharpen kernel as a custom kernel should produce the
+        // same result as the Sharpen preset.
+        let image = DecodedImage {
+            width: 4,
+            height: 4,
+            rgba: (0..64).collect(),
+        };
+        let preset_result = apply_transform(&image, &ImageTransform::Convolution(ConvolutionFilter::Sharpen));
+        let sharpen_kernel = ConvolutionFilter::Sharpen.kernel();
+        let custom_result = apply_transform(&image, &ImageTransform::CustomKernel(sharpen_kernel));
+        assert_eq!(preset_result.rgba, custom_result.rgba);
+    }
+
+    #[test]
+    fn custom_identity_kernel_preserves_image() {
+        // Identity kernel: center = 1, rest = 0, divisor = 1, bias = 0.
+        let kernel = Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0);
+        let image = DecodedImage {
+            width: 3,
+            height: 3,
+            rgba: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
+                180, 255, 190, 200, 210, 255, 220, 230, 240, 255, 250, 245, 235, 255,
+            ],
+        };
+        let result = apply_transform(&image, &ImageTransform::CustomKernel(kernel));
+        assert_eq!(result.rgba, image.rgba);
     }
 
     // --- Separable kernel tests ---
