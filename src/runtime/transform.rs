@@ -10,6 +10,8 @@ pub enum ImageTransform {
     MirrorVertical,
     InvertColors,
     Grayscale,
+    /// Adjust brightness by a signed delta (clamped to 0..=255 per channel).
+    Brightness(i16),
 }
 
 impl fmt::Display for ImageTransform {
@@ -21,6 +23,13 @@ impl fmt::Display for ImageTransform {
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
             Self::Grayscale => write!(f, "Grayscale"),
+            Self::Brightness(delta) => {
+                if *delta >= 0 {
+                    write!(f, "Brightness +{delta}")
+                } else {
+                    write!(f, "Brightness {delta}")
+                }
+            }
         }
     }
 }
@@ -35,7 +44,9 @@ impl ImageTransform {
             Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
             Self::MirrorVertical => Some(Self::MirrorVertical),
             Self::InvertColors => Some(Self::InvertColors),
+            // Lossy: clamping destroys information, requires pipeline replay.
             Self::Grayscale => None,
+            Self::Brightness(_) => None,
         }
     }
 }
@@ -91,6 +102,7 @@ pub fn apply_transform(image: &DecodedImage, op: ImageTransform) -> DecodedImage
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
         ImageTransform::Grayscale => grayscale(image),
+        ImageTransform::Brightness(delta) => brightness(image, delta),
     }
 }
 
@@ -215,6 +227,22 @@ pub fn grayscale(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+pub fn brightness(image: &DecodedImage, delta: i16) -> DecodedImage {
+    let mut out = image.rgba.clone();
+    for px in out.chunks_exact_mut(4) {
+        px[0] = (px[0] as i16 + delta).clamp(0, 255) as u8;
+        px[1] = (px[1] as i16 + delta).clamp(0, 255) as u8;
+        px[2] = (px[2] as i16 + delta).clamp(0, 255) as u8;
+        // Alpha unchanged.
+    }
+
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba: out,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{apply_transform, invert_colors, ImageTransform};
@@ -274,6 +302,8 @@ mod tests {
     #[test]
     fn lossy_transforms_have_no_inverse() {
         assert_eq!(ImageTransform::Grayscale.inverse(), None);
+        assert_eq!(ImageTransform::Brightness(10).inverse(), None);
+        assert_eq!(ImageTransform::Brightness(-10).inverse(), None);
     }
 
     #[test]
@@ -316,5 +346,58 @@ mod tests {
         assert_eq!(gray.rgba[1], 141);
         assert_eq!(gray.rgba[2], 141);
         assert_eq!(gray.rgba[3], 128); // alpha unchanged
+    }
+
+    #[test]
+    fn brightness_positive_adds_and_clamps() {
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            rgba: vec![
+                100, 150, 200, 128, // pixel 0: 200+80=280 → clamped to 255
+                10, 20, 30, 255, // pixel 1: no clamping needed
+            ],
+        };
+        let result = super::brightness(&image, 80);
+        assert_eq!(result.rgba[0], 180); // 100+80
+        assert_eq!(result.rgba[1], 230); // 150+80
+        assert_eq!(result.rgba[2], 255); // 200+80=280 → 255
+        assert_eq!(result.rgba[3], 128); // alpha unchanged
+        assert_eq!(result.rgba[4], 90); // 10+80
+        assert_eq!(result.rgba[5], 100); // 20+80
+        assert_eq!(result.rgba[6], 110); // 30+80
+        assert_eq!(result.rgba[7], 255); // alpha unchanged
+    }
+
+    #[test]
+    fn brightness_negative_subtracts_and_clamps() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![30, 100, 200, 64],
+        };
+        let result = super::brightness(&image, -50);
+        assert_eq!(result.rgba[0], 0); // 30-50=-20 → 0
+        assert_eq!(result.rgba[1], 50); // 100-50
+        assert_eq!(result.rgba[2], 150); // 200-50
+        assert_eq!(result.rgba[3], 64); // alpha unchanged
+    }
+
+    #[test]
+    fn brightness_zero_is_identity() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![42, 128, 200, 255],
+        };
+        let result = super::brightness(&image, 0);
+        assert_eq!(result.rgba, image.rgba);
+    }
+
+    #[test]
+    fn brightness_display_format() {
+        assert_eq!(ImageTransform::Brightness(10).to_string(), "Brightness +10");
+        assert_eq!(ImageTransform::Brightness(-10).to_string(), "Brightness -10");
+        assert_eq!(ImageTransform::Brightness(0).to_string(), "Brightness +0");
     }
 }
