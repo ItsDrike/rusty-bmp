@@ -88,14 +88,33 @@ impl Default for SaveFormat {
     }
 }
 
+/// Infer the save format from compression mode, bit depth, and optional color masks.
+/// Shared logic for `SaveFormat::from_bmp()` across Info, V4, and V5 variants.
+fn infer_format(comp: Compression, bpp: BitsPerPixel, rgb_masks: Option<RgbMasks>) -> SaveFormat {
+    match (comp, bpp) {
+        (Compression::Rgb, BitsPerPixel::Bpp1) => SaveFormat::Rgb1,
+        (Compression::Rgb, BitsPerPixel::Bpp4) => SaveFormat::Rgb4,
+        (Compression::Rgb, BitsPerPixel::Bpp8) => SaveFormat::Rgb8,
+        (Compression::Rgb, BitsPerPixel::Bpp16) => SaveFormat::Rgb16,
+        (Compression::Rgb, BitsPerPixel::Bpp24) => SaveFormat::Rgb24,
+        (Compression::Rgb, BitsPerPixel::Bpp32) => SaveFormat::Rgb32,
+        (Compression::Rle8, BitsPerPixel::Bpp8) => SaveFormat::Rle8,
+        (Compression::Rle4, BitsPerPixel::Bpp4) => SaveFormat::Rle4,
+        (Compression::BitFields, BitsPerPixel::Bpp16) => match rgb_masks {
+            Some(masks) if masks == RgbMasks::rgb565() => SaveFormat::BitFields16Rgb565,
+            _ => SaveFormat::BitFields16Rgb555,
+        },
+        (Compression::BitFields, BitsPerPixel::Bpp32) => SaveFormat::BitFields32,
+        _ => SaveFormat::Rgb32,
+    }
+}
+
 impl SaveFormat {
     /// Infer the closest supported save format from a loaded [`Bmp`].
     ///
-    /// For formats that we cannot save (e.g. Core header, JPEG/PNG embedded,
-    /// or exotic bitfield layouts), this falls back to [`SaveFormat::Rgb32`].
+    /// For formats that we cannot save (e.g. JPEG/PNG embedded, or exotic
+    /// bitfield layouts), this falls back to [`SaveFormat::Rgb32`].
     pub fn from_bmp(bmp: &Bmp) -> Self {
-        use crate::raw::{BitsPerPixel, Compression, RgbMasks};
-
         match bmp {
             // Core header has no compression field; map by bpp only.
             Bmp::Core(core) => match core.bmp_header.bit_count {
@@ -105,83 +124,17 @@ impl SaveFormat {
                 BitsPerPixel::Bpp24 => Self::Rgb24,
                 _ => Self::Rgb32,
             },
-
-            // Info (V3) header — uses compression + bpp + optional color masks.
-            Bmp::Info(info) => {
-                let bpp = info.bmp_header.bit_count;
-                let comp = info.bmp_header.compression;
-                match (comp, bpp) {
-                    (Compression::Rgb, BitsPerPixel::Bpp1) => Self::Rgb1,
-                    (Compression::Rgb, BitsPerPixel::Bpp4) => Self::Rgb4,
-                    (Compression::Rgb, BitsPerPixel::Bpp8) => Self::Rgb8,
-                    (Compression::Rgb, BitsPerPixel::Bpp16) => Self::Rgb16,
-                    (Compression::Rgb, BitsPerPixel::Bpp24) => Self::Rgb24,
-                    (Compression::Rgb, BitsPerPixel::Bpp32) => Self::Rgb32,
-                    (Compression::Rle8, BitsPerPixel::Bpp8) => Self::Rle8,
-                    (Compression::Rle4, BitsPerPixel::Bpp4) => Self::Rle4,
-                    (Compression::BitFields, BitsPerPixel::Bpp16) => {
-                        // Distinguish RGB565 vs RGB555 by inspecting color masks.
-                        match &info.color_masks {
-                            Some(masks) if *masks == RgbMasks::rgb565() => Self::BitFields16Rgb565,
-                            _ => Self::BitFields16Rgb555,
-                        }
-                    }
-                    (Compression::BitFields, BitsPerPixel::Bpp32) => Self::BitFields32,
-                    _ => Self::Rgb32,
-                }
-            }
-
-            // V4 header — compression + bpp live inside v4.info; masks are in v4.masks.
-            Bmp::V4(v4) => {
-                let bpp = v4.bmp_header.info.bit_count;
-                let comp = v4.bmp_header.info.compression;
-                match (comp, bpp) {
-                    (Compression::Rgb, BitsPerPixel::Bpp1) => Self::Rgb1,
-                    (Compression::Rgb, BitsPerPixel::Bpp4) => Self::Rgb4,
-                    (Compression::Rgb, BitsPerPixel::Bpp8) => Self::Rgb8,
-                    (Compression::Rgb, BitsPerPixel::Bpp16) => Self::Rgb16,
-                    (Compression::Rgb, BitsPerPixel::Bpp24) => Self::Rgb24,
-                    (Compression::Rgb, BitsPerPixel::Bpp32) => Self::Rgb32,
-                    (Compression::Rle8, BitsPerPixel::Bpp8) => Self::Rle8,
-                    (Compression::Rle4, BitsPerPixel::Bpp4) => Self::Rle4,
-                    (Compression::BitFields, BitsPerPixel::Bpp16) => {
-                        let masks: RgbMasks = v4.bmp_header.masks.into();
-                        if masks == RgbMasks::rgb565() {
-                            Self::BitFields16Rgb565
-                        } else {
-                            Self::BitFields16Rgb555
-                        }
-                    }
-                    (Compression::BitFields, BitsPerPixel::Bpp32) => Self::BitFields32,
-                    _ => Self::Rgb32,
-                }
-            }
-
-            // V5 header — compression + bpp in v5.v4.info; masks in v5.v4.masks.
-            Bmp::V5(v5) => {
-                let bpp = v5.bmp_header.v4.info.bit_count;
-                let comp = v5.bmp_header.v4.info.compression;
-                match (comp, bpp) {
-                    (Compression::Rgb, BitsPerPixel::Bpp1) => Self::Rgb1,
-                    (Compression::Rgb, BitsPerPixel::Bpp4) => Self::Rgb4,
-                    (Compression::Rgb, BitsPerPixel::Bpp8) => Self::Rgb8,
-                    (Compression::Rgb, BitsPerPixel::Bpp16) => Self::Rgb16,
-                    (Compression::Rgb, BitsPerPixel::Bpp24) => Self::Rgb24,
-                    (Compression::Rgb, BitsPerPixel::Bpp32) => Self::Rgb32,
-                    (Compression::Rle8, BitsPerPixel::Bpp8) => Self::Rle8,
-                    (Compression::Rle4, BitsPerPixel::Bpp4) => Self::Rle4,
-                    (Compression::BitFields, BitsPerPixel::Bpp16) => {
-                        let masks: RgbMasks = v5.bmp_header.v4.masks.into();
-                        if masks == RgbMasks::rgb565() {
-                            Self::BitFields16Rgb565
-                        } else {
-                            Self::BitFields16Rgb555
-                        }
-                    }
-                    (Compression::BitFields, BitsPerPixel::Bpp32) => Self::BitFields32,
-                    _ => Self::Rgb32,
-                }
-            }
+            Bmp::Info(info) => infer_format(info.bmp_header.compression, info.bmp_header.bit_count, info.color_masks),
+            Bmp::V4(v4) => infer_format(
+                v4.bmp_header.info.compression,
+                v4.bmp_header.info.bit_count,
+                Some(v4.bmp_header.masks.into()),
+            ),
+            Bmp::V5(v5) => infer_format(
+                v5.bmp_header.v4.info.compression,
+                v5.bmp_header.v4.info.bit_count,
+                Some(v5.bmp_header.v4.masks.into()),
+            ),
         }
     }
 }
