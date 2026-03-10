@@ -3,7 +3,11 @@ use std::{fs::File, io::BufWriter, path::Path};
 use thiserror::Error;
 
 use crate::{
-    raw::{BitmapInfoData, BitmapInfoHeader, BitsPerPixel, Bmp, Compression, FileHeader, RgbMasks, RgbQuad},
+    raw::{
+        BitmapCoreData, BitmapCoreHeader, BitmapInfoData, BitmapInfoHeader, BitmapV4Data, BitmapV4Header,
+        BitmapV5Data, BitmapV5Header, BitsPerPixel, Bmp, CieXyzTriple, ColorSpaceType, Compression, FileHeader,
+        GammaTriple, RgbMasks, RgbQuad, RgbTriple, RgbaMasks,
+    },
     runtime::{decode::DecodedImage, quantize},
 };
 
@@ -17,6 +21,15 @@ pub enum EncodeError {
 
     #[error("arithmetic overflow while preparing BMP")]
     ArithmeticOverflow,
+
+    #[error("save format {format} is not compatible with header version {header}")]
+    IncompatibleHeaderFormat {
+        format: SaveFormat,
+        header: SaveHeaderVersion,
+    },
+
+    #[error("dimensions {width}x{height} exceed Core header maximum of 65535")]
+    CoreDimensionOverflow { width: u32, height: u32 },
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -191,6 +204,75 @@ impl std::fmt::Display for SaveFormat {
     }
 }
 
+// ===========================================================================
+// SaveHeaderVersion
+// ===========================================================================
+
+/// Selects the BMP header version used when saving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveHeaderVersion {
+    /// BITMAPCOREHEADER (12 bytes). Only supports Rgb1/4/8/24.
+    /// Dimensions limited to u16 (max 65535). Always bottom-up.
+    /// Color table uses 3-byte RgbTriple entries. Always 2^bpp palette entries.
+    Core,
+    /// BITMAPINFOHEADER (40 bytes). Supports all formats.
+    Info,
+    /// BITMAPV4HEADER (108 bytes). Supports all formats.
+    /// Preserves color space, CIE endpoints, and gamma from source if available.
+    V4,
+    /// BITMAPV5HEADER (124 bytes). Supports all formats.
+    /// Preserves V4 fields plus intent and ICC profile from source if available.
+    V5,
+}
+
+impl SaveHeaderVersion {
+    /// All supported header versions, for use in UI dropdowns.
+    pub const ALL: &[SaveHeaderVersion] = &[Self::Core, Self::Info, Self::V4, Self::V5];
+
+    /// Returns the formats compatible with this header version.
+    ///
+    /// Core only supports uncompressed RGB at 1/4/8/24 bpp.
+    /// All other versions support every format.
+    pub fn compatible_formats(&self) -> &[SaveFormat] {
+        match self {
+            Self::Core => &[SaveFormat::Rgb1, SaveFormat::Rgb4, SaveFormat::Rgb8, SaveFormat::Rgb24],
+            _ => SaveFormat::ALL,
+        }
+    }
+
+    /// Returns `true` if the given format is compatible with this header version.
+    pub fn is_compatible(&self, format: SaveFormat) -> bool {
+        self.compatible_formats().contains(&format)
+    }
+
+    /// Infer the header version from a loaded [`Bmp`].
+    pub fn from_bmp(bmp: &Bmp) -> Self {
+        match bmp {
+            Bmp::Core(_) => Self::Core,
+            Bmp::Info(_) => Self::Info,
+            Bmp::V4(_) => Self::V4,
+            Bmp::V5(_) => Self::V5,
+        }
+    }
+}
+
+impl Default for SaveHeaderVersion {
+    fn default() -> Self {
+        Self::Info
+    }
+}
+
+impl std::fmt::Display for SaveHeaderVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Core => write!(f, "Core (12-byte)"),
+            Self::Info => write!(f, "Info / V3 (40-byte)"),
+            Self::V4 => write!(f, "V4 (108-byte)"),
+            Self::V5 => write!(f, "V5 (124-byte)"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helper: row stride with 4-byte alignment
 // ---------------------------------------------------------------------------
@@ -310,6 +392,319 @@ fn build_bmp_info(
         color_masks,
         color_table,
         bitmap_array,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Build BitmapCoreData skeleton
+// ---------------------------------------------------------------------------
+
+/// Core header only supports: Rgb1, Rgb4, Rgb8, Rgb24.
+/// No compression, no 16/32-bpp, no RLE, no BitFields.
+/// Dimensions are u16 (max 65535). Color table uses 3-byte RgbTriple entries.
+/// Always bottom-up. Must always have exactly 2^bpp palette entries for indexed.
+fn build_bmp_core(
+    width: u32,
+    height: u32,
+    bpp: BitsPerPixel,
+    image_size: u32,
+    color_table: Vec<RgbTriple>,
+    bitmap_array: Vec<u8>,
+) -> Result<Bmp, EncodeError> {
+    if width > u16::MAX as u32 || height > u16::MAX as u32 {
+        return Err(EncodeError::CoreDimensionOverflow { width, height });
+    }
+
+    let file_header_size = FileHeader::SIZE;
+    // DIB header = 4 (size field) + 12 (BITMAPCOREHEADER body)
+    let dib_size = 4_u32 + BitmapCoreHeader::HEADER_SIZE;
+    let color_table_size = (color_table.len() as u32)
+        .checked_mul(3) // RgbTriple = 3 bytes
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    let pixel_offset = file_header_size
+        .checked_add(dib_size)
+        .and_then(|x| x.checked_add(color_table_size))
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    let file_size = pixel_offset
+        .checked_add(image_size)
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    Ok(Bmp::Core(BitmapCoreData {
+        file_header: FileHeader {
+            signature: *b"BM",
+            file_size,
+            reserved_1: [0; 2],
+            reserved_2: [0; 2],
+            pixel_data_offset: pixel_offset,
+        },
+        bmp_header: BitmapCoreHeader {
+            width: width as u16,
+            height: height as u16, // Core is always bottom-up (positive height)
+            planes: 1,
+            bit_count: bpp,
+        },
+        color_table,
+        bitmap_array,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Build BitmapV4Data skeleton
+// ---------------------------------------------------------------------------
+
+/// Metadata that can be preserved from a source BMP when saving as V4 or V5.
+/// This is extracted from the original loaded file and threaded through transforms.
+#[derive(Debug, Clone)]
+pub struct SourceMetadata {
+    /// Color space type from the source V4/V5 header.
+    pub cs_type: ColorSpaceType,
+    /// CIE XYZ endpoints (meaningful when cs_type is CalibratedRgb).
+    pub endpoints: CieXyzTriple,
+    /// Gamma correction values (meaningful when cs_type is CalibratedRgb).
+    pub gamma: GammaTriple,
+    /// Rendering intent (V5 only).
+    pub intent: u32,
+    /// ICC profile data (V5 only, when cs_type is ProfileEmbedded/ProfileLinked).
+    pub icc_profile: Option<Vec<u8>>,
+}
+
+impl SourceMetadata {
+    /// Extract metadata from a loaded Bmp, if it has V4/V5 fields.
+    pub fn from_bmp(bmp: &Bmp) -> Option<Self> {
+        match bmp {
+            Bmp::V4(v4) => Some(Self {
+                cs_type: v4.bmp_header.cs_type,
+                endpoints: v4.bmp_header.endpoints,
+                gamma: v4.bmp_header.gamma,
+                intent: 0,
+                icc_profile: None,
+            }),
+            Bmp::V5(v5) => Some(Self {
+                cs_type: v5.bmp_header.v4.cs_type,
+                endpoints: v5.bmp_header.v4.endpoints,
+                gamma: v5.bmp_header.v4.gamma,
+                intent: v5.bmp_header.intent,
+                icc_profile: v5.icc_profile.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+fn default_zeroed_endpoints() -> CieXyzTriple {
+    use crate::raw::FixedPoint2Dot30;
+    let zero = crate::raw::CieXyz {
+        x: FixedPoint2Dot30::from_raw(0),
+        y: FixedPoint2Dot30::from_raw(0),
+        z: FixedPoint2Dot30::from_raw(0),
+    };
+    CieXyzTriple {
+        red: zero,
+        green: zero,
+        blue: zero,
+    }
+}
+
+fn default_zeroed_gamma() -> GammaTriple {
+    use crate::raw::FixedPoint16Dot16;
+    GammaTriple {
+        red: FixedPoint16Dot16::from_raw(0),
+        green: FixedPoint16Dot16::from_raw(0),
+        blue: FixedPoint16Dot16::from_raw(0),
+    }
+}
+
+fn build_bmp_v4(
+    width: u32,
+    height: u32,
+    bpp: BitsPerPixel,
+    compression: Compression,
+    image_size: u32,
+    rgba_masks: RgbaMasks,
+    color_table: Vec<RgbQuad>,
+    bitmap_array: Vec<u8>,
+    source: Option<&SourceMetadata>,
+) -> Result<Bmp, EncodeError> {
+    let file_header_size = FileHeader::SIZE;
+    // DIB header = 4 (size field) + 108 (V4 header body)
+    let dib_size = 4_u32 + BitmapV4Header::HEADER_SIZE;
+    // V4 does NOT have separate color masks — they're embedded in the header
+    let color_table_size = (color_table.len() as u32)
+        .checked_mul(4)
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    let pixel_offset = file_header_size
+        .checked_add(dib_size)
+        .and_then(|x| x.checked_add(color_table_size))
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    let file_size = pixel_offset
+        .checked_add(image_size)
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    // Determine color space metadata: use source if available, otherwise default to sRGB.
+    // For V4, ProfileEmbedded/ProfileLinked are not valid, so clamp to sRGB if source has those.
+    let (cs_type, endpoints, gamma) = if let Some(src) = source {
+        let cs = match src.cs_type {
+            ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked => ColorSpaceType::SRgb,
+            other => other,
+        };
+        (cs, src.endpoints, src.gamma)
+    } else {
+        (ColorSpaceType::SRgb, default_zeroed_endpoints(), default_zeroed_gamma())
+    };
+
+    let info = BitmapInfoHeader {
+        width: width as i32,
+        height: match compression {
+            Compression::Rle4 | Compression::Rle8 => height as i32,
+            _ => -(height as i32),
+        },
+        planes: 1,
+        bit_count: bpp,
+        compression,
+        image_size,
+        x_resolution_ppm: 0,
+        y_resolution_ppm: 0,
+        colors_used: color_table.len() as u32,
+        colors_important: 0,
+    };
+
+    Ok(Bmp::V4(BitmapV4Data {
+        file_header: FileHeader {
+            signature: *b"BM",
+            file_size,
+            reserved_1: [0; 2],
+            reserved_2: [0; 2],
+            pixel_data_offset: pixel_offset,
+        },
+        bmp_header: BitmapV4Header {
+            info,
+            masks: rgba_masks,
+            cs_type,
+            endpoints,
+            gamma,
+        },
+        color_table,
+        bitmap_array,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Build BitmapV5Data skeleton
+// ---------------------------------------------------------------------------
+
+fn build_bmp_v5(
+    width: u32,
+    height: u32,
+    bpp: BitsPerPixel,
+    compression: Compression,
+    image_size: u32,
+    rgba_masks: RgbaMasks,
+    color_table: Vec<RgbQuad>,
+    bitmap_array: Vec<u8>,
+    source: Option<&SourceMetadata>,
+) -> Result<Bmp, EncodeError> {
+    let file_header_size = FileHeader::SIZE;
+    // DIB header = 4 (size field) + 124 (V5 header body)
+    let dib_size = 4_u32 + BitmapV5Header::HEADER_SIZE;
+    let color_table_size = (color_table.len() as u32)
+        .checked_mul(4)
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    let pixel_offset = file_header_size
+        .checked_add(dib_size)
+        .and_then(|x| x.checked_add(color_table_size))
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    let pixel_end = pixel_offset
+        .checked_add(image_size)
+        .ok_or(EncodeError::ArithmeticOverflow)?;
+
+    // Determine metadata from source
+    let (cs_type, endpoints, gamma, intent) = if let Some(src) = source {
+        (src.cs_type, src.endpoints, src.gamma, src.intent)
+    } else {
+        (
+            ColorSpaceType::SRgb,
+            default_zeroed_endpoints(),
+            default_zeroed_gamma(),
+            0,
+        )
+    };
+
+    // Handle ICC profile: only include if cs_type is ProfileEmbedded or ProfileLinked
+    let icc_profile = if matches!(cs_type, ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked) {
+        source.and_then(|s| s.icc_profile.clone())
+    } else {
+        None
+    };
+
+    // profile_data is offset from the beginning of the BMP header (i.e. from the start
+    // of the DIB header size field, NOT from the start of the file). The spec says
+    // "from the beginning of the BITMAPV5HEADER structure". The file header comes
+    // before that, so: profile_data = pixel_end - FileHeader::SIZE
+    // Actually, profile_data is relative to the start of the DIB header, which starts
+    // at FileHeader::SIZE. So absolute offset = FileHeader::SIZE + profile_data.
+    // We place the ICC profile right after the pixel data.
+    let (profile_data, profile_size, file_size) = if let Some(ref profile) = icc_profile {
+        let profile_size = u32::try_from(profile.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
+        // profile_data is relative to the start of the DIB header (byte after file header)
+        // absolute position of profile = pixel_end
+        // profile_data = pixel_end - FileHeader::SIZE
+        let pd = pixel_end
+            .checked_sub(FileHeader::SIZE)
+            .ok_or(EncodeError::ArithmeticOverflow)?;
+        let fs = pixel_end
+            .checked_add(profile_size)
+            .ok_or(EncodeError::ArithmeticOverflow)?;
+        (pd, profile_size, fs)
+    } else {
+        (0, 0, pixel_end)
+    };
+
+    let info = BitmapInfoHeader {
+        width: width as i32,
+        height: match compression {
+            Compression::Rle4 | Compression::Rle8 => height as i32,
+            _ => -(height as i32),
+        },
+        planes: 1,
+        bit_count: bpp,
+        compression,
+        image_size,
+        x_resolution_ppm: 0,
+        y_resolution_ppm: 0,
+        colors_used: color_table.len() as u32,
+        colors_important: 0,
+    };
+
+    Ok(Bmp::V5(BitmapV5Data {
+        file_header: FileHeader {
+            signature: *b"BM",
+            file_size,
+            reserved_1: [0; 2],
+            reserved_2: [0; 2],
+            pixel_data_offset: pixel_offset,
+        },
+        bmp_header: BitmapV5Header {
+            v4: BitmapV4Header {
+                info,
+                masks: rgba_masks,
+                cs_type,
+                endpoints,
+                gamma,
+            },
+            intent,
+            profile_data,
+            profile_size,
+            reserved: [0; 4],
+        },
+        color_table,
+        bitmap_array,
+        icc_profile,
     }))
 }
 
@@ -762,6 +1157,150 @@ fn encode_bitfields32(image: &DecodedImage) -> Result<Bmp, EncodeError> {
 // Public API
 // ===========================================================================
 
+/// Convert a `Bmp::Info` (as produced by all individual encoders) to the
+/// target header version. For `Info`, this is a no-op. For other versions,
+/// the pixel data and color table are moved into the appropriate struct.
+fn wrap_with_header(
+    bmp: Bmp,
+    header_version: SaveHeaderVersion,
+    source: Option<&SourceMetadata>,
+) -> Result<Bmp, EncodeError> {
+    match header_version {
+        SaveHeaderVersion::Info => Ok(bmp),
+        SaveHeaderVersion::Core => {
+            // Extract the Info data
+            let info = match bmp {
+                Bmp::Info(data) => data,
+                _ => unreachable!("individual encoders always produce Bmp::Info"),
+            };
+
+            // Core needs RgbTriple color table, bottom-up rows, and u16 dimensions
+            let width = info.bmp_header.width as u32;
+            let height = info.bmp_header.height.unsigned_abs();
+
+            let bpp = info.bmp_header.bit_count;
+
+            // Convert RgbQuad color table to RgbTriple
+            // Core always requires exactly 2^bpp entries for indexed formats
+            let required_entries: usize = match bpp {
+                BitsPerPixel::Bpp1 => 2,
+                BitsPerPixel::Bpp4 => 16,
+                BitsPerPixel::Bpp8 => 256,
+                _ => 0,
+            };
+
+            let mut core_color_table: Vec<RgbTriple> = info
+                .color_table
+                .iter()
+                .map(|q| RgbTriple {
+                    blue: q.blue,
+                    green: q.green,
+                    red: q.red,
+                })
+                .collect();
+
+            // Pad to required size if needed (Core requires exactly 2^bpp entries)
+            while core_color_table.len() < required_entries {
+                core_color_table.push(RgbTriple {
+                    blue: 0,
+                    green: 0,
+                    red: 0,
+                });
+            }
+
+            // Core is always bottom-up. If the Info encoder produced top-down
+            // (negative height), we need to flip the pixel rows.
+            let bitmap_array = if info.bmp_header.height < 0 {
+                // top-down -> need to flip to bottom-up
+                let bits = bpp.bit_count();
+                let stride = row_stride(width as usize, bits)?;
+                let h = height as usize;
+                let mut flipped = vec![0u8; info.bitmap_array.len()];
+                for y in 0..h {
+                    let src_start = y * stride;
+                    let dst_start = (h - 1 - y) * stride;
+                    flipped[dst_start..dst_start + stride]
+                        .copy_from_slice(&info.bitmap_array[src_start..src_start + stride]);
+                }
+                flipped
+            } else {
+                // already bottom-up (RLE)
+                info.bitmap_array
+            };
+
+            let image_size = u32::try_from(bitmap_array.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
+
+            build_bmp_core(width, height, bpp, image_size, core_color_table, bitmap_array)
+        }
+        SaveHeaderVersion::V4 => {
+            let info = match bmp {
+                Bmp::Info(data) => data,
+                _ => unreachable!("individual encoders always produce Bmp::Info"),
+            };
+
+            // Determine RgbaMasks: for BitFields, use the masks from the Info data;
+            // otherwise zero them out (V4 always has the masks field in the header).
+            let rgba_masks = if let Some(rgb_masks) = info.color_masks {
+                RgbaMasks::from(rgb_masks)
+            } else {
+                RgbaMasks {
+                    red_mask: 0,
+                    green_mask: 0,
+                    blue_mask: 0,
+                    alpha_mask: 0,
+                }
+            };
+
+            let width = info.bmp_header.width as u32;
+            let height = info.bmp_header.height.unsigned_abs();
+
+            build_bmp_v4(
+                width,
+                height,
+                info.bmp_header.bit_count,
+                info.bmp_header.compression,
+                info.bmp_header.image_size,
+                rgba_masks,
+                info.color_table,
+                info.bitmap_array,
+                source,
+            )
+        }
+        SaveHeaderVersion::V5 => {
+            let info = match bmp {
+                Bmp::Info(data) => data,
+                _ => unreachable!("individual encoders always produce Bmp::Info"),
+            };
+
+            let rgba_masks = if let Some(rgb_masks) = info.color_masks {
+                RgbaMasks::from(rgb_masks)
+            } else {
+                RgbaMasks {
+                    red_mask: 0,
+                    green_mask: 0,
+                    blue_mask: 0,
+                    alpha_mask: 0,
+                }
+            };
+
+            let width = info.bmp_header.width as u32;
+            let height = info.bmp_header.height.unsigned_abs();
+
+            build_bmp_v5(
+                width,
+                height,
+                info.bmp_header.bit_count,
+                info.bmp_header.compression,
+                info.bmp_header.image_size,
+                rgba_masks,
+                info.color_table,
+                info.bitmap_array,
+                source,
+            )
+        }
+    }
+}
+
 /// Encodes a decoded RGBA image into a BMP using the default format
 /// (32-bit uncompressed RGB). This preserves the original API.
 pub fn encode_rgba_to_bmp(image: &DecodedImage) -> Result<Bmp, EncodeError> {
@@ -769,6 +1308,9 @@ pub fn encode_rgba_to_bmp(image: &DecodedImage) -> Result<Bmp, EncodeError> {
 }
 
 /// Encodes a decoded RGBA image into a BMP using the specified [`SaveFormat`].
+///
+/// This always produces a `Bmp::Info` (V3) header. For other header versions,
+/// use [`encode_rgba_to_bmp_ext`].
 pub fn encode_rgba_to_bmp_with_format(image: &DecodedImage, format: SaveFormat) -> Result<Bmp, EncodeError> {
     validate_image(image)?;
 
@@ -787,6 +1329,27 @@ pub fn encode_rgba_to_bmp_with_format(image: &DecodedImage, format: SaveFormat) 
     }
 }
 
+/// Encodes a decoded RGBA image into a BMP using the specified pixel format
+/// and header version, optionally preserving metadata from a source BMP.
+pub fn encode_rgba_to_bmp_ext(
+    image: &DecodedImage,
+    format: SaveFormat,
+    header_version: SaveHeaderVersion,
+    source: Option<&SourceMetadata>,
+) -> Result<Bmp, EncodeError> {
+    if !header_version.is_compatible(format) {
+        return Err(EncodeError::IncompatibleHeaderFormat {
+            format,
+            header: header_version,
+        });
+    }
+
+    // First encode using the Info-based encoders (which is what all individual
+    // encoders produce), then wrap with the target header version.
+    let info_bmp = encode_rgba_to_bmp_with_format(image, format)?;
+    wrap_with_header(info_bmp, header_version, source)
+}
+
 /// Saves a decoded RGBA image to a BMP file using the default format (32-bit
 /// uncompressed RGB). This preserves the original API.
 pub fn save_bmp(path: &Path, image: &DecodedImage) -> Result<(), EncodeError> {
@@ -796,6 +1359,22 @@ pub fn save_bmp(path: &Path, image: &DecodedImage) -> Result<(), EncodeError> {
 /// Saves a decoded RGBA image to a BMP file using the specified [`SaveFormat`].
 pub fn save_bmp_with_format(path: &Path, image: &DecodedImage, format: SaveFormat) -> Result<(), EncodeError> {
     let bmp = encode_rgba_to_bmp_with_format(image, format)?;
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    bmp.write_unchecked(&mut writer)?;
+    Ok(())
+}
+
+/// Saves a decoded RGBA image to a BMP file using the specified pixel format,
+/// header version, and optional source metadata.
+pub fn save_bmp_ext(
+    path: &Path,
+    image: &DecodedImage,
+    format: SaveFormat,
+    header_version: SaveHeaderVersion,
+    source: Option<&SourceMetadata>,
+) -> Result<(), EncodeError> {
+    let bmp = encode_rgba_to_bmp_ext(image, format, header_version, source)?;
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     bmp.write_unchecked(&mut writer)?;

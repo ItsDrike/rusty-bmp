@@ -4,7 +4,7 @@ use bmp::{
     raw::Bmp,
     runtime::{
         decode::{decode_to_rgba, DecodedImage},
-        encode::{save_bmp_with_format, SaveFormat},
+        encode::{save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
         transform::{apply_transform, ImageTransform, TransformPipeline},
     },
 };
@@ -24,6 +24,8 @@ struct BmpViewerApp {
     transformed_image: Option<DecodedImage>,
     pipeline: TransformPipeline,
     save_format: SaveFormat,
+    save_header_version: SaveHeaderVersion,
+    source_metadata: Option<SourceMetadata>,
 }
 
 impl BmpViewerApp {
@@ -87,6 +89,8 @@ impl BmpViewerApp {
 
         self.pipeline.clear();
         self.save_format = SaveFormat::from_bmp(&bmp);
+        self.save_header_version = SaveHeaderVersion::from_bmp(&bmp);
+        self.source_metadata = SourceMetadata::from_bmp(&bmp);
         let info = gui::metadata::format_bmp_info_sections(&bmp, &decoded);
         self.image_stats = info.image_stats;
         self.decoded_stats = info.decoded_stats;
@@ -129,9 +133,20 @@ impl BmpViewerApp {
             return;
         };
 
-        match save_bmp_with_format(&path, image, self.save_format) {
+        match save_bmp_ext(
+            &path,
+            image,
+            self.save_format,
+            self.save_header_version,
+            self.source_metadata.as_ref(),
+        ) {
             Ok(()) => {
-                self.status = format!("Saved {} ({})", path.display(), self.save_format);
+                self.status = format!(
+                    "Saved {} ({}, {})",
+                    path.display(),
+                    self.save_format,
+                    self.save_header_version
+                );
             }
             Err(err) => {
                 self.status = format!("Save failed: {err}");
@@ -172,11 +187,24 @@ impl eframe::App for BmpViewerApp {
                 let mirror = ui.button("Mirror").clicked();
                 let invert = ui.button("Invert Colors").clicked();
                 ui.separator();
+                ui.label("Header:");
+                egui::ComboBox::from_id_salt("save_header_version")
+                    .selected_text(self.save_header_version.to_string())
+                    .show_ui(ui, |ui| {
+                        for &ver in SaveHeaderVersion::ALL {
+                            ui.selectable_value(&mut self.save_header_version, ver, ver.to_string());
+                        }
+                    });
+                // If the current format is not compatible with the selected header
+                // version, reset to the first compatible format.
+                if !self.save_header_version.is_compatible(self.save_format) {
+                    self.save_format = self.save_header_version.compatible_formats()[0];
+                }
                 ui.label("Format:");
                 egui::ComboBox::from_id_salt("save_format")
                     .selected_text(self.save_format.to_string())
                     .show_ui(ui, |ui| {
-                        for &fmt in SaveFormat::ALL {
+                        for &fmt in self.save_header_version.compatible_formats() {
                             ui.selectable_value(&mut self.save_format, fmt, fmt.to_string());
                         }
                     });

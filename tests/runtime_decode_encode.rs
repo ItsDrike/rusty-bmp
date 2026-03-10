@@ -4,7 +4,10 @@ use bmp::{
     raw::Bmp,
     runtime::{
         decode::{decode_to_rgba, DecodedImage},
-        encode::{encode_rgba_to_bmp, encode_rgba_to_bmp_with_format, SaveFormat},
+        encode::{
+            encode_rgba_to_bmp, encode_rgba_to_bmp_ext, encode_rgba_to_bmp_with_format, SaveFormat, SaveHeaderVersion,
+            SourceMetadata,
+        },
     },
 };
 
@@ -337,4 +340,299 @@ fn all_formats_produce_valid_bmp() {
         buf.set_position(0);
         Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read_checked {fmt:?} failed: {e}"));
     }
+}
+
+// ===========================================================================
+// Header version roundtrip tests
+// ===========================================================================
+
+/// Encode with a specific format + header version, write to buffer, re-parse,
+/// decode back to RGBA.
+fn roundtrip_header_version(
+    source: &DecodedImage,
+    format: SaveFormat,
+    header: SaveHeaderVersion,
+    source_meta: Option<&SourceMetadata>,
+) -> (Bmp, DecodedImage) {
+    let bmp = encode_rgba_to_bmp_ext(source, format, header, source_meta)
+        .unwrap_or_else(|e| panic!("encode {format:?}/{header:?} failed: {e}"));
+
+    let mut buf = Cursor::new(Vec::<u8>::new());
+    bmp.write_unchecked(&mut buf)
+        .unwrap_or_else(|e| panic!("write {format:?}/{header:?} failed: {e}"));
+    buf.set_position(0);
+
+    let reparsed = Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read {format:?}/{header:?} failed: {e}"));
+    let decoded = decode_to_rgba(&reparsed).unwrap_or_else(|e| panic!("decode {format:?}/{header:?} failed: {e}"));
+    (reparsed, decoded)
+}
+
+// ---------------------------------------------------------------------------
+// Core header tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn roundtrip_core_rgb24_preserves_pixels() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::Rgb24, SaveHeaderVersion::Core, None);
+    assert!(matches!(bmp, Bmp::Core(_)), "expected Core variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    // RGB24 is lossless for RGB channels
+    let mut expected = source.rgba.clone();
+    for px in expected.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    assert_eq!(decoded.rgba, expected);
+}
+
+#[test]
+fn roundtrip_core_rgb8_within_tolerance() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::Rgb8, SaveHeaderVersion::Core, None);
+    assert!(matches!(bmp, Bmp::Core(_)), "expected Core variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    let mut reference = source.clone();
+    for px in reference.rgba.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    let diff = max_channel_diff(&decoded, &reference);
+    assert!(diff <= 2, "Core Rgb8 max channel diff {diff} exceeds 2");
+}
+
+#[test]
+fn roundtrip_core_rgb4_within_tolerance() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::Rgb4, SaveHeaderVersion::Core, None);
+    assert!(matches!(bmp, Bmp::Core(_)), "expected Core variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+}
+
+#[test]
+fn roundtrip_core_rgb1_dimensions_preserved() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::Rgb1, SaveHeaderVersion::Core, None);
+    assert!(matches!(bmp, Bmp::Core(_)), "expected Core variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+}
+
+#[test]
+fn core_rejects_incompatible_formats() {
+    let source = small_test_image();
+    // Core doesn't support Rgb16, Rgb32, RLE, or BitFields
+    for &fmt in &[
+        SaveFormat::Rgb16,
+        SaveFormat::Rgb32,
+        SaveFormat::Rle8,
+        SaveFormat::Rle4,
+        SaveFormat::BitFields16Rgb565,
+        SaveFormat::BitFields16Rgb555,
+        SaveFormat::BitFields32,
+    ] {
+        let result = encode_rgba_to_bmp_ext(&source, fmt, SaveHeaderVersion::Core, None);
+        assert!(result.is_err(), "Core should reject {fmt:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// V4 header tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn roundtrip_v4_rgb24_preserves_pixels() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::Rgb24, SaveHeaderVersion::V4, None);
+    assert!(matches!(bmp, Bmp::V4(_)), "expected V4 variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    let mut expected = source.rgba.clone();
+    for px in expected.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    assert_eq!(decoded.rgba, expected);
+}
+
+#[test]
+fn roundtrip_v4_bitfields32_preserves_pixels() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::BitFields32, SaveHeaderVersion::V4, None);
+    assert!(matches!(bmp, Bmp::V4(_)), "expected V4 variant");
+    let mut expected = source.rgba.clone();
+    for px in expected.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    assert_eq!(decoded.rgba, expected);
+}
+
+#[test]
+fn roundtrip_v4_rle8_within_tolerance() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::Rle8, SaveHeaderVersion::V4, None);
+    assert!(matches!(bmp, Bmp::V4(_)), "expected V4 variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    let mut reference = source.clone();
+    for px in reference.rgba.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    let diff = max_channel_diff(&decoded, &reference);
+    assert!(diff <= 2, "V4 Rle8 max channel diff {diff} exceeds 2");
+}
+
+#[test]
+fn v4_defaults_to_srgb_without_source() {
+    let source = small_test_image();
+    let bmp = encode_rgba_to_bmp_ext(&source, SaveFormat::Rgb24, SaveHeaderVersion::V4, None).unwrap();
+    if let Bmp::V4(data) = bmp {
+        assert_eq!(
+            data.bmp_header.cs_type,
+            bmp::raw::ColorSpaceType::SRgb,
+            "V4 without source should default to sRGB"
+        );
+    } else {
+        panic!("expected V4 variant");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// V5 header tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn roundtrip_v5_rgb24_preserves_pixels() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::Rgb24, SaveHeaderVersion::V5, None);
+    assert!(matches!(bmp, Bmp::V5(_)), "expected V5 variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    let mut expected = source.rgba.clone();
+    for px in expected.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    assert_eq!(decoded.rgba, expected);
+}
+
+#[test]
+fn roundtrip_v5_bitfields16_rgb565_within_tolerance() {
+    let source = small_test_image();
+    let (bmp, decoded) = roundtrip_header_version(&source, SaveFormat::BitFields16Rgb565, SaveHeaderVersion::V5, None);
+    assert!(matches!(bmp, Bmp::V5(_)), "expected V5 variant");
+    assert_eq!(decoded.width, source.width);
+    assert_eq!(decoded.height, source.height);
+    let mut reference = source.clone();
+    for px in reference.rgba.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    let diff = max_channel_diff(&decoded, &reference);
+    assert!(diff <= 9, "V5 BitFields16Rgb565 max channel diff {diff} exceeds 9");
+}
+
+#[test]
+fn v5_defaults_to_srgb_without_source() {
+    let source = small_test_image();
+    let bmp = encode_rgba_to_bmp_ext(&source, SaveFormat::Rgb24, SaveHeaderVersion::V5, None).unwrap();
+    if let Bmp::V5(data) = bmp {
+        assert_eq!(
+            data.bmp_header.v4.cs_type,
+            bmp::raw::ColorSpaceType::SRgb,
+            "V5 without source should default to sRGB"
+        );
+        assert!(
+            data.icc_profile.is_none(),
+            "V5 without source should have no ICC profile"
+        );
+    } else {
+        panic!("expected V5 variant");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// All header versions x all compatible formats produce valid BMPs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_header_versions_all_formats_produce_valid_bmp() {
+    let source = small_test_image();
+    for &header in SaveHeaderVersion::ALL {
+        for &fmt in header.compatible_formats() {
+            let bmp = encode_rgba_to_bmp_ext(&source, fmt, header, None)
+                .unwrap_or_else(|e| panic!("encode {fmt:?}/{header:?} failed: {e}"));
+            let mut buf = Cursor::new(Vec::<u8>::new());
+            bmp.write_unchecked(&mut buf)
+                .unwrap_or_else(|e| panic!("write {fmt:?}/{header:?} failed: {e}"));
+            buf.set_position(0);
+            Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read_checked {fmt:?}/{header:?} failed: {e}"));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Source metadata preservation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_preserves_source_metadata_from_v4_bmp() {
+    let source = small_test_image();
+
+    // Create a V4 BMP with specific color space info
+    let original_bmp = encode_rgba_to_bmp_ext(&source, SaveFormat::Rgb24, SaveHeaderVersion::V4, None).unwrap();
+    let meta = SourceMetadata::from_bmp(&original_bmp);
+    assert!(meta.is_some(), "should extract metadata from V4 bmp");
+
+    // Re-encode with the metadata preserved
+    let (reparsed, _decoded) =
+        roundtrip_header_version(&source, SaveFormat::Rgb32, SaveHeaderVersion::V4, meta.as_ref());
+    if let Bmp::V4(data) = reparsed {
+        assert_eq!(data.bmp_header.cs_type, bmp::raw::ColorSpaceType::SRgb);
+    } else {
+        panic!("expected V4 variant");
+    }
+}
+
+#[test]
+fn v5_preserves_source_metadata_from_v5_bmp() {
+    let source = small_test_image();
+
+    // Create a V5 BMP first
+    let original_bmp = encode_rgba_to_bmp_ext(&source, SaveFormat::Rgb24, SaveHeaderVersion::V5, None).unwrap();
+    let meta = SourceMetadata::from_bmp(&original_bmp);
+    assert!(meta.is_some(), "should extract metadata from V5 bmp");
+
+    // Re-encode with metadata preserved
+    let (reparsed, _decoded) =
+        roundtrip_header_version(&source, SaveFormat::Rgb32, SaveHeaderVersion::V5, meta.as_ref());
+    if let Bmp::V5(data) = reparsed {
+        assert_eq!(data.bmp_header.v4.cs_type, bmp::raw::ColorSpaceType::SRgb);
+        assert!(data.icc_profile.is_none());
+    } else {
+        panic!("expected V5 variant");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SaveHeaderVersion::from_bmp auto-detection tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn header_version_from_bmp_detects_correctly() {
+    let source = small_test_image();
+
+    // Info (default via encode_rgba_to_bmp_with_format)
+    let info_bmp = encode_rgba_to_bmp_with_format(&source, SaveFormat::Rgb24).unwrap();
+    assert_eq!(SaveHeaderVersion::from_bmp(&info_bmp), SaveHeaderVersion::Info);
+
+    // V4
+    let v4_bmp = encode_rgba_to_bmp_ext(&source, SaveFormat::Rgb24, SaveHeaderVersion::V4, None).unwrap();
+    assert_eq!(SaveHeaderVersion::from_bmp(&v4_bmp), SaveHeaderVersion::V4);
+
+    // V5
+    let v5_bmp = encode_rgba_to_bmp_ext(&source, SaveFormat::Rgb24, SaveHeaderVersion::V5, None).unwrap();
+    assert_eq!(SaveHeaderVersion::from_bmp(&v5_bmp), SaveHeaderVersion::V5);
+
+    // Core
+    let core_bmp = encode_rgba_to_bmp_ext(&source, SaveFormat::Rgb24, SaveHeaderVersion::Core, None).unwrap();
+    assert_eq!(SaveHeaderVersion::from_bmp(&core_bmp), SaveHeaderVersion::Core);
 }
