@@ -33,6 +33,8 @@ struct BmpViewerApp {
     zoom: f32,
     /// The effective zoom level from the last frame (used for display in the zoom bar).
     last_effective_zoom: f32,
+    /// Pixel under the cursor: (x, y, [r, g, b, a]). Stored per-frame for the zoom bar.
+    hovered_pixel: Option<(u32, u32, [u8; 4])>,
     /// Pan offset in screen pixels (relative to the centered image position).
     pan_offset: egui::Vec2,
 }
@@ -54,6 +56,7 @@ impl Default for BmpViewerApp {
             loaded_path: None,
             zoom: 0.0,
             last_effective_zoom: 1.0,
+            hovered_pixel: None,
             pan_offset: egui::Vec2::ZERO,
         }
     }
@@ -380,6 +383,20 @@ impl eframe::App for BmpViewerApp {
                         };
                         ui.monospace(&zoom_label);
 
+                        // Pixel info (from previous frame's hovered_pixel).
+                        if let Some((px, py, rgba)) = self.hovered_pixel {
+                            ui.separator();
+                            ui.monospace(format!(
+                                "({px}, {py})  RGBA({}, {}, {}, {})",
+                                rgba[0], rgba[1], rgba[2], rgba[3]
+                            ));
+                            // Small color swatch.
+                            let color = egui::Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+                            let (swatch_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                            ui.painter().rect_filled(swatch_rect, 2.0, color);
+                        }
+
                         // Push buttons to the right.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let is_1to1 = self.zoom == 1.0;
@@ -508,6 +525,55 @@ impl eframe::App for BmpViewerApp {
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+
+                // --- Pixel inspector (only at high zoom where pixels are visible) ---
+                const MIN_PIXEL_SIZE: f32 = 8.0;
+                self.hovered_pixel = None;
+                if effective_zoom >= MIN_PIXEL_SIZE {
+                    if let Some(pointer) = response.hover_pos() {
+                        if img_rect.contains(pointer) {
+                            // Map screen position to image pixel coordinates.
+                            let rel = pointer - img_rect.min;
+                            let px = (rel.x / effective_zoom) as u32;
+                            let py = (rel.y / effective_zoom) as u32;
+
+                            if let Some(image) = &self.transformed_image {
+                                if px < image.width && py < image.height {
+                                    let idx = ((py * image.width + px) * 4) as usize;
+                                    let rgba = [
+                                        image.rgba[idx],
+                                        image.rgba[idx + 1],
+                                        image.rgba[idx + 2],
+                                        image.rgba[idx + 3],
+                                    ];
+                                    self.hovered_pixel = Some((px, py, rgba));
+
+                                    // Draw highlight outline around the hovered pixel.
+                                    let pixel_screen_x = img_rect.min.x + px as f32 * effective_zoom;
+                                    let pixel_screen_y = img_rect.min.y + py as f32 * effective_zoom;
+                                    let pixel_rect = egui::Rect::from_min_size(
+                                        egui::pos2(pixel_screen_x, pixel_screen_y),
+                                        egui::vec2(effective_zoom, effective_zoom),
+                                    );
+                                    // Use a contrasting outline: white with a black inner border
+                                    // so it's visible on any pixel color.
+                                    painter.rect_stroke(
+                                        pixel_rect.expand(1.0),
+                                        0.0,
+                                        egui::Stroke::new(1.0, egui::Color32::BLACK),
+                                        egui::epaint::StrokeKind::Outside,
+                                    );
+                                    painter.rect_stroke(
+                                        pixel_rect,
+                                        0.0,
+                                        egui::Stroke::new(1.0, egui::Color32::WHITE),
+                                        egui::epaint::StrokeKind::Outside,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Store effective zoom for the zoom bar (rendered before this panel).
                 self.last_effective_zoom = effective_zoom;
