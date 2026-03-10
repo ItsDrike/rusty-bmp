@@ -210,17 +210,20 @@ pub fn rotate_left(image: &DecodedImage) -> DecodedImage {
     let src_h = image.height as usize;
     let dst_w = src_h;
     let dst_h = src_w;
+    let row_bytes = dst_w * 4;
     let mut out = vec![0_u8; dst_w * dst_h * 4];
 
-    for y in 0..src_h {
-        for x in 0..src_w {
+    // Iterate over output rows in parallel.
+    // Output row dst_y corresponds to source column x = src_w - 1 - dst_y.
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
+        let x = src_w - 1 - dst_y;
+        for dst_x in 0..dst_w {
+            let y = dst_x; // source row
             let src = (y * src_w + x) * 4;
-            let dst_x = y;
-            let dst_y = src_w - 1 - x;
-            let dst = (dst_y * dst_w + dst_x) * 4;
-            out[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+            let dst = dst_x * 4;
+            row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
         }
-    }
+    });
 
     DecodedImage {
         width: dst_w as u32,
@@ -234,17 +237,20 @@ pub fn rotate_right(image: &DecodedImage) -> DecodedImage {
     let src_h = image.height as usize;
     let dst_w = src_h;
     let dst_h = src_w;
+    let row_bytes = dst_w * 4;
     let mut out = vec![0_u8; dst_w * dst_h * 4];
 
-    for y in 0..src_h {
-        for x in 0..src_w {
+    // Iterate over output rows in parallel.
+    // Output row dst_y corresponds to source column x = dst_y.
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
+        let x = dst_y;
+        for dst_x in 0..dst_w {
+            let y = src_h - 1 - dst_x; // source row
             let src = (y * src_w + x) * 4;
-            let dst_x = src_h - 1 - y;
-            let dst_y = x;
-            let dst = (dst_y * dst_w + dst_x) * 4;
-            out[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+            let dst = dst_x * 4;
+            row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
         }
-    }
+    });
 
     DecodedImage {
         width: dst_w as u32,
@@ -256,16 +262,17 @@ pub fn rotate_right(image: &DecodedImage) -> DecodedImage {
 pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
     let w = image.width as usize;
     let h = image.height as usize;
+    let row_bytes = w * 4;
     let mut out = vec![0_u8; w * h * 4];
 
-    for y in 0..h {
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
         for x in 0..w {
             let src = (y * w + x) * 4;
             let dst_x = w - 1 - x;
-            let dst = (y * w + dst_x) * 4;
-            out[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+            let dst = dst_x * 4;
+            row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
         }
-    }
+    });
 
     DecodedImage {
         width: image.width,
@@ -277,14 +284,14 @@ pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
 pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
     let w = image.width as usize;
     let h = image.height as usize;
+    let row_bytes = w * 4;
     let mut out = vec![0_u8; w * h * 4];
 
-    for y in 0..h {
-        let dst_y = h - 1 - y;
-        let src = y * w * 4;
-        let dst = dst_y * w * 4;
-        out[dst..dst + w * 4].copy_from_slice(&image.rgba[src..src + w * 4]);
-    }
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
+        let src_y = h - 1 - y;
+        let src = src_y * row_bytes;
+        row.copy_from_slice(&image.rgba[src..src + row_bytes]);
+    });
 
     DecodedImage {
         width: image.width,
@@ -295,11 +302,11 @@ pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
 
 pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
-    for px in out.chunks_exact_mut(4) {
+    out.par_chunks_exact_mut(4).for_each(|px| {
         px[0] = 255 - px[0];
         px[1] = 255 - px[1];
         px[2] = 255 - px[2];
-    }
+    });
 
     DecodedImage {
         width: image.width,
@@ -310,14 +317,14 @@ pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
 
 pub fn grayscale(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
-    for px in out.chunks_exact_mut(4) {
+    out.par_chunks_exact_mut(4).for_each(|px| {
         // ITU-R BT.601 luma coefficients (standard perceptual weights).
         let luma = (0.299 * px[0] as f32 + 0.587 * px[1] as f32 + 0.114 * px[2] as f32).round() as u8;
         px[0] = luma;
         px[1] = luma;
         px[2] = luma;
         // Alpha unchanged.
-    }
+    });
 
     DecodedImage {
         width: image.width,
@@ -328,12 +335,12 @@ pub fn grayscale(image: &DecodedImage) -> DecodedImage {
 
 pub fn brightness(image: &DecodedImage, delta: i16) -> DecodedImage {
     let mut out = image.rgba.clone();
-    for px in out.chunks_exact_mut(4) {
+    out.par_chunks_exact_mut(4).for_each(|px| {
         px[0] = (px[0] as i16 + delta).clamp(0, 255) as u8;
         px[1] = (px[1] as i16 + delta).clamp(0, 255) as u8;
         px[2] = (px[2] as i16 + delta).clamp(0, 255) as u8;
         // Alpha unchanged.
-    }
+    });
 
     DecodedImage {
         width: image.width,
@@ -351,12 +358,12 @@ pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
     let factor = 259.0 * (delta_clamped + 255.0) / (255.0 * (259.0 - delta_clamped));
 
     let mut out = image.rgba.clone();
-    for px in out.chunks_exact_mut(4) {
+    out.par_chunks_exact_mut(4).for_each(|px| {
         px[0] = (factor * (px[0] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
         px[1] = (factor * (px[1] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
         px[2] = (factor * (px[2] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
         // Alpha unchanged.
-    }
+    });
 
     DecodedImage {
         width: image.width,

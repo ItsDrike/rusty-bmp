@@ -2,6 +2,7 @@
 ///
 /// Reduces an RGBA image to at most `max_colors` representative palette
 /// entries and returns both the palette and a per-pixel index buffer.
+use rayon::prelude::*;
 
 /// A single color bucket used during median-cut partitioning.
 struct Bucket {
@@ -173,8 +174,10 @@ pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
 
     let palette: Vec<[u8; 4]> = buckets.iter().map(|b| b.average_color(rgba)).collect();
 
-    // Map each pixel to the nearest palette entry.
+    // Map each pixel to the nearest palette entry (parallelized — this is the
+    // most expensive step, ~256 distance computations per pixel).
     let indices: Vec<u8> = (0..pixel_count)
+        .into_par_iter()
         .map(|i| {
             let off = i * 4;
             nearest_palette_index(&palette, rgba[off], rgba[off + 1], rgba[off + 2]) as u8
