@@ -38,7 +38,8 @@ impl BmpViewerApp {
             ui.horizontal(|ui| {
                 let rotate_left = ui.button("Rotate Left").clicked();
                 let rotate_right = ui.button("Rotate Right").clicked();
-                let mirror = ui.button("Mirror").clicked();
+                let mirror_h = ui.button("Mirror H").clicked();
+                let mirror_v = ui.button("Mirror V").clicked();
                 let invert = ui.button("Invert Colors").clicked();
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
@@ -46,8 +47,11 @@ impl BmpViewerApp {
                 if rotate_right {
                     self.apply_and_refresh(ctx, ImageTransform::RotateRight90);
                 }
-                if mirror {
+                if mirror_h {
                     self.apply_and_refresh(ctx, ImageTransform::MirrorHorizontal);
+                }
+                if mirror_v {
+                    self.apply_and_refresh(ctx, ImageTransform::MirrorVertical);
                 }
                 if invert {
                     self.apply_and_refresh(ctx, ImageTransform::InvertColors);

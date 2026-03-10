@@ -7,6 +7,7 @@ pub enum ImageTransform {
     RotateLeft90,
     RotateRight90,
     MirrorHorizontal,
+    MirrorVertical,
     InvertColors,
 }
 
@@ -15,7 +16,8 @@ impl fmt::Display for ImageTransform {
         match self {
             Self::RotateLeft90 => write!(f, "Rotate Left"),
             Self::RotateRight90 => write!(f, "Rotate Right"),
-            Self::MirrorHorizontal => write!(f, "Mirror"),
+            Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
+            Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
         }
     }
@@ -28,6 +30,7 @@ impl ImageTransform {
             Self::RotateLeft90 => Self::RotateRight90,
             Self::RotateRight90 => Self::RotateLeft90,
             Self::MirrorHorizontal => Self::MirrorHorizontal,
+            Self::MirrorVertical => Self::MirrorVertical,
             Self::InvertColors => Self::InvertColors,
         }
     }
@@ -81,6 +84,7 @@ pub fn apply_transform(image: &DecodedImage, op: ImageTransform) -> DecodedImage
         ImageTransform::RotateLeft90 => rotate_left(image),
         ImageTransform::RotateRight90 => rotate_right(image),
         ImageTransform::MirrorHorizontal => mirror_horizontal(image),
+        ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
     }
 }
@@ -154,6 +158,25 @@ pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
+    let w = image.width as usize;
+    let h = image.height as usize;
+    let mut out = vec![0_u8; w * h * 4];
+
+    for y in 0..h {
+        let dst_y = h - 1 - y;
+        let src = y * w * 4;
+        let dst = dst_y * w * 4;
+        out[dst..dst + w * 4].copy_from_slice(&image.rgba[src..src + w * 4]);
+    }
+
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba: out,
+    }
+}
+
 pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
     for px in out.chunks_exact_mut(4) {
@@ -209,6 +232,7 @@ mod tests {
             ImageTransform::MirrorHorizontal.inverse(),
             ImageTransform::MirrorHorizontal
         );
+        assert_eq!(ImageTransform::MirrorVertical.inverse(), ImageTransform::MirrorVertical);
         assert_eq!(ImageTransform::InvertColors.inverse(), ImageTransform::InvertColors);
     }
 
@@ -227,6 +251,7 @@ mod tests {
             ImageTransform::RotateLeft90,
             ImageTransform::RotateRight90,
             ImageTransform::MirrorHorizontal,
+            ImageTransform::MirrorVertical,
             ImageTransform::InvertColors,
         ] {
             let transformed = apply_transform(&image, op);
