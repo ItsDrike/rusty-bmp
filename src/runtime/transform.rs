@@ -1,5 +1,7 @@
 use std::fmt;
 
+use rayon::prelude::*;
+
 use crate::runtime::decode::DecodedImage;
 
 /// A convolution kernel of arbitrary odd size (3x3, 5x5, 7x7, ...).
@@ -371,13 +373,17 @@ pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
 /// neighbor coordinates are clamped to the nearest edge pixel.
 ///
 /// Alpha is passed through unchanged.
+///
+/// Rows are processed in parallel using rayon for better performance on
+/// larger images.
 pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
     let w = image.width as usize;
     let h = image.height as usize;
     let half = (kernel.size / 2) as isize;
-    let mut out = vec![0u8; w * h * 4];
+    let row_bytes = w * 4;
+    let mut out = vec![0u8; h * row_bytes];
 
-    for y in 0..h {
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
         for x in 0..w {
             let mut sum_r: i32 = 0;
             let mut sum_g: i32 = 0;
@@ -396,13 +402,13 @@ pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage 
                 }
             }
 
-            let dst = (y * w + x) * 4;
-            out[dst] = (sum_r / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
-            out[dst + 1] = (sum_g / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
-            out[dst + 2] = (sum_b / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
-            out[dst + 3] = image.rgba[(y * w + x) * 4 + 3]; // alpha unchanged
+            let dst = x * 4;
+            row[dst] = (sum_r / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            row[dst + 1] = (sum_g / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            row[dst + 2] = (sum_b / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
+            row[dst + 3] = image.rgba[(y * w + x) * 4 + 3]; // alpha unchanged
         }
-    }
+    });
 
     DecodedImage {
         width: image.width,
