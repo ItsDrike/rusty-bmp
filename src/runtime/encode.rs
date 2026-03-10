@@ -1087,6 +1087,10 @@ fn encode_bitfields16(image: &DecodedImage, masks: RgbMasks) -> Result<Bmp, Enco
     let b_shift = masks.blue_mask.trailing_zeros();
     let b_bits = masks.blue_mask.count_ones();
 
+    let r_max = (1u16 << r_bits) - 1;
+    let g_max = (1u16 << g_bits) - 1;
+    let b_max = (1u16 << b_bits) - 1;
+
     let mut bmp_pixels = vec![0u8; stride * h];
     for y in 0..h {
         let row_start = y * stride;
@@ -1095,10 +1099,6 @@ fn encode_bitfields16(image: &DecodedImage, masks: RgbMasks) -> Result<Bmp, Enco
             let r = image.rgba[src] as u16;
             let g = image.rgba[src + 1] as u16;
             let b = image.rgba[src + 2] as u16;
-
-            let r_max = (1u16 << r_bits) - 1;
-            let g_max = (1u16 << g_bits) - 1;
-            let b_max = (1u16 << b_bits) - 1;
 
             let rv = (r * r_max + 127) / 255;
             let gv = (g * g_max + 127) / 255;
