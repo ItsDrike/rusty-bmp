@@ -41,6 +41,7 @@ impl BmpViewerApp {
                 let mirror_h = ui.button("Mirror H").clicked();
                 let mirror_v = ui.button("Mirror V").clicked();
                 let invert = ui.button("Invert Colors").clicked();
+                let gray = ui.button("Grayscale").clicked();
                 if rotate_left {
                     self.apply_and_refresh(ctx, ImageTransform::RotateLeft90);
                 }
@@ -55,6 +56,9 @@ impl BmpViewerApp {
                 }
                 if invert {
                     self.apply_and_refresh(ctx, ImageTransform::InvertColors);
+                }
+                if gray {
+                    self.apply_and_refresh(ctx, ImageTransform::Grayscale);
                 }
             });
 

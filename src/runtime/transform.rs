@@ -9,6 +9,7 @@ pub enum ImageTransform {
     MirrorHorizontal,
     MirrorVertical,
     InvertColors,
+    Grayscale,
 }
 
 impl fmt::Display for ImageTransform {
@@ -19,19 +20,22 @@ impl fmt::Display for ImageTransform {
             Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
+            Self::Grayscale => write!(f, "Grayscale"),
         }
     }
 }
 
 impl ImageTransform {
-    /// Returns the transform that reverses the effect of `self`.
-    pub fn inverse(self) -> Self {
+    /// Returns the transform that reverses the effect of `self`, or `None`
+    /// if the transform is lossy and requires a full pipeline replay to undo.
+    pub fn inverse(self) -> Option<Self> {
         match self {
-            Self::RotateLeft90 => Self::RotateRight90,
-            Self::RotateRight90 => Self::RotateLeft90,
-            Self::MirrorHorizontal => Self::MirrorHorizontal,
-            Self::MirrorVertical => Self::MirrorVertical,
-            Self::InvertColors => Self::InvertColors,
+            Self::RotateLeft90 => Some(Self::RotateRight90),
+            Self::RotateRight90 => Some(Self::RotateLeft90),
+            Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
+            Self::MirrorVertical => Some(Self::MirrorVertical),
+            Self::InvertColors => Some(Self::InvertColors),
+            Self::Grayscale => None,
         }
     }
 }
@@ -86,6 +90,7 @@ pub fn apply_transform(image: &DecodedImage, op: ImageTransform) -> DecodedImage
         ImageTransform::MirrorHorizontal => mirror_horizontal(image),
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
+        ImageTransform::Grayscale => grayscale(image),
     }
 }
 
@@ -192,6 +197,24 @@ pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+pub fn grayscale(image: &DecodedImage) -> DecodedImage {
+    let mut out = image.rgba.clone();
+    for px in out.chunks_exact_mut(4) {
+        // ITU-R BT.601 luma coefficients (standard perceptual weights).
+        let luma = (0.299 * px[0] as f32 + 0.587 * px[1] as f32 + 0.114 * px[2] as f32).round() as u8;
+        px[0] = luma;
+        px[1] = luma;
+        px[2] = luma;
+        // Alpha unchanged.
+    }
+
+    DecodedImage {
+        width: image.width,
+        height: image.height,
+        rgba: out,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{apply_transform, invert_colors, ImageTransform};
@@ -222,18 +245,35 @@ mod tests {
 
     #[test]
     fn inverse_of_rotate_left_is_rotate_right() {
-        assert_eq!(ImageTransform::RotateLeft90.inverse(), ImageTransform::RotateRight90);
-        assert_eq!(ImageTransform::RotateRight90.inverse(), ImageTransform::RotateLeft90);
+        assert_eq!(
+            ImageTransform::RotateLeft90.inverse(),
+            Some(ImageTransform::RotateRight90)
+        );
+        assert_eq!(
+            ImageTransform::RotateRight90.inverse(),
+            Some(ImageTransform::RotateLeft90)
+        );
     }
 
     #[test]
     fn self_inverse_transforms() {
         assert_eq!(
             ImageTransform::MirrorHorizontal.inverse(),
-            ImageTransform::MirrorHorizontal
+            Some(ImageTransform::MirrorHorizontal)
         );
-        assert_eq!(ImageTransform::MirrorVertical.inverse(), ImageTransform::MirrorVertical);
-        assert_eq!(ImageTransform::InvertColors.inverse(), ImageTransform::InvertColors);
+        assert_eq!(
+            ImageTransform::MirrorVertical.inverse(),
+            Some(ImageTransform::MirrorVertical)
+        );
+        assert_eq!(
+            ImageTransform::InvertColors.inverse(),
+            Some(ImageTransform::InvertColors)
+        );
+    }
+
+    #[test]
+    fn lossy_transforms_have_no_inverse() {
+        assert_eq!(ImageTransform::Grayscale.inverse(), None);
     }
 
     #[test]
@@ -254,11 +294,27 @@ mod tests {
             ImageTransform::MirrorVertical,
             ImageTransform::InvertColors,
         ] {
+            let inv = op.inverse().expect("reversible transform should have an inverse");
             let transformed = apply_transform(&image, op);
-            let restored = apply_transform(&transformed, op.inverse());
+            let restored = apply_transform(&transformed, inv);
             assert_eq!(restored.width, image.width, "width mismatch for {op}");
             assert_eq!(restored.height, image.height, "height mismatch for {op}");
             assert_eq!(restored.rgba, image.rgba, "pixel data mismatch for {op}");
         }
+    }
+
+    #[test]
+    fn grayscale_uses_perceptual_weights() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![100, 150, 200, 128],
+        };
+        let gray = super::grayscale(&image);
+        // BT.601: 0.299*100 + 0.587*150 + 0.114*200 = 29.9 + 88.05 + 22.8 = 140.75 → 141
+        assert_eq!(gray.rgba[0], 141);
+        assert_eq!(gray.rgba[1], 141);
+        assert_eq!(gray.rgba[2], 141);
+        assert_eq!(gray.rgba[3], 128); // alpha unchanged
     }
 }
