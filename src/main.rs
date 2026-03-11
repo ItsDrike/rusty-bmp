@@ -5,7 +5,10 @@ use bmp::{
     runtime::{
         decode::{decode_to_rgba, DecodedImage},
         encode::{save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
-        transform::{apply_transform, ConvolutionFilter, ImageTransform, RotationInterpolation, TransformPipeline},
+        transform::{
+            apply_transform, ConvolutionFilter, ImageTransform, RotationInterpolation, TransformPipeline,
+            TranslateMode,
+        },
     },
 };
 use eframe::egui;
@@ -114,6 +117,17 @@ pub(crate) struct BmpViewerApp {
     pub(crate) skew_interpolation: RotationInterpolation,
     /// Whether to expand output canvas for skew.
     pub(crate) skew_expand: bool,
+
+    /// Whether the translate window is open.
+    pub(crate) translate_open: bool,
+    /// Horizontal translation in pixels.
+    pub(crate) translate_dx: i32,
+    /// Vertical translation in pixels.
+    pub(crate) translate_dy: i32,
+    /// Crop/expand mode for translation.
+    pub(crate) translate_mode: TranslateMode,
+    /// Fill color for uncovered pixels after translation.
+    pub(crate) translate_fill: [u8; 4],
 }
 
 impl Default for BmpViewerApp {
@@ -157,6 +171,11 @@ impl Default for BmpViewerApp {
             skew_y_percent: 0.0,
             skew_interpolation: RotationInterpolation::Bilinear,
             skew_expand: true,
+            translate_open: false,
+            translate_dx: 0,
+            translate_dy: 0,
+            translate_mode: TranslateMode::Crop,
+            translate_fill: [0, 0, 0, 0],
         }
     }
 }
@@ -401,6 +420,9 @@ impl eframe::App for BmpViewerApp {
             self.apply_and_refresh(ctx, op);
         }
         if let Some(op) = self.show_skew_window(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
+        if let Some(op) = self.show_translate_window(ctx) {
             self.apply_and_refresh(ctx, op);
         }
         if let Some(op) = self.show_kernel_editor(ctx) {

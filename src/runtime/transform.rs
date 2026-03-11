@@ -176,6 +176,21 @@ impl fmt::Display for RotationInterpolation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TranslateMode {
+    Crop,
+    Expand,
+}
+
+impl fmt::Display for TranslateMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Crop => write!(f, "Crop"),
+            Self::Expand => write!(f, "Expand"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageTransform {
     RotateLeft90,
@@ -200,6 +215,13 @@ pub enum ImageTransform {
         y_milli: i16,
         interpolation: RotationInterpolation,
         expand: bool,
+    },
+    /// Translate image by integer pixel offsets.
+    Translate {
+        dx: i32,
+        dy: i32,
+        mode: TranslateMode,
+        fill: [u8; 4],
     },
     MirrorHorizontal,
     MirrorVertical,
@@ -246,6 +268,11 @@ impl fmt::Display for ImageTransform {
                 let mode = if *expand { "Expand" } else { "Crop" };
                 write!(f, "Skew x={kx:+.3}, y={ky:+.3} ({interpolation}, {mode})")
             }
+            Self::Translate { dx, dy, mode, fill } => write!(
+                f,
+                "Translate dx={dx:+}, dy={dy:+} ({mode}, fill #{:02X}{:02X}{:02X}{:02X})",
+                fill[0], fill[1], fill[2], fill[3]
+            ),
             Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
@@ -281,6 +308,7 @@ impl ImageTransform {
             Self::RotateAny { .. } => None,
             Self::Resize { .. } => None,
             Self::Skew { .. } => None,
+            Self::Translate { .. } => None,
             Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
             Self::MirrorVertical => Some(Self::MirrorVertical),
             Self::InvertColors => Some(Self::InvertColors),
@@ -327,6 +355,7 @@ impl ImageTransform {
                 RotationInterpolation::Bilinear => 5,
                 RotationInterpolation::Bicubic => 8,
             },
+            Self::Translate { .. } => 2,
             // Convolutions scale with kernel footprint.
             Self::Convolution(filter) => filter.kernel().replay_cost(),
             Self::CustomKernel(kernel) => kernel.replay_cost(),
@@ -481,6 +510,7 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
             *interpolation,
             *expand,
         ),
+        ImageTransform::Translate { dx, dy, mode, fill } => translate_image(image, *dx, *dy, *mode, *fill),
         ImageTransform::MirrorHorizontal => mirror_horizontal(image),
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
@@ -566,6 +596,47 @@ pub fn skew_image(
             let dst = dx_i * 4;
             let sample = sample_rgba(image, sx, sy, interpolation);
             row[dst..dst + 4].copy_from_slice(&sample);
+        }
+    });
+
+    DecodedImage {
+        width: dst_w as u32,
+        height: dst_h as u32,
+        rgba: out,
+    }
+}
+
+pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMode, fill: [u8; 4]) -> DecodedImage {
+    let src_w = image.width as usize;
+    let src_h = image.height as usize;
+    if src_w == 0 || src_h == 0 {
+        return image.clone();
+    }
+
+    let (dst_w, dst_h, x_base, y_base) = match mode {
+        TranslateMode::Crop => (src_w, src_h, 0_i32, 0_i32),
+        TranslateMode::Expand => (
+            src_w + dx.unsigned_abs() as usize,
+            src_h + dy.unsigned_abs() as usize,
+            (-dx).max(0),
+            (-dy).max(0),
+        ),
+    };
+
+    let mut out = vec![0_u8; dst_w * dst_h * 4];
+    out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&fill));
+    let row_bytes = dst_w * 4;
+
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
+        for dst_x in 0..dst_w {
+            let src_x = dst_x as i32 - dx - x_base;
+            let src_y = dst_y as i32 - dy - y_base;
+
+            if src_x >= 0 && src_x < src_w as i32 && src_y >= 0 && src_y < src_h as i32 {
+                let src = (src_y as usize * src_w + src_x as usize) * 4;
+                let dst = dst_x * 4;
+                row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+            }
         }
     });
 
@@ -1137,8 +1208,8 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 mod tests {
     use super::{
         apply_convolution, apply_transform, invert_colors, resize_image, rotate_any, sepia, skew_image,
-        ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation, TransformPipeline,
-        CHECKPOINT_COST_THRESHOLD,
+        translate_image, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation, TransformPipeline,
+        TranslateMode, CHECKPOINT_COST_THRESHOLD,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -1221,6 +1292,16 @@ mod tests {
                 y_milli: 0,
                 interpolation: RotationInterpolation::Bilinear,
                 expand: true,
+            }
+            .inverse(),
+            None
+        );
+        assert_eq!(
+            ImageTransform::Translate {
+                dx: 10,
+                dy: -4,
+                mode: TranslateMode::Crop,
+                fill: [0, 0, 0, 0],
             }
             .inverse(),
             None
@@ -1629,6 +1710,17 @@ mod tests {
     }
 
     #[test]
+    fn translate_display_format() {
+        let op = ImageTransform::Translate {
+            dx: -12,
+            dy: 7,
+            mode: TranslateMode::Expand,
+            fill: [0x10, 0x20, 0x30, 0x40],
+        };
+        assert_eq!(op.to_string(), "Translate dx=-12, dy=+7 (Expand, fill #10203040)");
+    }
+
+    #[test]
     fn rotate_any_zero_is_identity() {
         let image = DecodedImage {
             width: 3,
@@ -1753,6 +1845,49 @@ mod tests {
         assert!(out.width >= image.width);
         assert!(out.height >= image.height);
         assert!(out.width > image.width || out.height > image.height);
+    }
+
+    #[test]
+    fn translate_zero_is_identity() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
+            ],
+        };
+        let out = translate_image(&image, 0, 0, TranslateMode::Crop, [0, 0, 0, 0]);
+        assert_eq!(out.width, image.width);
+        assert_eq!(out.height, image.height);
+        assert_eq!(out.rgba, image.rgba);
+    }
+
+    #[test]
+    fn translate_crop_right_uses_fill_on_left() {
+        let image = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        };
+        let fill = [1, 2, 3, 4];
+        let out = translate_image(&image, 1, 0, TranslateMode::Crop, fill);
+        assert_eq!(out.width, 2);
+        assert_eq!(out.height, 2);
+        assert_eq!(out.rgba, vec![1, 2, 3, 4, 10, 20, 30, 255, 1, 2, 3, 4, 70, 80, 90, 255]);
+    }
+
+    #[test]
+    fn translate_expand_left_grows_canvas_and_keeps_all_pixels() {
+        let image = DecodedImage {
+            width: 2,
+            height: 1,
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
+        };
+        let fill = [0, 0, 0, 0];
+        let out = translate_image(&image, -1, 0, TranslateMode::Expand, fill);
+        assert_eq!(out.width, 3);
+        assert_eq!(out.height, 1);
+        assert_eq!(out.rgba, vec![10, 20, 30, 255, 40, 50, 60, 255, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2012,6 +2147,19 @@ mod tests {
         .replay_cost();
         assert!(bilinear > nearest, "bilinear skew should be costlier than nearest");
         assert!(bicubic > bilinear, "bicubic skew should be costlier than bilinear");
+    }
+
+    #[test]
+    fn replay_cost_translate_is_low_nonzero() {
+        let cost = ImageTransform::Translate {
+            dx: 10,
+            dy: -3,
+            mode: TranslateMode::Crop,
+            fill: [0, 0, 0, 0],
+        }
+        .replay_cost();
+        assert!(cost > 0);
+        assert!(cost <= 2);
     }
 
     #[test]
