@@ -103,6 +103,17 @@ pub(crate) struct BmpViewerApp {
     pub(crate) resize_keep_aspect: bool,
     /// Interpolation method for resize.
     pub(crate) resize_interpolation: RotationInterpolation,
+
+    /// Whether the skew/shear window is open.
+    pub(crate) skew_open: bool,
+    /// X shear (%) used by skew dialog.
+    pub(crate) skew_x_percent: f32,
+    /// Y shear (%) used by skew dialog.
+    pub(crate) skew_y_percent: f32,
+    /// Interpolation method for skew.
+    pub(crate) skew_interpolation: RotationInterpolation,
+    /// Whether to expand output canvas for skew.
+    pub(crate) skew_expand: bool,
 }
 
 impl Default for BmpViewerApp {
@@ -141,6 +152,11 @@ impl Default for BmpViewerApp {
             resize_height_input: String::new(),
             resize_keep_aspect: true,
             resize_interpolation: RotationInterpolation::Bilinear,
+            skew_open: false,
+            skew_x_percent: 0.0,
+            skew_y_percent: 0.0,
+            skew_interpolation: RotationInterpolation::Bilinear,
+            skew_expand: true,
         }
     }
 }
@@ -382,6 +398,9 @@ impl eframe::App for BmpViewerApp {
             self.apply_and_refresh(ctx, op);
         }
         if let Some(op) = self.show_resize_window(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
+        if let Some(op) = self.show_skew_window(ctx) {
             self.apply_and_refresh(ctx, op);
         }
         if let Some(op) = self.show_kernel_editor(ctx) {

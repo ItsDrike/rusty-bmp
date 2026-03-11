@@ -3,6 +3,7 @@ pub mod metadata;
 pub mod palette;
 pub(crate) mod resize_editor;
 pub(crate) mod rotate_editor;
+pub(crate) mod skew_editor;
 pub(crate) mod side_panel;
 pub(crate) mod toolbar;
 pub(crate) mod viewer;

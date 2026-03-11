@@ -192,6 +192,15 @@ pub enum ImageTransform {
         height: u32,
         interpolation: RotationInterpolation,
     },
+    /// Shear image along X/Y axes by affine skew factors.
+    Skew {
+        /// X shear factor in thousandths (kx = x_milli / 1000).
+        x_milli: i16,
+        /// Y shear factor in thousandths (ky = y_milli / 1000).
+        y_milli: i16,
+        interpolation: RotationInterpolation,
+        expand: bool,
+    },
     MirrorHorizontal,
     MirrorVertical,
     InvertColors,
@@ -226,6 +235,17 @@ impl fmt::Display for ImageTransform {
                 height,
                 interpolation,
             } => write!(f, "Resize to {width}x{height} ({interpolation})"),
+            Self::Skew {
+                x_milli,
+                y_milli,
+                interpolation,
+                expand,
+            } => {
+                let kx = *x_milli as f32 / 1000.0;
+                let ky = *y_milli as f32 / 1000.0;
+                let mode = if *expand { "Expand" } else { "Crop" };
+                write!(f, "Skew x={kx:+.3}, y={ky:+.3} ({interpolation}, {mode})")
+            }
             Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
@@ -260,6 +280,7 @@ impl ImageTransform {
             Self::RotateRight90 => Some(Self::RotateLeft90),
             Self::RotateAny { .. } => None,
             Self::Resize { .. } => None,
+            Self::Skew { .. } => None,
             Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
             Self::MirrorVertical => Some(Self::MirrorVertical),
             Self::InvertColors => Some(Self::InvertColors),
@@ -300,6 +321,11 @@ impl ImageTransform {
                 RotationInterpolation::Nearest => 2,
                 RotationInterpolation::Bilinear => 4,
                 RotationInterpolation::Bicubic => 7,
+            },
+            Self::Skew { interpolation, .. } => match interpolation {
+                RotationInterpolation::Nearest => 3,
+                RotationInterpolation::Bilinear => 5,
+                RotationInterpolation::Bicubic => 8,
             },
             // Convolutions scale with kernel footprint.
             Self::Convolution(filter) => filter.kernel().replay_cost(),
@@ -443,6 +469,18 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
             height,
             interpolation,
         } => resize_image(image, *width, *height, *interpolation),
+        ImageTransform::Skew {
+            x_milli,
+            y_milli,
+            interpolation,
+            expand,
+        } => skew_image(
+            image,
+            *x_milli as f32 / 1000.0,
+            *y_milli as f32 / 1000.0,
+            *interpolation,
+            *expand,
+        ),
         ImageTransform::MirrorHorizontal => mirror_horizontal(image),
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
@@ -452,6 +490,89 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
         ImageTransform::Contrast(delta) => contrast(image, *delta),
         ImageTransform::Convolution(filter) => apply_convolution(image, &filter.kernel()),
         ImageTransform::CustomKernel(kernel) => apply_convolution(image, kernel),
+    }
+}
+
+pub fn skew_image(
+    image: &DecodedImage,
+    kx: f32,
+    ky: f32,
+    interpolation: RotationInterpolation,
+    expand: bool,
+) -> DecodedImage {
+    let src_w = image.width as usize;
+    let src_h = image.height as usize;
+    if src_w == 0 || src_h == 0 {
+        return image.clone();
+    }
+
+    let det = 1.0 - kx * ky;
+    if det.abs() < 1e-6 {
+        // Nearly singular affine transform: avoid unstable inversion.
+        return image.clone();
+    }
+
+    let src_cx = (src_w as f32 - 1.0) * 0.5;
+    let src_cy = (src_h as f32 - 1.0) * 0.5;
+
+    let (dst_w, dst_h) = if expand {
+        let corners = [
+            (-src_cx, -src_cy),
+            (src_cx, -src_cy),
+            (src_cx, src_cy),
+            (-src_cx, src_cy),
+        ];
+
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+
+        for (x, y) in corners {
+            let dx = x + kx * y;
+            let dy = ky * x + y;
+            min_x = min_x.min(dx);
+            max_x = max_x.max(dx);
+            min_y = min_y.min(dy);
+            max_y = max_y.max(dy);
+        }
+
+        let w = (max_x - min_x).ceil() as usize + 1;
+        let h = (max_y - min_y).ceil() as usize + 1;
+        (w.max(1), h.max(1))
+    } else {
+        (src_w, src_h)
+    };
+
+    let dst_cx = (dst_w as f32 - 1.0) * 0.5;
+    let dst_cy = (dst_h as f32 - 1.0) * 0.5;
+
+    let row_bytes = dst_w * 4;
+    let mut out = vec![0_u8; dst_w * dst_h * 4];
+    let inv = 1.0 / det;
+
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy_i, row)| {
+        let y = dy_i as f32 - dst_cy;
+        for dx_i in 0..dst_w {
+            let x = dx_i as f32 - dst_cx;
+
+            // Inverse map: src_rel = A^-1 * dst_rel where
+            // A = [[1, kx], [ky, 1]], det = 1 - kx*ky.
+            let sx_rel = (x - kx * y) * inv;
+            let sy_rel = (-ky * x + y) * inv;
+
+            let sx = sx_rel + src_cx;
+            let sy = sy_rel + src_cy;
+            let dst = dx_i * 4;
+            let sample = sample_rgba(image, sx, sy, interpolation);
+            row[dst..dst + 4].copy_from_slice(&sample);
+        }
+    });
+
+    DecodedImage {
+        width: dst_w as u32,
+        height: dst_h as u32,
+        rgba: out,
     }
 }
 
@@ -1015,8 +1136,9 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_convolution, apply_transform, invert_colors, resize_image, rotate_any, sepia, ConvolutionFilter,
-        ImageTransform, Kernel, RotationInterpolation, TransformPipeline, CHECKPOINT_COST_THRESHOLD,
+        apply_convolution, apply_transform, invert_colors, resize_image, rotate_any, sepia, skew_image,
+        ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation, TransformPipeline,
+        CHECKPOINT_COST_THRESHOLD,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -1089,6 +1211,16 @@ mod tests {
                 width: 320,
                 height: 240,
                 interpolation: RotationInterpolation::Bilinear,
+            }
+            .inverse(),
+            None
+        );
+        assert_eq!(
+            ImageTransform::Skew {
+                x_milli: 250,
+                y_milli: 0,
+                interpolation: RotationInterpolation::Bilinear,
+                expand: true,
             }
             .inverse(),
             None
@@ -1486,6 +1618,17 @@ mod tests {
     }
 
     #[test]
+    fn skew_display_format() {
+        let op = ImageTransform::Skew {
+            x_milli: 250,
+            y_milli: -125,
+            interpolation: RotationInterpolation::Bilinear,
+            expand: false,
+        };
+        assert_eq!(op.to_string(), "Skew x=+0.250, y=-0.125 (Bilinear, Crop)");
+    }
+
+    #[test]
     fn rotate_any_zero_is_identity() {
         let image = DecodedImage {
             width: 3,
@@ -1582,6 +1725,34 @@ mod tests {
         assert_eq!(out.width, 1);
         assert_eq!(out.height, 1);
         assert_eq!(out.rgba, vec![100, 110, 120, 255]);
+    }
+
+    #[test]
+    fn skew_zero_is_identity() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
+            ],
+        };
+        let out = skew_image(&image, 0.0, 0.0, RotationInterpolation::Nearest, false);
+        assert_eq!(out.width, image.width);
+        assert_eq!(out.height, image.height);
+        assert_eq!(out.rgba, image.rgba);
+    }
+
+    #[test]
+    fn skew_expand_can_grow_canvas() {
+        let image = DecodedImage {
+            width: 5,
+            height: 5,
+            rgba: vec![255; 5 * 5 * 4],
+        };
+        let out = skew_image(&image, 0.7, 0.0, RotationInterpolation::Nearest, true);
+        assert!(out.width >= image.width);
+        assert!(out.height >= image.height);
+        assert!(out.width > image.width || out.height > image.height);
     }
 
     #[test]
@@ -1814,6 +1985,33 @@ mod tests {
         .replay_cost();
         assert!(bilinear > nearest, "bilinear resize should be costlier than nearest");
         assert!(bicubic > bilinear, "bicubic resize should be costlier than bilinear");
+    }
+
+    #[test]
+    fn replay_cost_skew_depends_on_interpolation() {
+        let nearest = ImageTransform::Skew {
+            x_milli: 200,
+            y_milli: 0,
+            interpolation: RotationInterpolation::Nearest,
+            expand: true,
+        }
+        .replay_cost();
+        let bilinear = ImageTransform::Skew {
+            x_milli: 200,
+            y_milli: 0,
+            interpolation: RotationInterpolation::Bilinear,
+            expand: true,
+        }
+        .replay_cost();
+        let bicubic = ImageTransform::Skew {
+            x_milli: 200,
+            y_milli: 0,
+            interpolation: RotationInterpolation::Bicubic,
+            expand: true,
+        }
+        .replay_cost();
+        assert!(bilinear > nearest, "bilinear skew should be costlier than nearest");
+        assert!(bicubic > bilinear, "bicubic skew should be costlier than bilinear");
     }
 
     #[test]
