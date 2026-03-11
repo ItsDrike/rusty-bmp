@@ -110,6 +110,76 @@ impl BmpViewerApp {
                     egui::Color32::WHITE,
                 );
 
+                // --- Crop preview overlay (enabled while crop dialog is open) ---
+                if self.crop_open {
+                    if let Some(image) = &self.transformed_image {
+                        let (cx, cy, cw, ch) = self.crop_rect_for_image(image.width, image.height);
+                        let crop_min = egui::pos2(
+                            img_rect.min.x + cx as f32 * effective_zoom,
+                            img_rect.min.y + cy as f32 * effective_zoom,
+                        );
+                        let crop_size = egui::vec2(cw as f32 * effective_zoom, ch as f32 * effective_zoom);
+                        let crop_rect = egui::Rect::from_min_size(crop_min, crop_size);
+
+                        // Dim outside crop region, but only over the image area.
+                        let shade = egui::Color32::from_black_alpha(110);
+                        if crop_rect.top() > img_rect.top() {
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(img_rect.left(), img_rect.top()),
+                                    egui::pos2(img_rect.right(), crop_rect.top()),
+                                ),
+                                0.0,
+                                shade,
+                            );
+                        }
+                        if crop_rect.bottom() < img_rect.bottom() {
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(img_rect.left(), crop_rect.bottom()),
+                                    egui::pos2(img_rect.right(), img_rect.bottom()),
+                                ),
+                                0.0,
+                                shade,
+                            );
+                        }
+                        if crop_rect.left() > img_rect.left() {
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(img_rect.left(), crop_rect.top()),
+                                    egui::pos2(crop_rect.left(), crop_rect.bottom()),
+                                ),
+                                0.0,
+                                shade,
+                            );
+                        }
+                        if crop_rect.right() < img_rect.right() {
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(crop_rect.right(), crop_rect.top()),
+                                    egui::pos2(img_rect.right(), crop_rect.bottom()),
+                                ),
+                                0.0,
+                                shade,
+                            );
+                        }
+
+                        // High-contrast crop rectangle.
+                        painter.rect_stroke(
+                            crop_rect.expand(1.0),
+                            0.0,
+                            egui::Stroke::new(1.0, egui::Color32::BLACK),
+                            egui::epaint::StrokeKind::Outside,
+                        );
+                        painter.rect_stroke(
+                            crop_rect,
+                            0.0,
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(80, 220, 120)),
+                            egui::epaint::StrokeKind::Outside,
+                        );
+                    }
+                }
+
                 // --- Pixel inspector (only at high zoom where pixels are visible) ---
                 const MIN_PIXEL_SIZE: f32 = 8.0;
                 self.hovered_pixel = None;

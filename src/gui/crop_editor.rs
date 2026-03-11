@@ -160,6 +160,21 @@ impl BmpViewerApp {
         self.crop_width = self.crop_width.max(1).min(img_w.max(1));
         self.crop_height = self.crop_height.max(1).min(img_h.max(1));
     }
+
+    /// Returns the clamped crop rectangle (top-left + size) for the given image size.
+    ///
+    /// Crop dialog fields are center-based; this converts them to the runtime crop
+    /// rectangle representation used by the transform and by viewer preview overlays.
+    pub(crate) fn crop_rect_for_image(&self, img_w: u32, img_h: u32) -> (u32, u32, u32, u32) {
+        clamped_crop_rect(
+            self.crop_x,
+            self.crop_y,
+            self.crop_width,
+            self.crop_height,
+            img_w,
+            img_h,
+        )
+    }
 }
 
 fn clamped_crop_rect(
