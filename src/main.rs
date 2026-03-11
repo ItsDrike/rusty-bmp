@@ -92,6 +92,17 @@ pub(crate) struct BmpViewerApp {
     pub(crate) rotate_any_interpolation: RotationInterpolation,
     /// Whether to expand output canvas to fit the full rotated image.
     pub(crate) rotate_any_expand: bool,
+
+    /// Whether the resize window is open.
+    pub(crate) resize_open: bool,
+    /// Target width input for resize dialog.
+    pub(crate) resize_width_input: String,
+    /// Target height input for resize dialog.
+    pub(crate) resize_height_input: String,
+    /// Keep source aspect ratio when applying resize.
+    pub(crate) resize_keep_aspect: bool,
+    /// Interpolation method for resize.
+    pub(crate) resize_interpolation: RotationInterpolation,
 }
 
 impl Default for BmpViewerApp {
@@ -125,6 +136,11 @@ impl Default for BmpViewerApp {
             rotate_any_angle: 0.0,
             rotate_any_interpolation: RotationInterpolation::Bilinear,
             rotate_any_expand: true,
+            resize_open: false,
+            resize_width_input: String::new(),
+            resize_height_input: String::new(),
+            resize_keep_aspect: true,
+            resize_interpolation: RotationInterpolation::Bilinear,
         }
     }
 }
@@ -363,6 +379,9 @@ impl eframe::App for BmpViewerApp {
 
         // --- Floating windows ---
         if let Some(op) = self.show_rotate_any_window(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
+        if let Some(op) = self.show_resize_window(ctx) {
             self.apply_and_refresh(ctx, op);
         }
         if let Some(op) = self.show_kernel_editor(ctx) {

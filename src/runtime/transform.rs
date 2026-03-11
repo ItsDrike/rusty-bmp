@@ -111,7 +111,11 @@ impl Kernel {
     /// - 5×5 non-separable kernel -> `N² = 25`
     pub fn replay_cost(&self) -> u32 {
         let n = self.size as u32;
-        if self.separable().is_some() { 2 * n } else { n * n }
+        if self.separable().is_some() {
+            2 * n
+        } else {
+            n * n
+        }
     }
 }
 
@@ -182,6 +186,12 @@ pub enum ImageTransform {
         interpolation: RotationInterpolation,
         expand: bool,
     },
+    /// Resize image to explicit output dimensions.
+    Resize {
+        width: u32,
+        height: u32,
+        interpolation: RotationInterpolation,
+    },
     MirrorHorizontal,
     MirrorVertical,
     InvertColors,
@@ -211,6 +221,11 @@ impl fmt::Display for ImageTransform {
                 let mode = if *expand { "Expand" } else { "Crop" };
                 write!(f, "Rotate {angle:+.1}° ({interpolation}, {mode})")
             }
+            Self::Resize {
+                width,
+                height,
+                interpolation,
+            } => write!(f, "Resize to {width}x{height} ({interpolation})"),
             Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
@@ -244,6 +259,7 @@ impl ImageTransform {
             Self::RotateLeft90 => Some(Self::RotateRight90),
             Self::RotateRight90 => Some(Self::RotateLeft90),
             Self::RotateAny { .. } => None,
+            Self::Resize { .. } => None,
             Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
             Self::MirrorVertical => Some(Self::MirrorVertical),
             Self::InvertColors => Some(Self::InvertColors),
@@ -279,6 +295,11 @@ impl ImageTransform {
                 RotationInterpolation::Nearest => 3,
                 RotationInterpolation::Bilinear => 5,
                 RotationInterpolation::Bicubic => 8,
+            },
+            Self::Resize { interpolation, .. } => match interpolation {
+                RotationInterpolation::Nearest => 2,
+                RotationInterpolation::Bilinear => 4,
+                RotationInterpolation::Bicubic => 7,
             },
             // Convolutions scale with kernel footprint.
             Self::Convolution(filter) => filter.kernel().replay_cost(),
@@ -417,6 +438,11 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
             interpolation,
             expand,
         } => rotate_any(image, *angle_tenths as f32 / 10.0, *interpolation, *expand),
+        ImageTransform::Resize {
+            width,
+            height,
+            interpolation,
+        } => resize_image(image, *width, *height, *interpolation),
         ImageTransform::MirrorHorizontal => mirror_horizontal(image),
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
@@ -426,6 +452,53 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
         ImageTransform::Contrast(delta) => contrast(image, *delta),
         ImageTransform::Convolution(filter) => apply_convolution(image, &filter.kernel()),
         ImageTransform::CustomKernel(kernel) => apply_convolution(image, kernel),
+    }
+}
+
+pub fn resize_image(
+    image: &DecodedImage,
+    out_width: u32,
+    out_height: u32,
+    interpolation: RotationInterpolation,
+) -> DecodedImage {
+    let src_w = image.width as usize;
+    let src_h = image.height as usize;
+    let dst_w = out_width.max(1) as usize;
+    let dst_h = out_height.max(1) as usize;
+
+    if src_w == 0 || src_h == 0 {
+        return DecodedImage {
+            width: dst_w as u32,
+            height: dst_h as u32,
+            rgba: vec![0; dst_w * dst_h * 4],
+        };
+    }
+
+    if src_w == dst_w && src_h == dst_h {
+        return image.clone();
+    }
+
+    let mut out = vec![0_u8; dst_w * dst_h * 4];
+    let row_bytes = dst_w * 4;
+
+    // Pixel-center aligned mapping from destination to source coordinates.
+    let sx_scale = src_w as f32 / dst_w as f32;
+    let sy_scale = src_h as f32 / dst_h as f32;
+
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
+        let sy = (dy as f32 + 0.5) * sy_scale - 0.5;
+        for dx in 0..dst_w {
+            let sx = (dx as f32 + 0.5) * sx_scale - 0.5;
+            let dst = dx * 4;
+            let px = sample_rgba(image, sx, sy, interpolation);
+            row[dst..dst + 4].copy_from_slice(&px);
+        }
+    });
+
+    DecodedImage {
+        width: dst_w as u32,
+        height: dst_h as u32,
+        rgba: out,
     }
 }
 
@@ -942,8 +1015,8 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHECKPOINT_COST_THRESHOLD, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation,
-        TransformPipeline, apply_convolution, apply_transform, invert_colors, rotate_any, sepia,
+        apply_convolution, apply_transform, invert_colors, resize_image, rotate_any, sepia, ConvolutionFilter,
+        ImageTransform, Kernel, RotationInterpolation, TransformPipeline, CHECKPOINT_COST_THRESHOLD,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -1007,6 +1080,15 @@ mod tests {
                 angle_tenths: 125,
                 interpolation: RotationInterpolation::Bilinear,
                 expand: true,
+            }
+            .inverse(),
+            None
+        );
+        assert_eq!(
+            ImageTransform::Resize {
+                width: 320,
+                height: 240,
+                interpolation: RotationInterpolation::Bilinear,
             }
             .inverse(),
             None
@@ -1394,6 +1476,16 @@ mod tests {
     }
 
     #[test]
+    fn resize_display_format() {
+        let op = ImageTransform::Resize {
+            width: 640,
+            height: 480,
+            interpolation: RotationInterpolation::Nearest,
+        };
+        assert_eq!(op.to_string(), "Resize to 640x480 (Nearest)");
+    }
+
+    #[test]
     fn rotate_any_zero_is_identity() {
         let image = DecodedImage {
             width: 3,
@@ -1462,6 +1554,34 @@ mod tests {
         let out = rotate_any(&image, 45.0, RotationInterpolation::Nearest, true);
         assert!(out.width > image.width);
         assert!(out.height > image.height);
+    }
+
+    #[test]
+    fn resize_identity_preserves_image() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
+            ],
+        };
+        let out = resize_image(&image, 3, 2, RotationInterpolation::Bicubic);
+        assert_eq!(out.width, image.width);
+        assert_eq!(out.height, image.height);
+        assert_eq!(out.rgba, image.rgba);
+    }
+
+    #[test]
+    fn resize_nearest_2x2_to_1x1_samples_center() {
+        let image = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        };
+        let out = resize_image(&image, 1, 1, RotationInterpolation::Nearest);
+        assert_eq!(out.width, 1);
+        assert_eq!(out.height, 1);
+        assert_eq!(out.rgba, vec![100, 110, 120, 255]);
     }
 
     #[test]
@@ -1670,6 +1790,30 @@ mod tests {
         .replay_cost();
         assert!(bilinear > nearest, "bilinear rotation should be costlier than nearest");
         assert!(bicubic > bilinear, "bicubic rotation should be costlier than bilinear");
+    }
+
+    #[test]
+    fn replay_cost_resize_depends_on_interpolation() {
+        let nearest = ImageTransform::Resize {
+            width: 64,
+            height: 64,
+            interpolation: RotationInterpolation::Nearest,
+        }
+        .replay_cost();
+        let bilinear = ImageTransform::Resize {
+            width: 64,
+            height: 64,
+            interpolation: RotationInterpolation::Bilinear,
+        }
+        .replay_cost();
+        let bicubic = ImageTransform::Resize {
+            width: 64,
+            height: 64,
+            interpolation: RotationInterpolation::Bicubic,
+        }
+        .replay_cost();
+        assert!(bilinear > nearest, "bilinear resize should be costlier than nearest");
+        assert!(bicubic > bilinear, "bicubic resize should be costlier than bilinear");
     }
 
     #[test]
