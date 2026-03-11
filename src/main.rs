@@ -5,44 +5,13 @@ use bmp::{
     runtime::{
         decode::{decode_to_rgba, DecodedImage},
         encode::{save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
-        transform::{
-            apply_transform, ConvolutionFilter, ImageTransform, RotationInterpolation, TransformPipeline,
-            TranslateMode,
-        },
+        transform::{apply_transform, ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode},
     },
 };
 use eframe::egui;
 use rfd::FileDialog;
 
 mod gui;
-
-/// Selection in the convolution dropdown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ConvolutionSelection {
-    Preset(ConvolutionFilter),
-    Custom,
-}
-
-impl ConvolutionSelection {
-    pub(crate) fn all() -> Vec<ConvolutionSelection> {
-        vec![
-            ConvolutionSelection::Preset(ConvolutionFilter::Blur),
-            ConvolutionSelection::Preset(ConvolutionFilter::Sharpen),
-            ConvolutionSelection::Preset(ConvolutionFilter::EdgeDetect),
-            ConvolutionSelection::Preset(ConvolutionFilter::Emboss),
-            ConvolutionSelection::Custom,
-        ]
-    }
-}
-
-impl std::fmt::Display for ConvolutionSelection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Preset(filter) => write!(f, "{filter}"),
-            Self::Custom => write!(f, "Custom..."),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CropDragMode {
@@ -87,8 +56,6 @@ pub(crate) struct BmpViewerApp {
     pub(crate) pan_offset: egui::Vec2,
 
     // --- Convolution / custom kernel editor state ---
-    /// Which convolution is currently selected in the toolbar dropdown.
-    pub(crate) conv_selection: ConvolutionSelection,
     /// Whether the custom kernel editor window is open.
     pub(crate) custom_kernel_open: bool,
     /// Side length of the custom kernel being edited (1, 3, 5, or 7).
@@ -142,6 +109,11 @@ pub(crate) struct BmpViewerApp {
     /// Fill color for uncovered pixels after translation.
     pub(crate) translate_fill: [u8; 4],
 
+    /// Pending brightness delta configured from side panel controls.
+    pub(crate) brightness_input: i16,
+    /// Pending contrast delta configured from side panel controls.
+    pub(crate) contrast_input: i16,
+
     /// Whether the crop window is open.
     pub(crate) crop_open: bool,
     /// Crop rectangle origin X in image pixels.
@@ -183,7 +155,6 @@ impl Default for BmpViewerApp {
             last_effective_zoom: 1.0,
             hovered_pixel: None,
             pan_offset: egui::Vec2::ZERO,
-            conv_selection: ConvolutionSelection::Preset(ConvolutionFilter::Blur),
             custom_kernel_open: false,
             custom_kernel_size: 3,
             custom_kernel_weights: vec!["0".to_owned(); 9],
@@ -208,6 +179,8 @@ impl Default for BmpViewerApp {
             translate_dy: 0,
             translate_mode: TranslateMode::Crop,
             translate_fill: [0, 0, 0, 0],
+            brightness_input: 0,
+            contrast_input: 0,
             crop_open: false,
             crop_x: 0,
             crop_y: 0,
