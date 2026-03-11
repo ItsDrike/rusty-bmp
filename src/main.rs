@@ -128,6 +128,19 @@ pub(crate) struct BmpViewerApp {
     pub(crate) translate_mode: TranslateMode,
     /// Fill color for uncovered pixels after translation.
     pub(crate) translate_fill: [u8; 4],
+
+    /// Whether the crop window is open.
+    pub(crate) crop_open: bool,
+    /// Crop rectangle origin X in image pixels.
+    pub(crate) crop_x: u32,
+    /// Crop rectangle origin Y in image pixels.
+    pub(crate) crop_y: u32,
+    /// Crop rectangle width in image pixels.
+    pub(crate) crop_width: u32,
+    /// Crop rectangle height in image pixels.
+    pub(crate) crop_height: u32,
+    /// Keep crop rectangle aspect ratio tied to the image aspect ratio.
+    pub(crate) crop_keep_aspect: bool,
 }
 
 impl Default for BmpViewerApp {
@@ -176,6 +189,12 @@ impl Default for BmpViewerApp {
             translate_dy: 0,
             translate_mode: TranslateMode::Crop,
             translate_fill: [0, 0, 0, 0],
+            crop_open: false,
+            crop_x: 0,
+            crop_y: 0,
+            crop_width: 1,
+            crop_height: 1,
+            crop_keep_aspect: false,
         }
     }
 }
@@ -423,6 +442,9 @@ impl eframe::App for BmpViewerApp {
             self.apply_and_refresh(ctx, op);
         }
         if let Some(op) = self.show_translate_window(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
+        if let Some(op) = self.show_crop_window(ctx) {
             self.apply_and_refresh(ctx, op);
         }
         if let Some(op) = self.show_kernel_editor(ctx) {

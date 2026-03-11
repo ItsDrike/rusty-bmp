@@ -1,3 +1,4 @@
+pub(crate) mod crop_editor;
 pub(crate) mod kernel_editor;
 pub mod metadata;
 pub mod palette;

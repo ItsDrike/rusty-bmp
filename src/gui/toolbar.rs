@@ -42,6 +42,7 @@ impl BmpViewerApp {
                 let resize = ui.button("Resize...").clicked();
                 let skew = ui.button("Skew...").clicked();
                 let translate = ui.button("Translate...").clicked();
+                let crop = ui.button("Crop...").clicked();
                 let mirror_h = ui.button("Mirror H").clicked();
                 let mirror_v = ui.button("Mirror V").clicked();
                 let invert = ui.button("Invert Colors").clicked();
@@ -92,6 +93,9 @@ impl BmpViewerApp {
                 }
                 if translate {
                     self.translate_open = true;
+                }
+                if crop {
+                    self.open_crop_window();
                 }
                 if mirror_h {
                     self.apply_and_refresh(ctx, ImageTransform::MirrorHorizontal);

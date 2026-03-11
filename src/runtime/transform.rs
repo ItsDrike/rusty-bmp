@@ -223,6 +223,13 @@ pub enum ImageTransform {
         mode: TranslateMode,
         fill: [u8; 4],
     },
+    /// Crop to a rectangle in image coordinates.
+    Crop {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
     MirrorHorizontal,
     MirrorVertical,
     InvertColors,
@@ -273,6 +280,7 @@ impl fmt::Display for ImageTransform {
                 "Translate dx={dx:+}, dy={dy:+} ({mode}, fill #{:02X}{:02X}{:02X}{:02X})",
                 fill[0], fill[1], fill[2], fill[3]
             ),
+            Self::Crop { x, y, width, height } => write!(f, "Crop x={x}, y={y}, {width}x{height}"),
             Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
             Self::MirrorVertical => write!(f, "Mirror Vertical"),
             Self::InvertColors => write!(f, "Invert Colors"),
@@ -309,6 +317,7 @@ impl ImageTransform {
             Self::Resize { .. } => None,
             Self::Skew { .. } => None,
             Self::Translate { .. } => None,
+            Self::Crop { .. } => None,
             Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
             Self::MirrorVertical => Some(Self::MirrorVertical),
             Self::InvertColors => Some(Self::InvertColors),
@@ -356,6 +365,7 @@ impl ImageTransform {
                 RotationInterpolation::Bicubic => 8,
             },
             Self::Translate { .. } => 2,
+            Self::Crop { .. } => 1,
             // Convolutions scale with kernel footprint.
             Self::Convolution(filter) => filter.kernel().replay_cost(),
             Self::CustomKernel(kernel) => kernel.replay_cost(),
@@ -511,6 +521,7 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
             *expand,
         ),
         ImageTransform::Translate { dx, dy, mode, fill } => translate_image(image, *dx, *dy, *mode, *fill),
+        ImageTransform::Crop { x, y, width, height } => crop_image(image, *x, *y, *width, *height),
         ImageTransform::MirrorHorizontal => mirror_horizontal(image),
         ImageTransform::MirrorVertical => mirror_vertical(image),
         ImageTransform::InvertColors => invert_colors(image),
@@ -643,6 +654,43 @@ pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMo
     DecodedImage {
         width: dst_w as u32,
         height: dst_h as u32,
+        rgba: out,
+    }
+}
+
+pub fn crop_image(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32) -> DecodedImage {
+    let src_w = image.width;
+    let src_h = image.height;
+    if src_w == 0 || src_h == 0 {
+        return image.clone();
+    }
+
+    let x0 = x.min(src_w.saturating_sub(1));
+    let y0 = y.min(src_h.saturating_sub(1));
+    let max_w = src_w - x0;
+    let max_h = src_h - y0;
+    let out_w = width.max(1).min(max_w);
+    let out_h = height.max(1).min(max_h);
+
+    if x0 == 0 && y0 == 0 && out_w == src_w && out_h == src_h {
+        return image.clone();
+    }
+
+    let out_w_usize = out_w as usize;
+    let out_h_usize = out_h as usize;
+    let src_w_usize = src_w as usize;
+    let row_bytes = out_w_usize * 4;
+    let mut out = vec![0_u8; out_w_usize * out_h_usize * 4];
+
+    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
+        let sy = y0 as usize + dy;
+        let src = (sy * src_w_usize + x0 as usize) * 4;
+        row.copy_from_slice(&image.rgba[src..src + row_bytes]);
+    });
+
+    DecodedImage {
+        width: out_w,
+        height: out_h,
         rgba: out,
     }
 }
@@ -1207,7 +1255,7 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_convolution, apply_transform, invert_colors, resize_image, rotate_any, sepia, skew_image,
+        apply_convolution, apply_transform, crop_image, invert_colors, resize_image, rotate_any, sepia, skew_image,
         translate_image, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation, TransformPipeline,
         TranslateMode, CHECKPOINT_COST_THRESHOLD,
     };
@@ -1302,6 +1350,16 @@ mod tests {
                 dy: -4,
                 mode: TranslateMode::Crop,
                 fill: [0, 0, 0, 0],
+            }
+            .inverse(),
+            None
+        );
+        assert_eq!(
+            ImageTransform::Crop {
+                x: 3,
+                y: 4,
+                width: 20,
+                height: 10,
             }
             .inverse(),
             None
@@ -1721,6 +1779,17 @@ mod tests {
     }
 
     #[test]
+    fn crop_display_format() {
+        let op = ImageTransform::Crop {
+            x: 12,
+            y: 7,
+            width: 100,
+            height: 80,
+        };
+        assert_eq!(op.to_string(), "Crop x=12, y=7, 100x80");
+    }
+
+    #[test]
     fn rotate_any_zero_is_identity() {
         let image = DecodedImage {
             width: 3,
@@ -1888,6 +1957,46 @@ mod tests {
         assert_eq!(out.width, 3);
         assert_eq!(out.height, 1);
         assert_eq!(out.rgba, vec![10, 20, 30, 255, 40, 50, 60, 255, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn crop_full_image_is_identity() {
+        let image = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        };
+        let out = crop_image(&image, 0, 0, 2, 2);
+        assert_eq!(out.width, image.width);
+        assert_eq!(out.height, image.height);
+        assert_eq!(out.rgba, image.rgba);
+    }
+
+    #[test]
+    fn crop_center_region_extracts_expected_pixels() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
+            ],
+        };
+        let out = crop_image(&image, 1, 0, 2, 2);
+        assert_eq!(out.width, 2);
+        assert_eq!(out.height, 2);
+        assert_eq!(out.rgba, vec![2, 0, 0, 255, 3, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255]);
+    }
+
+    #[test]
+    fn crop_out_of_bounds_is_clamped() {
+        let image = DecodedImage {
+            width: 4,
+            height: 3,
+            rgba: (0..4 * 3 * 4).map(|v| v as u8).collect(),
+        };
+        let out = crop_image(&image, 3, 2, 10, 10);
+        assert_eq!(out.width, 1);
+        assert_eq!(out.height, 1);
     }
 
     #[test]
@@ -2158,8 +2267,19 @@ mod tests {
             fill: [0, 0, 0, 0],
         }
         .replay_cost();
-        assert!(cost > 0);
-        assert!(cost <= 2);
+        assert_eq!(cost, 2);
+    }
+
+    #[test]
+    fn replay_cost_crop_is_one() {
+        let cost = ImageTransform::Crop {
+            x: 1,
+            y: 1,
+            width: 10,
+            height: 8,
+        }
+        .replay_cost();
+        assert_eq!(cost, 1);
     }
 
     #[test]
