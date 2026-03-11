@@ -253,8 +253,6 @@ impl BmpViewerApp {
             egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
         self.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
         self.transformed_image = Some(image);
-        self.zoom = 0.0;
-        self.pan_offset = egui::Vec2::ZERO;
     }
 
     pub(crate) fn load_path(&mut self, ctx: &egui::Context, path: PathBuf) {
@@ -291,6 +289,9 @@ impl BmpViewerApp {
         self.decoded_stats = info.decoded_stats;
         self.palette_colors = gui::palette::extract_palette_colors(&bmp);
         self.original_image = Some(decoded.clone());
+        // New image load resets viewport to fit.
+        self.zoom = 0.0;
+        self.pan_offset = egui::Vec2::ZERO;
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
         self.loaded_path = Some(path.clone());
         self.status = format!("Loaded {}", path.display());
