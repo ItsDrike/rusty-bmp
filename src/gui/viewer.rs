@@ -75,10 +75,7 @@ impl BmpViewerApp {
                     self.zoom = new_zoom;
                 }
 
-                // --- Drag to pan ---
-                if response.dragged() && self.crop_drag_mode.is_none() {
-                    self.pan_offset += response.drag_delta();
-                }
+                let mut crop_drag_captured = false;
 
                 // --- Double-click to fit ---
                 if response.double_clicked() {
@@ -179,7 +176,7 @@ impl BmpViewerApp {
                         );
 
                         // Handle markers for visual resizing.
-                        let hs = 4.0;
+                        let hs = 5.0;
                         let handles = crop_handle_rects(crop_rect, hs);
                         for (_, r) in handles {
                             painter.rect_filled(r, 1.0, egui::Color32::from_rgb(80, 220, 120));
@@ -192,7 +189,7 @@ impl BmpViewerApp {
                         }
 
                         if let Some(pointer) = response.hover_pos() {
-                            if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 2.0) {
+                            if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
                                 let icon = cursor_icon_for_crop_mode(mode);
                                 ui.ctx().set_cursor_icon(icon);
                             }
@@ -202,11 +199,28 @@ impl BmpViewerApp {
                         if response.drag_started() {
                             if let Some(pointer) = response.interact_pointer_pos() {
                                 if img_rect.contains(pointer) {
-                                    if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 2.0) {
+                                    if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
                                         self.crop_drag_mode = Some(mode);
                                         self.crop_drag_start_rect = Some((cx, cy, cw, ch));
                                         self.crop_drag_start_image =
                                             Some(screen_to_image(pointer, img_rect, effective_zoom));
+                                        crop_drag_captured = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback capture: if drag_started wasn't latched this frame,
+                        // attempt to start crop interaction while already dragging.
+                        if response.dragged() && self.crop_drag_mode.is_none() {
+                            if let Some(pointer) = response.interact_pointer_pos() {
+                                if img_rect.contains(pointer) {
+                                    if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
+                                        self.crop_drag_mode = Some(mode);
+                                        self.crop_drag_start_rect = Some((cx, cy, cw, ch));
+                                        self.crop_drag_start_image =
+                                            Some(screen_to_image(pointer, img_rect, effective_zoom));
+                                        crop_drag_captured = true;
                                     }
                                 }
                             }
@@ -220,6 +234,7 @@ impl BmpViewerApp {
                                 self.crop_drag_start_image,
                                 response.interact_pointer_pos(),
                             ) {
+                                crop_drag_captured = true;
                                 let cur = screen_to_image(pointer, img_rect, effective_zoom);
                                 let dx = (cur.x - start_pos.x).round() as i32;
                                 let dy = (cur.y - start_pos.y).round() as i32;
@@ -240,6 +255,11 @@ impl BmpViewerApp {
                     self.crop_drag_mode = None;
                     self.crop_drag_start_image = None;
                     self.crop_drag_start_rect = None;
+                }
+
+                // --- Drag to pan (only when crop interaction is not active) ---
+                if response.dragged() && self.crop_drag_mode.is_none() && !crop_drag_captured {
+                    self.pan_offset += response.drag_delta();
                 }
 
                 // --- Pixel inspector (only at high zoom where pixels are visible) ---
