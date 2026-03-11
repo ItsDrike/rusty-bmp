@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::BmpViewerApp;
+use crate::{BmpViewerApp, CropDragMode};
 
 impl BmpViewerApp {
     /// Renders the central panel: image display with zoom/pan, pixel inspector, or empty state.
@@ -76,7 +76,7 @@ impl BmpViewerApp {
                 }
 
                 // --- Drag to pan ---
-                if response.dragged() {
+                if response.dragged() && self.crop_drag_mode.is_none() {
                     self.pan_offset += response.drag_delta();
                 }
 
@@ -110,7 +110,7 @@ impl BmpViewerApp {
                     egui::Color32::WHITE,
                 );
 
-                // --- Crop preview overlay (enabled while crop dialog is open) ---
+                // --- Crop preview overlay + interactive visual editing ---
                 if self.crop_open {
                     if let Some(image) = &self.transformed_image {
                         let (cx, cy, cw, ch) = self.crop_rect_for_image(image.width, image.height);
@@ -177,7 +177,69 @@ impl BmpViewerApp {
                             egui::Stroke::new(2.0, egui::Color32::from_rgb(80, 220, 120)),
                             egui::epaint::StrokeKind::Outside,
                         );
+
+                        // Handle markers for visual resizing.
+                        let hs = 4.0;
+                        let handles = crop_handle_rects(crop_rect, hs);
+                        for (_, r) in handles {
+                            painter.rect_filled(r, 1.0, egui::Color32::from_rgb(80, 220, 120));
+                            painter.rect_stroke(
+                                r,
+                                1.0,
+                                egui::Stroke::new(1.0, egui::Color32::BLACK),
+                                egui::epaint::StrokeKind::Outside,
+                            );
+                        }
+
+                        if let Some(pointer) = response.hover_pos() {
+                            if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 2.0) {
+                                let icon = cursor_icon_for_crop_mode(mode);
+                                ui.ctx().set_cursor_icon(icon);
+                            }
+                        }
+
+                        // Start interactive crop manipulation.
+                        if response.drag_started() {
+                            if let Some(pointer) = response.interact_pointer_pos() {
+                                if img_rect.contains(pointer) {
+                                    if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 2.0) {
+                                        self.crop_drag_mode = Some(mode);
+                                        self.crop_drag_start_rect = Some((cx, cy, cw, ch));
+                                        self.crop_drag_start_image =
+                                            Some(screen_to_image(pointer, img_rect, effective_zoom));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Apply ongoing drag delta.
+                        if response.dragged() {
+                            if let (Some(mode), Some(start_rect), Some(start_pos), Some(pointer)) = (
+                                self.crop_drag_mode,
+                                self.crop_drag_start_rect,
+                                self.crop_drag_start_image,
+                                response.interact_pointer_pos(),
+                            ) {
+                                let cur = screen_to_image(pointer, img_rect, effective_zoom);
+                                let dx = (cur.x - start_pos.x).round() as i32;
+                                let dy = (cur.y - start_pos.y).round() as i32;
+                                let (nx, ny, nw, nh) =
+                                    dragged_crop_rect(mode, start_rect, dx, dy, image.width, image.height);
+                                self.set_crop_from_rect(nx, ny, nw, nh, image.width, image.height);
+                            }
+                        }
+
+                        // Finish drag.
+                        if response.drag_stopped() {
+                            self.crop_drag_mode = None;
+                            self.crop_drag_start_image = None;
+                            self.crop_drag_start_rect = None;
+                        }
                     }
+                } else {
+                    self.crop_drag_mode = None;
+                    self.crop_drag_start_image = None;
+                    self.crop_drag_start_rect = None;
                 }
 
                 // --- Pixel inspector (only at high zoom where pixels are visible) ---
@@ -268,4 +330,162 @@ impl BmpViewerApp {
             }
         });
     }
+}
+
+fn screen_to_image(pointer: egui::Pos2, img_rect: egui::Rect, zoom: f32) -> egui::Pos2 {
+    egui::pos2((pointer.x - img_rect.min.x) / zoom, (pointer.y - img_rect.min.y) / zoom)
+}
+
+fn crop_handle_rects(crop_rect: egui::Rect, half_size: f32) -> [(CropDragMode, egui::Rect); 8] {
+    let left = crop_rect.left();
+    let right = crop_rect.right();
+    let top = crop_rect.top();
+    let bottom = crop_rect.bottom();
+    let cx = (left + right) * 0.5;
+    let cy = (top + bottom) * 0.5;
+    [
+        (
+            CropDragMode::TopLeft,
+            egui::Rect::from_center_size(egui::pos2(left, top), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+        (
+            CropDragMode::TopRight,
+            egui::Rect::from_center_size(egui::pos2(right, top), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+        (
+            CropDragMode::BottomLeft,
+            egui::Rect::from_center_size(egui::pos2(left, bottom), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+        (
+            CropDragMode::BottomRight,
+            egui::Rect::from_center_size(egui::pos2(right, bottom), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+        (
+            CropDragMode::Top,
+            egui::Rect::from_center_size(egui::pos2(cx, top), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+        (
+            CropDragMode::Bottom,
+            egui::Rect::from_center_size(egui::pos2(cx, bottom), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+        (
+            CropDragMode::Left,
+            egui::Rect::from_center_size(egui::pos2(left, cy), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+        (
+            CropDragMode::Right,
+            egui::Rect::from_center_size(egui::pos2(right, cy), egui::vec2(half_size * 2.0, half_size * 2.0)),
+        ),
+    ]
+}
+
+fn pick_crop_drag_mode(pointer: egui::Pos2, crop_rect: egui::Rect, handle_half_size: f32) -> Option<CropDragMode> {
+    for (mode, r) in crop_handle_rects(crop_rect, handle_half_size) {
+        if r.contains(pointer) {
+            return Some(mode);
+        }
+    }
+    if crop_rect.contains(pointer) {
+        Some(CropDragMode::Move)
+    } else {
+        None
+    }
+}
+
+fn cursor_icon_for_crop_mode(mode: CropDragMode) -> egui::CursorIcon {
+    match mode {
+        CropDragMode::Move => egui::CursorIcon::Grab,
+        CropDragMode::Left | CropDragMode::Right => egui::CursorIcon::ResizeHorizontal,
+        CropDragMode::Top | CropDragMode::Bottom => egui::CursorIcon::ResizeVertical,
+        CropDragMode::TopLeft | CropDragMode::BottomRight => egui::CursorIcon::ResizeNwSe,
+        CropDragMode::TopRight | CropDragMode::BottomLeft => egui::CursorIcon::ResizeNeSw,
+    }
+}
+
+fn dragged_crop_rect(
+    mode: CropDragMode,
+    start: (u32, u32, u32, u32),
+    dx: i32,
+    dy: i32,
+    img_w: u32,
+    img_h: u32,
+) -> (u32, u32, u32, u32) {
+    let (sx, sy, sw, sh) = start;
+    let mut x = sx as i32;
+    let mut y = sy as i32;
+    let mut w = sw as i32;
+    let mut h = sh as i32;
+
+    match mode {
+        CropDragMode::Move => {
+            x += dx;
+            y += dy;
+        }
+        CropDragMode::Left => {
+            x += dx;
+            w -= dx;
+        }
+        CropDragMode::Right => {
+            w += dx;
+        }
+        CropDragMode::Top => {
+            y += dy;
+            h -= dy;
+        }
+        CropDragMode::Bottom => {
+            h += dy;
+        }
+        CropDragMode::TopLeft => {
+            x += dx;
+            y += dy;
+            w -= dx;
+            h -= dy;
+        }
+        CropDragMode::TopRight => {
+            y += dy;
+            w += dx;
+            h -= dy;
+        }
+        CropDragMode::BottomLeft => {
+            x += dx;
+            w -= dx;
+            h += dy;
+        }
+        CropDragMode::BottomRight => {
+            w += dx;
+            h += dy;
+        }
+    }
+
+    // Enforce minimum size first.
+    w = w.max(1);
+    h = h.max(1);
+
+    // Clamp position/size into image bounds.
+    x = x.clamp(0, img_w as i32 - 1);
+    y = y.clamp(0, img_h as i32 - 1);
+    w = w.min(img_w as i32);
+    h = h.min(img_h as i32);
+    if x + w > img_w as i32 {
+        if matches!(
+            mode,
+            CropDragMode::Left | CropDragMode::TopLeft | CropDragMode::BottomLeft | CropDragMode::Move
+        ) {
+            x = img_w as i32 - w;
+        } else {
+            w = img_w as i32 - x;
+        }
+    }
+    if y + h > img_h as i32 {
+        if matches!(
+            mode,
+            CropDragMode::Top | CropDragMode::TopLeft | CropDragMode::TopRight | CropDragMode::Move
+        ) {
+            y = img_h as i32 - h;
+        } else {
+            h = img_h as i32 - y;
+        }
+    }
+
+    (x as u32, y as u32, w as u32, h as u32)
 }

@@ -44,6 +44,19 @@ impl std::fmt::Display for ConvolutionSelection {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CropDragMode {
+    Move,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 pub(crate) struct BmpViewerApp {
     pub(crate) path_input: String,
     pub(crate) status: String,
@@ -141,6 +154,12 @@ pub(crate) struct BmpViewerApp {
     pub(crate) crop_height: u32,
     /// Keep crop rectangle aspect ratio tied to the image aspect ratio.
     pub(crate) crop_keep_aspect: bool,
+    /// Active crop drag mode for visual crop manipulation.
+    pub(crate) crop_drag_mode: Option<CropDragMode>,
+    /// Pointer position in image coordinates at drag start.
+    pub(crate) crop_drag_start_image: Option<egui::Pos2>,
+    /// Crop rect (x, y, w, h) snapshot at drag start.
+    pub(crate) crop_drag_start_rect: Option<(u32, u32, u32, u32)>,
 }
 
 impl Default for BmpViewerApp {
@@ -195,6 +214,9 @@ impl Default for BmpViewerApp {
             crop_width: 1,
             crop_height: 1,
             crop_keep_aspect: false,
+            crop_drag_mode: None,
+            crop_drag_start_image: None,
+            crop_drag_start_rect: None,
         }
     }
 }

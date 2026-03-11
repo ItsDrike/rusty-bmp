@@ -15,6 +15,9 @@ impl BmpViewerApp {
         self.crop_y = (image.height.saturating_sub(1)) / 2;
         self.crop_width = image.width.max(1);
         self.crop_height = image.height.max(1);
+        self.crop_drag_mode = None;
+        self.crop_drag_start_image = None;
+        self.crop_drag_start_rect = None;
         self.crop_open = true;
     }
 
@@ -174,6 +177,18 @@ impl BmpViewerApp {
             img_w,
             img_h,
         )
+    }
+
+    /// Sets center-based crop inputs from a top-left crop rectangle.
+    pub(crate) fn set_crop_from_rect(&mut self, x: u32, y: u32, width: u32, height: u32, img_w: u32, img_h: u32) {
+        let w = width.max(1).min(img_w.max(1));
+        let h = height.max(1).min(img_h.max(1));
+        let x0 = x.min(img_w.saturating_sub(w));
+        let y0 = y.min(img_h.saturating_sub(h));
+        self.crop_width = w;
+        self.crop_height = h;
+        self.crop_x = (x0 + w / 2).min(img_w.saturating_sub(1));
+        self.crop_y = (y0 + h / 2).min(img_h.saturating_sub(1));
     }
 }
 
