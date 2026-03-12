@@ -139,6 +139,39 @@ impl SaveFormat {
     }
 }
 
+impl SaveFormat {
+    /// Returns `true` if saving with this format will bit-exactly preserve the
+    /// LSB data embedded by steganography.
+    ///
+    /// Formats that quantize, downsample, or compress pixel values are unsafe
+    /// because they destroy the LSBs used to carry the hidden payload.
+    ///
+    /// If `steg_config` is provided and the config uses the alpha channel
+    /// (`a_bits > 0`), formats that discard alpha (Rgb24, Rgb32 — which stores
+    /// the fourth byte as reserved/zero) are also considered unsafe.
+    pub fn preserves_steganography(self, steg_config: Option<crate::runtime::steganography::StegConfig>) -> bool {
+        // Base check: does the format keep all 8 bits per channel intact?
+        let base_safe = matches!(self, Self::Rgb24 | Self::Rgb32 | Self::BitFields32);
+
+        if !base_safe {
+            return false;
+        }
+
+        // Additional check: does the config use alpha, and does this format drop alpha?
+        if let Some(config) = steg_config {
+            if config.a_bits > 0 {
+                // Rgb24 has no alpha byte at all.
+                // Rgb32 stores the 4th byte as a reserved zero — alpha data is lost.
+                // BitFields32 uses standard RGB888 masks with no alpha mask.
+                // None of the three safe base formats preserve alpha channel data.
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
 impl std::fmt::Display for SaveFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

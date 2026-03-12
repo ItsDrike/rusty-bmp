@@ -17,6 +17,8 @@ pub(crate) struct SidePanelActions {
     pub open_translate: bool,
     pub open_crop: bool,
     pub open_custom_kernel: bool,
+    pub open_steg_embed: bool,
+    pub open_steg_inspect: bool,
 }
 
 impl BmpViewerApp {
@@ -39,13 +41,22 @@ impl BmpViewerApp {
         let mut open_translate = false;
         let mut open_crop = false;
         let mut open_custom_kernel = false;
+        let mut open_steg_embed = false;
+        let mut open_steg_inspect = false;
 
         egui::SidePanel::right("bmp_info")
             .default_width(320.0)
             .width_range(220.0..=panel_max_width)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading("Inspector");
+                ui.horizontal(|ui| {
+                    ui.heading("Inspector");
+                    if self.steg_detected.is_some() {
+                        ui.add_space(6.0);
+                        ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "\u{25cf} steg")
+                            .on_hover_text("This image contains an embedded steganography payload.");
+                    }
+                });
                 ui.separator();
                 egui::ScrollArea::vertical().id_salt("inspector_scroll").show(ui, |ui| {
                     egui::CollapsingHeader::new("Edit").default_open(true).show(ui, |ui| {
@@ -147,6 +158,17 @@ impl BmpViewerApp {
                             }
                             if ui.small_button("Custom...").clicked() {
                                 open_custom_kernel = true;
+                            }
+                        });
+
+                        ui.add_space(6.0);
+                        ui.label("Steganography");
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.small_button("Embed Data...").clicked() {
+                                open_steg_embed = true;
+                            }
+                            if ui.small_button("Inspect Data...").clicked() {
+                                open_steg_inspect = true;
                             }
                         });
                     });
@@ -276,6 +298,8 @@ impl BmpViewerApp {
             open_translate,
             open_crop,
             open_custom_kernel,
+            open_steg_embed,
+            open_steg_inspect,
         }
     }
 
@@ -305,10 +329,22 @@ impl BmpViewerApp {
         if let Some(index) = actions.remove_transform {
             self.pipeline.remove(index);
             self.redo_stack.clear();
+            self.steg_overwrite_warned = false;
             if let Some(original) = &self.original_image {
-                let result = self.pipeline.apply(original);
+                let (result, warnings) = self.pipeline.apply_with_warnings(original);
+                if !warnings.is_empty() {
+                    self.status = warnings.join(" ");
+                }
+                self.steg_detected = bmp::runtime::steganography::detect(&result);
+                self.steg_extracted = None;
                 self.set_display_image(ctx, result, "transformed".to_owned());
             }
+        }
+        if actions.open_steg_embed {
+            self.steg_embed_open = true;
+        }
+        if actions.open_steg_inspect {
+            self.steg_inspect_open = true;
         }
         if actions.do_undo {
             self.undo_transform(ctx);
@@ -319,8 +355,11 @@ impl BmpViewerApp {
         if actions.do_clear {
             self.pipeline.clear();
             self.redo_stack.clear();
+            self.steg_overwrite_warned = false;
             if let Some(original) = &self.original_image {
                 let result = original.clone();
+                self.steg_detected = bmp::runtime::steganography::detect(&result);
+                self.steg_extracted = None;
                 self.set_display_image(ctx, result, "transformed".to_owned());
             }
         }

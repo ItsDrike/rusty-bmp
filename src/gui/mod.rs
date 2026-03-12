@@ -6,6 +6,8 @@ pub(crate) mod resize_editor;
 pub(crate) mod rotate_editor;
 pub(crate) mod side_panel;
 pub(crate) mod skew_editor;
+pub(crate) mod steg_embed_window;
+pub(crate) mod steg_inspect_window;
 pub(crate) mod toolbar;
 pub(crate) mod translate_editor;
 pub(crate) mod viewer;

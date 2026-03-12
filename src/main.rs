@@ -4,7 +4,8 @@ use bmp::{
     raw::Bmp,
     runtime::{
         decode::{decode_to_rgba, DecodedImage},
-        encode::{save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
+        encode::{encode_rgba_to_bmp_ext, save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
+        steganography::{self, StegInfo},
         transform::{apply_transform, ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode},
     },
 };
@@ -114,6 +115,37 @@ pub(crate) struct BmpViewerApp {
     /// Pending contrast delta configured from side panel controls.
     pub(crate) contrast_input: i16,
 
+    // --- Steganography state ---
+    /// Steganography detected in the current transformed image, if any.
+    pub(crate) steg_detected: Option<StegInfo>,
+    /// Whether the "Embed Steganography" window is open.
+    pub(crate) steg_embed_open: bool,
+    /// Whether the "Inspect Steganography" window is open.
+    pub(crate) steg_inspect_open: bool,
+    /// Whether we already warned the user this frame that a transform was
+    /// applied on top of an embedded steg payload.
+    /// Reset to `false` whenever the pipeline's top-most op is no longer steg.
+    pub(crate) steg_overwrite_warned: bool,
+    /// Path awaiting save confirmation because it would destroy steganography.
+    pub(crate) steg_save_confirm_pending: Option<std::path::PathBuf>,
+    /// Human-readable reason shown in the save confirmation dialog.
+    pub(crate) steg_save_confirm_reason: Option<String>,
+    /// Transform awaiting confirmation because it would likely corrupt an
+    /// existing embedded steganography payload.
+    pub(crate) steg_transform_confirm_pending: Option<ImageTransform>,
+
+    // --- Embed window inputs ---
+    pub(crate) steg_r_bits: u8,
+    pub(crate) steg_g_bits: u8,
+    pub(crate) steg_b_bits: u8,
+    pub(crate) steg_a_bits: u8,
+    pub(crate) steg_text_input: String,
+
+    // --- Inspect window: cached extracted payload ---
+    /// Result of the last explicit "Extract" action in the inspect window.
+    /// `None` = not yet extracted; `Some(Ok(bytes))` = payload; `Some(Err(msg))` = error.
+    pub(crate) steg_extracted: Option<Result<Vec<u8>, String>>,
+
     /// Whether the crop window is open.
     pub(crate) crop_open: bool,
     /// Crop rectangle origin X in image pixels.
@@ -181,6 +213,19 @@ impl Default for BmpViewerApp {
             translate_fill: [0, 0, 0, 0],
             brightness_input: 0,
             contrast_input: 0,
+            steg_detected: None,
+            steg_embed_open: false,
+            steg_inspect_open: false,
+            steg_overwrite_warned: false,
+            steg_save_confirm_pending: None,
+            steg_save_confirm_reason: None,
+            steg_transform_confirm_pending: None,
+            steg_r_bits: 1,
+            steg_g_bits: 1,
+            steg_b_bits: 1,
+            steg_a_bits: 0,
+            steg_text_input: String::new(),
+            steg_extracted: None,
             crop_open: false,
             crop_x: 0,
             crop_y: 0,
@@ -261,6 +306,12 @@ impl BmpViewerApp {
         self.image_stats = info.image_stats;
         self.decoded_stats = info.decoded_stats;
         self.palette_colors = gui::palette::extract_palette_colors(&bmp);
+        self.steg_detected = bmp::runtime::steganography::detect(&decoded);
+        self.steg_extracted = None;
+        self.steg_overwrite_warned = false;
+        self.steg_transform_confirm_pending = None;
+        self.steg_save_confirm_pending = None;
+        self.steg_save_confirm_reason = None;
         self.original_image = Some(decoded.clone());
         // New image load resets viewport to fit.
         self.zoom = 0.0;
@@ -281,13 +332,49 @@ impl BmpViewerApp {
         }
     }
 
-    pub(crate) fn apply_and_refresh(&mut self, ctx: &egui::Context, op: ImageTransform) {
+    fn apply_transform_now(&mut self, ctx: &egui::Context, op: ImageTransform) {
         if let Some(current) = self.transformed_image.as_ref() {
+            if matches!(op, ImageTransform::EmbedSteganography { .. }) {
+                self.steg_overwrite_warned = false;
+            }
+
+            if let ImageTransform::EmbedSteganography { config, payload } = &op {
+                if let Err(err) = steganography::embed(current, *config, payload) {
+                    self.status = format!(
+                        "Embedding aborted: payload no longer fits current image ({}). The steganography transform was not applied.",
+                        err
+                    );
+                    return;
+                }
+            }
+
             let next = apply_transform(current, &op);
             self.pipeline.push(op, Some(current));
             self.redo_stack.clear();
+            self.steg_detected = bmp::runtime::steganography::detect(&next);
+            self.steg_extracted = None;
             self.set_display_image(ctx, next, "transformed".to_owned());
         }
+    }
+
+    pub(crate) fn apply_and_refresh(&mut self, ctx: &egui::Context, op: ImageTransform) {
+        let should_confirm_overwrite = !self.steg_overwrite_warned
+            && !matches!(
+                op,
+                ImageTransform::EmbedSteganography { .. } | ImageTransform::RemoveSteganography { .. }
+            )
+            && matches!(
+                self.pipeline.ops().last(),
+                Some(ImageTransform::EmbedSteganography { .. })
+            );
+
+        if should_confirm_overwrite {
+            self.steg_transform_confirm_pending = Some(op);
+            return;
+        }
+
+        // Keep the public API shape unchanged for all callers.
+        self.apply_transform_now(ctx, op);
     }
 
     pub(crate) fn undo_transform(&mut self, ctx: &egui::Context) {
@@ -297,30 +384,118 @@ impl BmpViewerApp {
                 // O(1) path: apply the inverse transform.
                 if let Some(current) = self.transformed_image.as_ref() {
                     let result = apply_transform(current, &inv);
+                    self.steg_detected = bmp::runtime::steganography::detect(&result);
+                    self.steg_extracted = None;
                     self.set_display_image(ctx, result, "transformed".to_owned());
                 }
             } else {
                 self.redo_stack.push(op);
                 // Lossy transform: replay the remaining pipeline from the original image.
                 if let Some(original) = self.original_image.as_ref() {
-                    let result = self.pipeline.apply(original);
+                    let (result, warnings) = self.pipeline.apply_with_warnings(original);
+                    if !warnings.is_empty() {
+                        self.status = warnings.join(" ");
+                    }
+                    self.steg_detected = bmp::runtime::steganography::detect(&result);
+                    self.steg_extracted = None;
                     self.set_display_image(ctx, result, "transformed".to_owned());
                 }
             }
+            // After undo, reset the overwrite warning so it can fire again if needed.
+            self.steg_overwrite_warned = false;
         }
     }
 
     pub(crate) fn redo_transform(&mut self, ctx: &egui::Context) {
         if let Some(op) = self.redo_stack.pop() {
             if let Some(current) = self.transformed_image.as_ref() {
+                if let ImageTransform::EmbedSteganography { config, payload } = &op {
+                    if let Err(err) = steganography::embed(current, *config, payload) {
+                        self.status = format!(
+                            "Redo skipped: steganography payload no longer fits after prior edits ({}). The embed step was dropped.",
+                            err
+                        );
+                        return;
+                    }
+                }
+
                 let next = apply_transform(current, &op);
                 self.pipeline.push(op, Some(current));
+                self.steg_detected = bmp::runtime::steganography::detect(&next);
+                self.steg_extracted = None;
                 self.set_display_image(ctx, next, "transformed".to_owned());
             }
         }
     }
 
+    /// Returns whether the currently selected save settings preserve the exact
+    /// embedded steganography payload, determined by an in-memory roundtrip.
+    fn save_preserves_current_steg_payload(&self) -> Result<bool, String> {
+        let (image, info) = match (self.transformed_image.as_ref(), self.steg_detected.as_ref()) {
+            (Some(img), Some(info)) => (img, info),
+            _ => return Ok(true),
+        };
+
+        let original_payload = bmp::runtime::steganography::extract(image, info)
+            .map_err(|e| format!("failed to extract current payload before save-check: {e}"))?;
+
+        let encoded = encode_rgba_to_bmp_ext(
+            image,
+            self.save_format,
+            self.save_header_version,
+            self.source_metadata.as_ref(),
+        )
+        .map_err(|e| format!("failed to encode save-check roundtrip: {e}"))?;
+
+        let roundtrip = decode_to_rgba(&encoded).map_err(|e| format!("failed to decode save-check roundtrip: {e}"))?;
+
+        let Some(round_info) = bmp::runtime::steganography::detect(&roundtrip) else {
+            return Ok(false);
+        };
+
+        let round_payload = bmp::runtime::steganography::extract(&roundtrip, &round_info)
+            .map_err(|e| format!("failed to extract payload after save-check roundtrip: {e}"))?;
+
+        Ok(round_payload == original_payload)
+    }
+
     pub(crate) fn save_to_path(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        if self.transformed_image.is_none() {
+            self.status = "Nothing to save".to_owned();
+            return;
+        }
+
+        // If the image contains steganography and the chosen format would
+        // destroy it, open the confirmation dialog instead of saving immediately.
+        if self.steg_detected.is_some() {
+            match self.save_preserves_current_steg_payload() {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.steg_save_confirm_pending = Some(path.to_path_buf());
+                    self.steg_save_confirm_reason = Some(
+                        "Roundtrip verification shows the selected format/header does not preserve the hidden payload"
+                            .to_owned(),
+                    );
+                    return;
+                }
+                Err(err) => {
+                    // Conservative fallback: if verification fails, require explicit consent.
+                    self.steg_save_confirm_pending = Some(path.to_path_buf());
+                    self.steg_save_confirm_reason = Some(format!(
+                        "Could not verify steganography preservation ({err}); saving may destroy hidden data"
+                    ));
+                    return;
+                }
+            }
+        }
+
+        self.do_save(ctx, path);
+    }
+
+    /// Performs the actual save unconditionally (called either from
+    /// `save_to_path` when no steg is present, or after user confirms the
+    /// steg-destroy dialog).
+    pub(crate) fn do_save(&mut self, ctx: &egui::Context, path: &std::path::Path) {
         let Some(image) = self.transformed_image.as_ref() else {
             self.status = "Nothing to save".to_owned();
             return;
@@ -334,6 +509,8 @@ impl BmpViewerApp {
             self.source_metadata.as_ref(),
         ) {
             Ok(()) => {
+                self.steg_save_confirm_pending = None;
+                self.steg_save_confirm_reason = None;
                 let saved_path = path.to_path_buf();
                 self.path_input = saved_path.display().to_string();
                 self.loaded_path = Some(saved_path.clone());
@@ -348,6 +525,8 @@ impl BmpViewerApp {
                 self.load_path(ctx, saved_path);
             }
             Err(err) => {
+                self.steg_save_confirm_pending = None;
+                self.steg_save_confirm_reason = None;
                 self.status = format!("Save failed: {err}");
             }
         }
@@ -378,6 +557,106 @@ impl BmpViewerApp {
         };
 
         self.save_to_path(ctx, &path);
+    }
+
+    /// Shows a confirmation dialog when the user is about to save in a format
+    /// that would destroy an embedded steganography payload.
+    ///
+    /// Returns `true` while the dialog is still open (caller should skip other
+    /// rendering that depends on interaction).
+    pub(crate) fn show_steg_save_confirm_window(&mut self, ctx: &egui::Context) {
+        if self.steg_save_confirm_pending.is_none() {
+            return;
+        }
+
+        let reason = self.steg_save_confirm_reason.clone().unwrap_or_else(|| {
+            format!(
+                "The selected settings ({}, {}) are likely to overwrite LSB data",
+                self.save_format, self.save_header_version
+            )
+        });
+
+        let mut confirmed = false;
+        let mut cancelled = false;
+
+        egui::Window::new("Warning: Steganography May Be Corrupted")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .default_width(400.0)
+            .show(ctx, |ui| {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "The selected save format may permanently corrupt the embedded steganographic payload.",
+                );
+                ui.add_space(4.0);
+                ui.label(format!("Reason: {reason}."));
+                ui.add_space(8.0);
+                ui.label("Save anyway and lose the hidden data?");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Save Anyway").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+
+        if confirmed {
+            let path = self.steg_save_confirm_pending.take().unwrap();
+            self.do_save(ctx, &path);
+        } else if cancelled {
+            self.steg_save_confirm_pending = None;
+            self.steg_save_confirm_reason = None;
+        }
+    }
+
+    /// Shows confirmation before applying a transform that would likely
+    /// corrupt a just-embedded steganography payload.
+    pub(crate) fn show_steg_transform_confirm_window(&mut self, ctx: &egui::Context) {
+        let Some(op) = self.steg_transform_confirm_pending.as_ref() else {
+            return;
+        };
+
+        let mut confirmed = false;
+        let mut cancelled = false;
+
+        egui::Window::new("Warning: Transform May Corrupt Steganography")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "This transform is being applied on top of an embedded steganography payload.",
+                );
+                ui.add_space(4.0);
+                ui.label("That will likely destroy or corrupt the hidden data.");
+                ui.label(format!("Pending transform: {op}"));
+                ui.add_space(8.0);
+                ui.label("Apply anyway?");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Apply Anyway").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+
+        if confirmed {
+            if let Some(op) = self.steg_transform_confirm_pending.take() {
+                self.steg_overwrite_warned = true;
+                self.apply_transform_now(ctx, op);
+            }
+        } else if cancelled {
+            self.steg_transform_confirm_pending = None;
+        }
     }
 }
 
@@ -449,6 +728,14 @@ impl eframe::App for BmpViewerApp {
         if let Some(op) = self.show_kernel_editor(ctx) {
             self.apply_and_refresh(ctx, op);
         }
+        if let Some(op) = self.show_steg_embed_window(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
+        if let Some(op) = self.show_steg_inspect_window(ctx) {
+            self.apply_and_refresh(ctx, op);
+        }
+        self.show_steg_transform_confirm_window(ctx);
+        self.show_steg_save_confirm_window(ctx);
 
         let side_actions = self.show_side_panel(ctx);
         self.apply_side_panel_actions(ctx, side_actions);

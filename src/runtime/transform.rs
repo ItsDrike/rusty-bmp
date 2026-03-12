@@ -4,6 +4,7 @@ use std::fmt;
 use rayon::prelude::*;
 
 use crate::runtime::decode::DecodedImage;
+use crate::runtime::steganography::{self, StegConfig};
 
 /// A convolution kernel of arbitrary odd size (3x3, 5x5, 7x7, ...).
 ///
@@ -243,6 +244,21 @@ pub enum ImageTransform {
     Convolution(ConvolutionFilter),
     /// Apply a user-defined convolution kernel.
     CustomKernel(Kernel),
+    /// Embed a steganographic payload into the image LSBs.
+    ///
+    /// The payload is stored as a `Vec<u8>` so the transform is self-contained
+    /// and can be replayed through the pipeline like any other transform.
+    EmbedSteganography {
+        config: StegConfig,
+        /// The raw bytes to embed (arbitrary binary data; text must be UTF-8
+        /// encoded by the caller).
+        payload: Vec<u8>,
+    },
+    /// Remove any steganographic payload embedded with the given config by
+    /// zeroing the relevant LSBs.
+    RemoveSteganography {
+        config: StegConfig,
+    },
 }
 
 impl fmt::Display for ImageTransform {
@@ -302,6 +318,20 @@ impl fmt::Display for ImageTransform {
             }
             Self::Convolution(filter) => write!(f, "{filter}"),
             Self::CustomKernel(k) => write!(f, "Custom {}x{}", k.size, k.size),
+            Self::EmbedSteganography { config, payload } => write!(
+                f,
+                "Embed Steganography ({} bytes, R{}G{}B{}A{})",
+                payload.len(),
+                config.r_bits,
+                config.g_bits,
+                config.b_bits,
+                config.a_bits
+            ),
+            Self::RemoveSteganography { config } => write!(
+                f,
+                "Remove Steganography (R{}G{}B{}A{})",
+                config.r_bits, config.g_bits, config.b_bits, config.a_bits
+            ),
         }
     }
 }
@@ -328,6 +358,10 @@ impl ImageTransform {
             Self::Contrast(_) => None,
             Self::Convolution(_) => None,
             Self::CustomKernel(_) => None,
+            // Steganography: lossy in the sense that the original LSBs are
+            // overwritten. Removing undoes an embed and vice versa.
+            Self::EmbedSteganography { .. } => None,
+            Self::RemoveSteganography { .. } => None,
         }
     }
 
@@ -369,6 +403,10 @@ impl ImageTransform {
             // Convolutions scale with kernel footprint.
             Self::Convolution(filter) => filter.kernel().replay_cost(),
             Self::CustomKernel(kernel) => kernel.replay_cost(),
+            // Steganography is a per-pixel LSB pass — similar cost to a cheap
+            // color transform.
+            Self::EmbedSteganography { .. } => 2,
+            Self::RemoveSteganography { .. } => 1,
         }
     }
 }
@@ -468,9 +506,22 @@ impl TransformPipeline {
         self.apply_range(original, self.ops.len())
     }
 
+    /// Replays the full pipeline and returns non-fatal replay warnings.
+    ///
+    /// Currently this reports steganography embed steps that could not be
+    /// applied (typically because the image dimensions changed and capacity
+    /// is no longer sufficient).
+    pub fn apply_with_warnings(&self, original: &DecodedImage) -> (DecodedImage, Vec<String>) {
+        self.apply_range_with_warnings(original, self.ops.len())
+    }
+
     /// Replays ops `[0..count)` starting from `original`, using the nearest
     /// checkpoint at or before the target range to skip work.
     fn apply_range(&self, original: &DecodedImage, count: usize) -> DecodedImage {
+        self.apply_range_with_warnings(original, count).0
+    }
+
+    fn apply_range_with_warnings(&self, original: &DecodedImage, count: usize) -> (DecodedImage, Vec<String>) {
         // Find the best checkpoint: largest index that is < count.
         let (start_idx, mut out) = self
             .checkpoints
@@ -479,10 +530,24 @@ impl TransformPipeline {
             .map(|(&idx, img)| (idx + 1, img.clone()))
             .unwrap_or_else(|| (0, original.clone()));
 
+        let mut warnings = Vec::new();
+
         for op in &self.ops[start_idx..count] {
-            out = apply_transform(&out, op);
+            match op {
+                ImageTransform::EmbedSteganography { config, payload } => {
+                    match steganography::embed(&out, *config, payload) {
+                        Ok(next) => out = next,
+                        Err(err) => warnings.push(format!(
+                            "Skipped steganography step during replay: payload no longer fits ({err})"
+                        )),
+                    }
+                }
+                _ => {
+                    out = apply_transform(&out, op);
+                }
+            }
         }
-        out
+        (out, warnings)
     }
 
     /// Recalculates `cost_since_checkpoint` based on the current ops and
@@ -531,6 +596,14 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
         ImageTransform::Contrast(delta) => contrast(image, *delta),
         ImageTransform::Convolution(filter) => apply_convolution(image, &filter.kernel()),
         ImageTransform::CustomKernel(kernel) => apply_convolution(image, kernel),
+        ImageTransform::EmbedSteganography { config, payload } => {
+            // Capacity can become insufficient after pipeline edits/replay
+            // (e.g. crop inserted before a previously valid embed op).
+            // Keep replay resilient: if embedding fails here, leave the image
+            // unchanged and let higher-level UI logic surface warnings.
+            steganography::embed(image, *config, payload).unwrap_or_else(|_| image.clone())
+        }
+        ImageTransform::RemoveSteganography { config } => steganography::remove(image, *config),
     }
 }
 
@@ -1260,6 +1333,7 @@ mod tests {
         TranslateMode, CHECKPOINT_COST_THRESHOLD,
     };
     use crate::runtime::decode::DecodedImage;
+    use crate::runtime::steganography::{self, StegConfig};
 
     #[test]
     fn invert_colors_flips_rgb_and_keeps_alpha() {
