@@ -2,15 +2,15 @@
 ///
 /// Reduces an RGBA image to at most `max_colors` representative palette
 /// entries and returns both the palette and a per-pixel index buffer.
-use rayon::prelude::*;
-
 /// A single color bucket used during median-cut partitioning.
 struct Bucket {
     /// Indices into the original pixel array (stepping by 4).
     pixel_indices: Vec<usize>,
+    /// If true, this bucket cannot be split further.
+    terminal: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ColorAxis {
     Red,
     Green,
@@ -18,14 +18,27 @@ enum ColorAxis {
 }
 
 impl Bucket {
-    /// Returns the color channel with the greatest range in this bucket.
-    fn widest_axis(&self, rgba: &[u8]) -> ColorAxis {
+    #[inline]
+    fn channel_value(rgba: &[u8], i: usize, axis: ColorAxis) -> u8 {
+        match axis {
+            ColorAxis::Red => rgba[i],
+            ColorAxis::Green => rgba[i + 1],
+            ColorAxis::Blue => rgba[i + 2],
+        }
+    }
+
+    /// Returns per-channel (R, G, B) ranges for all pixels in this bucket.
+    fn channel_ranges(&self, rgba: &[u8]) -> (u8, u8, u8) {
+        if self.pixel_indices.is_empty() {
+            return (0, 0, 0);
+        }
+
         let (mut min_r, mut min_g, mut min_b) = (255u8, 255u8, 255u8);
         let (mut max_r, mut max_g, mut max_b) = (0u8, 0u8, 0u8);
         for &i in &self.pixel_indices {
-            let r = rgba[i];
-            let g = rgba[i + 1];
-            let b = rgba[i + 2];
+            let r = Self::channel_value(rgba, i, ColorAxis::Red);
+            let g = Self::channel_value(rgba, i, ColorAxis::Green);
+            let b = Self::channel_value(rgba, i, ColorAxis::Blue);
             min_r = min_r.min(r);
             max_r = max_r.max(r);
             min_g = min_g.min(g);
@@ -33,35 +46,103 @@ impl Bucket {
             min_b = min_b.min(b);
             max_b = max_b.max(b);
         }
-        let range_r = max_r - min_r;
-        let range_g = max_g - min_g;
-        let range_b = max_b - min_b;
-        if range_r >= range_g && range_r >= range_b {
-            ColorAxis::Red
-        } else if range_g >= range_b {
-            ColorAxis::Green
-        } else {
-            ColorAxis::Blue
+
+        (max_r - min_r, max_g - min_g, max_b - min_b)
+    }
+
+    /// Returns channels ordered from widest range to narrowest range.
+    fn widest_axes(&self, rgba: &[u8]) -> [ColorAxis; 3] {
+        let (range_r, range_g, range_b) = self.channel_ranges(rgba);
+
+        let mut axes = [
+            (ColorAxis::Red, range_r),
+            (ColorAxis::Green, range_g),
+            (ColorAxis::Blue, range_b),
+        ];
+
+        axes.sort_unstable_by(|(axis_a, range_a), (axis_b, range_b)| {
+            range_b.cmp(range_a).then_with(|| axis_a.cmp(axis_b))
+        });
+
+        [axes[0].0, axes[1].0, axes[2].0]
+    }
+
+    /// Finds a split boundary nearest to the bucket median for `axis`.
+    ///
+    /// Assumes `pixel_indices` are already sorted by the selected axis value.
+    /// The returned index `k` satisfies `0 < k < len` and guarantees that
+    /// adjacent elements across the boundary differ in axis value, avoiding
+    /// splits that keep identical colors on both sides.
+    fn find_split_index(&self, rgba: &[u8], axis: ColorAxis) -> Option<usize> {
+        let len = self.pixel_indices.len();
+        if len < 2 {
+            return None;
+        }
+
+        let mid = len / 2;
+
+        // Find the first distinct color in the first half of the bucket pixels, mid -> start
+        let mut left_candidate = None;
+        for k in (1..=mid).rev() {
+            let left = Self::channel_value(rgba, self.pixel_indices[k - 1], axis);
+            let right = Self::channel_value(rgba, self.pixel_indices[k], axis);
+            if left != right {
+                left_candidate = Some(k);
+                break;
+            }
+        }
+
+        // Find the first distinct color in the second half of the bucket pixels, mid -> end
+        let mut right_candidate = None;
+        for k in (mid + 1)..len {
+            let left = Self::channel_value(rgba, self.pixel_indices[k - 1], axis);
+            let right = Self::channel_value(rgba, self.pixel_indices[k], axis);
+            if left != right {
+                right_candidate = Some(k);
+                break;
+            }
+        }
+
+        match (left_candidate, right_candidate) {
+            // Pick the  candidate closer to mid (for balanced partitions)
+            (Some(l), Some(r)) => {
+                if mid - l <= r - mid {
+                    Some(l)
+                } else {
+                    Some(r)
+                }
+            }
+            // Pick the single found candidate
+            (Some(l), None) => Some(l),
+            (None, Some(r)) => Some(r),
+            // All axis values are identical in the bucket
+            (None, None) => None,
         }
     }
 
-    /// Splits this bucket along the median of the widest axis, returning two
-    /// new buckets.
-    fn split(mut self, rgba: &[u8]) -> (Bucket, Bucket) {
-        let axis = self.widest_axis(rgba);
-        self.pixel_indices.sort_unstable_by_key(|&i| match axis {
-            ColorAxis::Red => rgba[i],
-            ColorAxis::Green => rgba[i + 1],
-            ColorAxis::Blue => rgba[i + 2],
-        });
-        let mid = self.pixel_indices.len() / 2;
-        let right = self.pixel_indices.split_off(mid);
-        (
-            Bucket {
-                pixel_indices: self.pixel_indices,
-            },
-            Bucket { pixel_indices: right },
-        )
+    /// Attempts to split this bucket along the median of the widest axis.
+    ///
+    /// Returns the (possibly unchanged) left bucket and an optional right
+    /// bucket when a split point exists.
+    fn split(mut self, rgba: &[u8]) -> (Bucket, Option<Bucket>) {
+        let axes = self.widest_axes(rgba);
+
+        for axis in axes {
+            self.pixel_indices
+                .sort_unstable_by_key(|&i| Self::channel_value(rgba, i, axis));
+            if let Some(split_at) = self.find_split_index(rgba, axis) {
+                let right = self.pixel_indices.split_off(split_at);
+                return (
+                    self,
+                    Some(Bucket {
+                        pixel_indices: right,
+                        terminal: false,
+                    }),
+                );
+            }
+        }
+
+        (self, None)
     }
 
     /// Computes the average color of all pixels in this bucket.
@@ -80,123 +161,60 @@ impl Bucket {
     }
 }
 
-/// Finds the nearest palette entry to a given RGB color, returning the index.
-///
-/// Uses the Squared Euclidean Distance in RGB color space to find the closest
-/// color match.
-fn nearest_palette_index(palette: &[[u8; 4]], r: u8, g: u8, b: u8) -> usize {
-    let mut best_idx = 0;
-    let mut best_dist = u32::MAX;
-    for (i, entry) in palette.iter().enumerate() {
-        let dr = r as i32 - entry[0] as i32;
-        let dg = g as i32 - entry[1] as i32;
-        let db = b as i32 - entry[2] as i32;
-        // Each difference is in -255..=255, so squared fits comfortably in i32
-        // (max 65025) and the sum (max 195075) fits in u32.
-        let dist = (dr * dr + dg * dg + db * db) as u32;
-        if dist < best_dist {
-            best_dist = dist;
-            best_idx = i;
-            if dist == 0 {
-                break;
-            }
-        }
-    }
-    best_idx
-}
-
-/// Tries to build an exact palette from the image's unique RGB colors.
-///
-/// If the image has at most `max_colors` distinct RGB values, returns
-/// `Some((palette, indices))` with no color loss.  Otherwise returns `None`
-/// so the caller can fall back to median-cut.
-fn try_exact_palette(rgba: &[u8], max_colors: usize) -> Option<(Vec<[u8; 4]>, Vec<u8>)> {
-    use std::collections::HashMap;
-
-    let pixel_count = rgba.len() / 4;
-    // Map (R, G, B) -> palette index.  We stop as soon as we exceed
-    // max_colors unique values.
-    let mut color_map: HashMap<(u8, u8, u8), u8> = HashMap::new();
-    let mut palette: Vec<[u8; 4]> = Vec::new();
-    let mut indices: Vec<u8> = Vec::with_capacity(pixel_count);
-
-    for i in 0..pixel_count {
-        let off = i * 4;
-        let key = (rgba[off], rgba[off + 1], rgba[off + 2]);
-        let idx = match color_map.get(&key) {
-            Some(&idx) => idx,
-            None => {
-                if palette.len() >= max_colors {
-                    return None; // Too many unique colors.
-                }
-                let idx = palette.len() as u8;
-                palette.push([key.0, key.1, key.2, 255]);
-                color_map.insert(key, idx);
-                idx
-            }
-        };
-        indices.push(idx);
-    }
-
-    Some((palette, indices))
-}
-
 /// Quantizes the RGBA pixel buffer down to at most `max_colors` colors.
 ///
-/// If the image already contains `max_colors` or fewer distinct RGB values the
-/// exact colors are preserved without any averaging. Otherwise the median-cut
-/// algorithm is used to approximate the palette.
+/// The splitter avoids splitting pure buckets and only splits where channel
+/// values change, which keeps low-color images lossless when they fit within
+/// `max_colors` while still using median-cut behavior for complex images.
 ///
 /// Returns `(palette, indices)` where `palette` has at most `max_colors`
 /// entries (each `[R, G, B, 255]`) and `indices` has one entry per pixel.
 pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
     assert!((2..=256).contains(&max_colors));
 
-    // Fast path: if the image already fits in the target palette size,
-    // preserve the exact colors — no averaging, no extra entries.
-    if let Some(exact) = try_exact_palette(rgba, max_colors) {
-        return exact;
-    }
-
     let pixel_count = rgba.len() / 4;
 
     // Initial bucket with all pixels.
     let initial = Bucket {
         pixel_indices: (0..pixel_count).map(|i| i * 4).collect(),
+        terminal: false,
     };
     let mut buckets = vec![initial];
 
     // Repeatedly split the largest bucket until we have enough.
     while buckets.len() < max_colors {
-        // Find the bucket with the most pixels to split.
-        let (split_idx, _) = buckets
+        // Find the largest bucket that can still be split.
+        let split_idx = buckets
             .iter()
             .enumerate()
-            .filter(|(_, b)| b.pixel_indices.len() >= 2)
+            .filter(|(_, b)| !b.terminal && b.pixel_indices.len() >= 2)
             .max_by_key(|(_, b)| b.pixel_indices.len())
-            .unwrap_or((0, &buckets[0]));
+            .map(|(idx, _)| idx);
 
-        if buckets[split_idx].pixel_indices.len() < 2 {
-            break; // Can't split single-pixel buckets.
-        }
+        let Some(split_idx) = split_idx else {
+            break;
+        };
 
         let bucket = buckets.swap_remove(split_idx);
-        let (a, b) = bucket.split(rgba);
-        buckets.push(a);
-        buckets.push(b);
+        let (mut left, right) = bucket.split(rgba);
+        if let Some(right) = right {
+            buckets.push(left);
+            buckets.push(right);
+        } else {
+            left.terminal = true;
+            buckets.push(left);
+        }
     }
 
-    let palette: Vec<[u8; 4]> = buckets.iter().map(|b| b.average_color(rgba)).collect();
+    let mut palette = Vec::with_capacity(buckets.len());
+    let mut indices = vec![0u8; pixel_count];
 
-    // Map each pixel to the nearest palette entry (parallelized — this is the
-    // most expensive step, ~256 distance computations per pixel).
-    let indices: Vec<u8> = (0..pixel_count)
-        .into_par_iter()
-        .map(|i| {
-            let off = i * 4;
-            nearest_palette_index(&palette, rgba[off], rgba[off + 1], rgba[off + 2]) as u8
-        })
-        .collect();
+    for (palette_idx, bucket) in buckets.iter().enumerate() {
+        palette.push(bucket.average_color(rgba));
+        for &off in &bucket.pixel_indices {
+            indices[off / 4] = palette_idx as u8;
+        }
+    }
 
     (palette, indices)
 }
