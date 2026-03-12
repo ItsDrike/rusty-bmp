@@ -10,9 +10,16 @@ struct Bucket {
     pixel_indices: Vec<usize>,
 }
 
+#[derive(Clone, Copy)]
+enum ColorAxis {
+    Red,
+    Green,
+    Blue,
+}
+
 impl Bucket {
-    /// Returns the axis (0=R, 1=G, 2=B) with the greatest range in this bucket.
-    fn widest_axis(&self, rgba: &[u8]) -> usize {
+    /// Returns the color channel with the greatest range in this bucket.
+    fn widest_axis(&self, rgba: &[u8]) -> ColorAxis {
         let (mut min_r, mut min_g, mut min_b) = (255u8, 255u8, 255u8);
         let (mut max_r, mut max_g, mut max_b) = (0u8, 0u8, 0u8);
         for &i in &self.pixel_indices {
@@ -30,11 +37,11 @@ impl Bucket {
         let range_g = max_g - min_g;
         let range_b = max_b - min_b;
         if range_r >= range_g && range_r >= range_b {
-            0
+            ColorAxis::Red
         } else if range_g >= range_b {
-            1
+            ColorAxis::Green
         } else {
-            2
+            ColorAxis::Blue
         }
     }
 
@@ -42,7 +49,11 @@ impl Bucket {
     /// new buckets.
     fn split(mut self, rgba: &[u8]) -> (Bucket, Bucket) {
         let axis = self.widest_axis(rgba);
-        self.pixel_indices.sort_unstable_by_key(|&i| rgba[i + axis]);
+        self.pixel_indices.sort_unstable_by_key(|&i| match axis {
+            ColorAxis::Red => rgba[i],
+            ColorAxis::Green => rgba[i + 1],
+            ColorAxis::Blue => rgba[i + 2],
+        });
         let mid = self.pixel_indices.len() / 2;
         let right = self.pixel_indices.split_off(mid);
         (
@@ -70,6 +81,9 @@ impl Bucket {
 }
 
 /// Finds the nearest palette entry to a given RGB color, returning the index.
+///
+/// Uses the Squared Euclidean Distance in RGB color space to find the closest
+/// color match.
 fn nearest_palette_index(palette: &[[u8; 4]], r: u8, g: u8, b: u8) -> usize {
     let mut best_idx = 0;
     let mut best_dist = u32::MAX;
@@ -130,13 +144,13 @@ fn try_exact_palette(rgba: &[u8], max_colors: usize) -> Option<(Vec<[u8; 4]>, Ve
 /// Quantizes the RGBA pixel buffer down to at most `max_colors` colors.
 ///
 /// If the image already contains `max_colors` or fewer distinct RGB values the
-/// exact colors are preserved without any averaging.  Otherwise the median-cut
+/// exact colors are preserved without any averaging. Otherwise the median-cut
 /// algorithm is used to approximate the palette.
 ///
 /// Returns `(palette, indices)` where `palette` has at most `max_colors`
 /// entries (each `[R, G, B, 255]`) and `indices` has one entry per pixel.
 pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
-    assert!(max_colors >= 2 && max_colors <= 256);
+    assert!((2..=256).contains(&max_colors));
 
     // Fast path: if the image already fits in the target palette size,
     // preserve the exact colors — no averaging, no extra entries.
