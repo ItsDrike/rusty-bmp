@@ -108,7 +108,7 @@ impl BmpViewerApp {
                         });
 
                         ui.horizontal(|ui| {
-                            ui.small("Brightness:");
+                            ui.add_sized([70.0, 0.0], egui::Label::new("Brightness:"));
                             ui.add(egui::Slider::new(&mut self.brightness_input, -255..=255));
                             if ui
                                 .add_enabled(self.brightness_input != 0, egui::Button::new("Apply").small())
@@ -119,7 +119,7 @@ impl BmpViewerApp {
                             }
                         });
                         ui.horizontal(|ui| {
-                            ui.small("Contrast:");
+                            ui.add_sized([70.0, 0.0], egui::Label::new("Contrast:"));
                             ui.add(egui::Slider::new(&mut self.contrast_input, -255..=255));
                             if ui
                                 .add_enabled(self.contrast_input != 0, egui::Button::new("Apply").small())
