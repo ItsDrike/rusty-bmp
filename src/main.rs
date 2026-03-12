@@ -334,15 +334,18 @@ impl BmpViewerApp {
             self.source_metadata.as_ref(),
         ) {
             Ok(()) => {
+                let saved_path = path.to_path_buf();
+                self.path_input = saved_path.display().to_string();
+                self.loaded_path = Some(saved_path.clone());
                 self.status = format!(
                     "Saved {} ({}, {})",
-                    path.display(),
+                    saved_path.display(),
                     self.save_format,
                     self.save_header_version
                 );
                 // Re-load from disk so metadata, original_image, and pipeline
                 // all reflect the file as it was actually written.
-                self.load_path(ctx, path.to_path_buf());
+                self.load_path(ctx, saved_path);
             }
             Err(err) => {
                 self.status = format!("Save failed: {err}");
