@@ -450,31 +450,32 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
     })
 }
 
-/// Remove any embedded steganography from `image` by zeroing all LSBs that
-/// the given `config` uses.
+/// Remove embedded steganography from `image` for the given `config`.
 ///
-/// Returns a new image with the steganography bits cleared (set to 0).
+/// If a valid header is present for `config`, only the exact bit range used by
+/// that header plus payload is zeroed. If no valid header is found, the image
+/// is returned unchanged.
 pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
-    let mut rgba = image.rgba.clone();
+    if config.bits_per_pixel() == 0 {
+        return image.clone();
+    }
 
-    let clear_mask = |bits: u8| -> u8 {
-        match bits {
-            0 => 0xFF,
-            8 => 0x00,
-            n => !((1u8 << n) - 1),
-        }
+    let Some(info) = try_read_header(&image.rgba, config) else {
+        return image.clone();
     };
 
-    let r_mask = clear_mask(config.r_bits);
-    let g_mask = clear_mask(config.g_bits);
-    let b_mask = clear_mask(config.b_bits);
-    let a_mask = clear_mask(config.a_bits);
+    let mut rgba = image.rgba.clone();
+    let total_pixels = rgba.len() / 4;
 
-    for px in rgba.chunks_exact_mut(4) {
-        px[0] &= r_mask;
-        px[1] &= g_mask;
-        px[2] &= b_mask;
-        px[3] &= a_mask;
+    let bits_to_clear = HEADER_BITS + (info.payload_len as u64) * 8;
+    let mut cursor = BitCursor::new(config);
+
+    for _ in 0..bits_to_clear {
+        if cursor.exhausted(total_pixels) {
+            break;
+        }
+        write_bit(rgba.as_mut_slice(), &cursor, 0);
+        cursor.advance();
     }
 
     DecodedImage {
@@ -568,7 +569,7 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect, embed, extract, remove, StegConfig, StegError, StegInfo};
+    use super::{detect, embed, extract, remove, write_bit, BitCursor, StegConfig, StegError, StegInfo};
     use crate::runtime::decode::DecodedImage;
 
     fn patterned_image(width: u32, height: u32) -> DecodedImage {
@@ -582,14 +583,6 @@ mod tests {
             }
         }
         DecodedImage { width, height, rgba }
-    }
-
-    fn clear_mask(bits: u8) -> u8 {
-        match bits {
-            0 => 0xFF,
-            8 => 0x00,
-            n => !((1u8 << n) - 1),
-        }
     }
 
     #[test]
@@ -666,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_clears_only_configured_lsb_bits() {
+    fn remove_clears_only_header_and_payload_bits() {
         let image = patterned_image(12, 12);
         let config = StegConfig {
             r_bits: 3,
@@ -674,22 +667,37 @@ mod tests {
             b_bits: 1,
             a_bits: 0,
         };
-        let embedded = embed(&image, config, b"hidden").expect("embed should succeed");
+        let payload = b"hidden";
+        let embedded = embed(&image, config, payload).expect("embed should succeed");
         let stripped = remove(&embedded, config);
 
         assert!(detect(&stripped).is_none());
 
-        let masks = [
-            clear_mask(config.r_bits),
-            clear_mask(config.g_bits),
-            clear_mask(config.b_bits),
-            clear_mask(config.a_bits),
-        ];
-        for (embedded_px, stripped_px) in embedded.rgba.chunks_exact(4).zip(stripped.rgba.chunks_exact(4)) {
-            for c in 0..4 {
-                assert_eq!(stripped_px[c], embedded_px[c] & masks[c]);
-            }
+        let mut expected = embedded.rgba.clone();
+        let mut cursor = BitCursor::new(config);
+        let bits_to_clear = 80_u64 + (payload.len() as u64) * 8;
+        for _ in 0..bits_to_clear {
+            write_bit(expected.as_mut_slice(), &cursor, 0);
+            cursor.advance();
         }
+
+        assert_eq!(stripped.rgba, expected);
+    }
+
+    #[test]
+    fn remove_leaves_image_unchanged_when_no_valid_header_exists() {
+        let image = patterned_image(12, 12);
+        let config = StegConfig {
+            r_bits: 2,
+            g_bits: 1,
+            b_bits: 0,
+            a_bits: 0,
+        };
+
+        let stripped = remove(&image, config);
+        assert_eq!(stripped.rgba, image.rgba);
+        assert_eq!(stripped.width, image.width);
+        assert_eq!(stripped.height, image.height);
     }
 
     #[test]

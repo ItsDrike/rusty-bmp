@@ -66,8 +66,8 @@ impl BmpViewerApp {
                             if ui
                                 .button("Remove Steganography")
                                 .on_hover_text(
-                                    "Zero all LSBs used by this configuration, \
-                                     removing the hidden payload from the image.",
+                                    "Zero the bit range used by the detected header \
+                                    and payload for this configuration.",
                                 )
                                 .clicked()
                             {
