@@ -58,6 +58,17 @@ pub enum StegError {
 
     #[error("all channels have 0 bits configured; nothing to embed")]
     NoChannels,
+
+    #[error("decoded image buffer mismatch for {width}x{height}: expected {expected} RGBA bytes, got {actual}")]
+    InvalidImageBuffer {
+        width: u32,
+        height: u32,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("arithmetic overflow while processing steganography data: {0}")]
+    ArithmeticOverflow(&'static str),
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -66,6 +77,28 @@ pub enum StegError {
 
 /// Number of bits in the header, independent of config.
 const HEADER_BITS: u64 = 80;
+
+fn validated_total_pixels(image: &DecodedImage) -> Result<usize, StegError> {
+    let width = usize::try_from(image.width).map_err(|_| StegError::ArithmeticOverflow("width cast"))?;
+    let height = usize::try_from(image.height).map_err(|_| StegError::ArithmeticOverflow("height cast"))?;
+    let pixels = width
+        .checked_mul(height)
+        .ok_or(StegError::ArithmeticOverflow("pixel count"))?;
+    let expected = pixels
+        .checked_mul(4)
+        .ok_or(StegError::ArithmeticOverflow("expected RGBA length"))?;
+
+    if image.rgba.len() != expected {
+        return Err(StegError::InvalidImageBuffer {
+            width: image.width,
+            height: image.height,
+            expected,
+            actual: image.rgba.len(),
+        });
+    }
+
+    Ok(pixels)
+}
 
 impl StegConfig {
     /// Total bits contributed by this config per pixel.
@@ -368,9 +401,19 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
         return Err(StegError::NoChannels);
     }
 
-    let total_pixels = (image.width * image.height) as usize;
-    let required_bits = HEADER_BITS + payload.len() as u64 * 8;
-    let available_bits = config.total_bits(image.width, image.height);
+    let total_pixels = validated_total_pixels(image)?;
+    let payload_len_u32 =
+        u32::try_from(payload.len()).map_err(|_| StegError::ArithmeticOverflow("payload length cast"))?;
+    let payload_bits = (payload_len_u32 as u64)
+        .checked_mul(8)
+        .ok_or(StegError::ArithmeticOverflow("payload bits"))?;
+    let required_bits = HEADER_BITS
+        .checked_add(payload_bits)
+        .ok_or(StegError::ArithmeticOverflow("required bits"))?;
+    let available_bits = u64::try_from(total_pixels)
+        .map_err(|_| StegError::ArithmeticOverflow("total pixel count cast"))?
+        .checked_mul(config.bits_per_pixel() as u64)
+        .ok_or(StegError::ArithmeticOverflow("available bits"))?;
 
     if required_bits > available_bits {
         return Err(StegError::InsufficientCapacity {
@@ -383,17 +426,21 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
     let mut cursor = BitCursor::new(config);
 
     // Write the 80-bit header.
-    write_header(
-        rgba.as_mut_slice(),
-        &mut cursor,
-        config,
-        payload.len() as u32,
-        total_pixels,
-    );
+    if !write_header(rgba.as_mut_slice(), &mut cursor, config, payload_len_u32, total_pixels) {
+        return Err(StegError::InsufficientCapacity {
+            required: required_bits,
+            capacity: available_bits,
+        });
+    }
 
     // Write payload bytes, each 8 bits LSB-first.
     for &byte in payload {
-        write_bits(rgba.as_mut_slice(), &mut cursor, byte as u64, 8, total_pixels);
+        if !write_bits(rgba.as_mut_slice(), &mut cursor, byte as u64, 8, total_pixels) {
+            return Err(StegError::InsufficientCapacity {
+                required: required_bits,
+                capacity: available_bits,
+            });
+        }
     }
 
     Ok(DecodedImage {
@@ -446,10 +493,18 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
         return Err(StegError::NoChannels);
     }
 
-    let total_pixels = (image.width * image.height) as usize;
-    let remaining_bits = config.total_bits(image.width, image.height).saturating_sub(HEADER_BITS);
+    let total_pixels = validated_total_pixels(image)?;
+    let total_bits = u64::try_from(total_pixels)
+        .map_err(|_| StegError::ArithmeticOverflow("total pixel count cast"))?
+        .checked_mul(config.bits_per_pixel() as u64)
+        .ok_or(StegError::ArithmeticOverflow("total bits"))?;
+    let remaining_bits = total_bits.saturating_sub(HEADER_BITS);
 
-    if info.payload_len as u64 * 8 > remaining_bits {
+    let payload_bits = (info.payload_len as u64)
+        .checked_mul(8)
+        .ok_or(StegError::ArithmeticOverflow("payload bits"))?;
+
+    if payload_bits > remaining_bits {
         return Err(StegError::PayloadTooLarge {
             payload_len: info.payload_len,
         });
@@ -459,8 +514,12 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
     let mut cursor = BitCursor::new(config);
     // Read and discard header bits (we trust info).
     // 80 bits: read in two 40-bit chunks to avoid >64 bits.
-    read_bits(&image.rgba, &mut cursor, 40, total_pixels);
-    read_bits(&image.rgba, &mut cursor, 40, total_pixels);
+    read_bits(&image.rgba, &mut cursor, 40, total_pixels).ok_or(StegError::PayloadTooLarge {
+        payload_len: info.payload_len,
+    })?;
+    read_bits(&image.rgba, &mut cursor, 40, total_pixels).ok_or(StegError::PayloadTooLarge {
+        payload_len: info.payload_len,
+    })?;
 
     let mut payload = Vec::with_capacity(info.payload_len as usize);
     for _ in 0..info.payload_len {
@@ -505,4 +564,241 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect, embed, extract, remove, StegConfig, StegError, StegInfo};
+    use crate::runtime::decode::DecodedImage;
+
+    fn patterned_image(width: u32, height: u32) -> DecodedImage {
+        let mut rgba = Vec::with_capacity((width as usize) * (height as usize) * 4);
+        for y in 0..height {
+            for x in 0..width {
+                rgba.push(((x * 31 + y * 17 + 11) % 256) as u8);
+                rgba.push(((x * 19 + y * 29 + 53) % 256) as u8);
+                rgba.push(((x * 43 + y * 7 + 97) % 256) as u8);
+                rgba.push(((x * 13 + y * 37 + 191) % 256) as u8);
+            }
+        }
+        DecodedImage { width, height, rgba }
+    }
+
+    fn clear_mask(bits: u8) -> u8 {
+        match bits {
+            0 => 0xFF,
+            8 => 0x00,
+            n => !((1u8 << n) - 1),
+        }
+    }
+
+    #[test]
+    fn config_encoding_roundtrips_for_all_valid_values() {
+        for raw in 0u16..6561 {
+            let config = StegConfig::decode_config_bits(raw).expect("raw value should decode");
+            assert_eq!(config.encode_config_bits(), raw);
+        }
+        assert!(StegConfig::decode_config_bits(6561).is_none());
+        assert!(StegConfig::decode_config_bits(8191).is_none());
+    }
+
+    #[test]
+    fn config_capacity_helpers_behave_as_expected() {
+        let config = StegConfig {
+            r_bits: 1,
+            g_bits: 2,
+            b_bits: 3,
+            a_bits: 0,
+        };
+        assert_eq!(config.bits_per_pixel(), 6);
+        assert_eq!(config.total_bits(10, 5), 300);
+        assert_eq!(config.capacity_bytes(10, 5), 27);
+
+        let tiny = StegConfig {
+            r_bits: 1,
+            g_bits: 0,
+            b_bits: 0,
+            a_bits: 0,
+        };
+        assert_eq!(tiny.capacity_bytes(2, 2), 0);
+    }
+
+    #[test]
+    fn embed_detect_extract_roundtrip_succeeds() {
+        let image = patterned_image(16, 16);
+        let config = StegConfig {
+            r_bits: 2,
+            g_bits: 1,
+            b_bits: 2,
+            a_bits: 0,
+        };
+        let payload = b"steganography test payload";
+
+        let embedded = embed(&image, config, payload).expect("embed should succeed");
+        let info = detect(&embedded).expect("detect should find embedded payload");
+        assert_eq!(info.config, config);
+        assert_eq!(info.version, 0);
+        assert_eq!(info.payload_len, payload.len() as u32);
+
+        let extracted = extract(&embedded, &info).expect("extract should succeed");
+        assert_eq!(extracted, payload);
+    }
+
+    #[test]
+    fn embed_does_not_modify_original_image() {
+        let image = patterned_image(8, 8);
+        let config = StegConfig {
+            r_bits: 1,
+            g_bits: 1,
+            b_bits: 1,
+            a_bits: 1,
+        };
+        let original = image.rgba.clone();
+
+        let _embedded = embed(&image, config, b"abc").expect("embed should succeed");
+        assert_eq!(image.rgba, original);
+    }
+
+    #[test]
+    fn detect_returns_none_when_no_header_is_present() {
+        let clean = patterned_image(8, 8);
+        assert!(detect(&clean).is_none());
+    }
+
+    #[test]
+    fn remove_clears_only_configured_lsb_bits() {
+        let image = patterned_image(12, 12);
+        let config = StegConfig {
+            r_bits: 3,
+            g_bits: 2,
+            b_bits: 1,
+            a_bits: 0,
+        };
+        let embedded = embed(&image, config, b"hidden").expect("embed should succeed");
+        let stripped = remove(&embedded, config);
+
+        assert!(detect(&stripped).is_none());
+
+        let masks = [
+            clear_mask(config.r_bits),
+            clear_mask(config.g_bits),
+            clear_mask(config.b_bits),
+            clear_mask(config.a_bits),
+        ];
+        for (embedded_px, stripped_px) in embedded.rgba.chunks_exact(4).zip(stripped.rgba.chunks_exact(4)) {
+            for c in 0..4 {
+                assert_eq!(stripped_px[c], embedded_px[c] & masks[c]);
+            }
+        }
+    }
+
+    #[test]
+    fn embed_rejects_no_channels_config() {
+        let image = patterned_image(8, 8);
+        let config = StegConfig {
+            r_bits: 0,
+            g_bits: 0,
+            b_bits: 0,
+            a_bits: 0,
+        };
+
+        let err = embed(&image, config, b"x").expect_err("must reject no-channel config");
+        assert!(matches!(err, StegError::NoChannels));
+    }
+
+    #[test]
+    fn embed_rejects_insufficient_capacity() {
+        let image = patterned_image(2, 2);
+        let config = StegConfig {
+            r_bits: 1,
+            g_bits: 0,
+            b_bits: 0,
+            a_bits: 0,
+        };
+
+        let err = embed(&image, config, b"").expect_err("must reject when header cannot fit");
+        assert!(matches!(
+            err,
+            StegError::InsufficientCapacity {
+                required: 80,
+                capacity: 4
+            }
+        ));
+    }
+
+    #[test]
+    fn extract_rejects_no_channels_config() {
+        let image = patterned_image(8, 8);
+        let info = StegInfo {
+            config: StegConfig {
+                r_bits: 0,
+                g_bits: 0,
+                b_bits: 0,
+                a_bits: 0,
+            },
+            version: 0,
+            payload_len: 0,
+        };
+
+        let err = extract(&image, &info).expect_err("must reject no-channel config");
+        assert!(matches!(err, StegError::NoChannels));
+    }
+
+    #[test]
+    fn extract_rejects_payload_too_large_from_header_info() {
+        let image = patterned_image(8, 8);
+        let info = StegInfo {
+            config: StegConfig {
+                r_bits: 1,
+                g_bits: 1,
+                b_bits: 1,
+                a_bits: 0,
+            },
+            version: 0,
+            payload_len: u32::MAX,
+        };
+
+        let err = extract(&image, &info).expect_err("payload must be rejected if it does not fit");
+        assert!(matches!(err, StegError::PayloadTooLarge { .. }));
+    }
+
+    #[test]
+    fn embed_rejects_invalid_decoded_image_buffer() {
+        let image = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![0; 12],
+        };
+        let config = StegConfig {
+            r_bits: 1,
+            g_bits: 1,
+            b_bits: 1,
+            a_bits: 0,
+        };
+
+        let err = embed(&image, config, b"x").expect_err("must reject mismatched RGBA buffer");
+        assert!(matches!(err, StegError::InvalidImageBuffer { .. }));
+    }
+
+    #[test]
+    fn extract_rejects_invalid_decoded_image_buffer() {
+        let image = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: vec![0; 12],
+        };
+        let info = StegInfo {
+            config: StegConfig {
+                r_bits: 1,
+                g_bits: 1,
+                b_bits: 1,
+                a_bits: 0,
+            },
+            version: 0,
+            payload_len: 0,
+        };
+
+        let err = extract(&image, &info).expect_err("must reject mismatched RGBA buffer");
+        assert!(matches!(err, StegError::InvalidImageBuffer { .. }));
+    }
 }

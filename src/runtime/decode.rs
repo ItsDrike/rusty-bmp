@@ -54,6 +54,27 @@ pub enum DecodeError {
 
     #[error("arithmetic overflow while decoding: {0}")]
     ArithmeticOverflow(&'static str),
+
+    #[error("decoded RGBA output too large: {decoded_size} bytes exceeds safe max {max_allowed}")]
+    DecodedImageTooLarge { decoded_size: usize, max_allowed: usize },
+}
+
+const MAX_DECODED_RGBA_BYTES: usize = 512 * 1024 * 1024;
+
+fn rgba_output_len(width: usize, height: usize) -> Result<usize, DecodeError> {
+    let pixels = width
+        .checked_mul(height)
+        .ok_or(DecodeError::ArithmeticOverflow("pixel count"))?;
+    let bytes = pixels
+        .checked_mul(4)
+        .ok_or(DecodeError::ArithmeticOverflow("RGBA output size"))?;
+    if bytes > MAX_DECODED_RGBA_BYTES {
+        return Err(DecodeError::DecodedImageTooLarge {
+            decoded_size: bytes,
+            max_allowed: MAX_DECODED_RGBA_BYTES,
+        });
+    }
+    Ok(bytes)
 }
 
 fn row_stride(width: usize, bits_per_pixel: u16) -> Result<usize, DecodeError> {
@@ -139,7 +160,7 @@ fn decode_rgb_pixels(
         });
     }
 
-    let mut out = vec![0_u8; width * height * 4];
+    let mut out = vec![0_u8; rgba_output_len(width, height)?];
 
     for y_out in 0..height {
         let y_src = if top_down { y_out } else { height - 1 - y_out };
@@ -221,7 +242,7 @@ fn decode_bitfields_pixels(
         });
     }
 
-    let mut out = vec![0_u8; width * height * 4];
+    let mut out = vec![0_u8; rgba_output_len(width, height)?];
     for y_out in 0..height {
         let y_src = if top_down { y_out } else { height - 1 - y_out };
         let row_start = y_src * stride;
@@ -290,7 +311,7 @@ fn decode_rle8_pixels(
     top_down: bool,
     palette: &[[u8; 4]],
 ) -> Result<Vec<u8>, DecodeError> {
-    let mut out = vec![0_u8; width * height * 4];
+    let mut out = vec![0_u8; rgba_output_len(width, height)?];
     let pixel_writer = IndexedPixelWriter {
         width,
         height,
@@ -372,7 +393,7 @@ fn decode_rle4_pixels(
     top_down: bool,
     palette: &[[u8; 4]],
 ) -> Result<Vec<u8>, DecodeError> {
-    let mut out = vec![0_u8; width * height * 4];
+    let mut out = vec![0_u8; rgba_output_len(width, height)?];
     let pixel_writer = IndexedPixelWriter {
         width,
         height,
@@ -557,4 +578,22 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
         height: height as u32,
         rgba,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rgba_output_len, DecodeError, MAX_DECODED_RGBA_BYTES};
+
+    #[test]
+    fn rgba_output_len_rejects_multiplication_overflow() {
+        let err = rgba_output_len(usize::MAX, 2).expect_err("must fail on overflow");
+        assert!(matches!(err, DecodeError::ArithmeticOverflow("pixel count")));
+    }
+
+    #[test]
+    fn rgba_output_len_rejects_excessive_allocation() {
+        let over_limit_pixels = (MAX_DECODED_RGBA_BYTES / 4) + 1;
+        let err = rgba_output_len(over_limit_pixels, 1).expect_err("must enforce decoded size cap");
+        assert!(matches!(err, DecodeError::DecodedImageTooLarge { .. }));
+    }
 }
