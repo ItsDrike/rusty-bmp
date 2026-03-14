@@ -8,14 +8,22 @@ impl BmpViewerApp {
     /// `text_has_focus` is used to suppress plain-key zoom shortcuts when a text widget is focused.
     pub(crate) fn show_viewer(&mut self, ctx: &egui::Context, text_has_focus: bool) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(texture) = &self.viewport.texture {
+            if let Some((texture_id, tex_size)) = self
+                .viewport
+                .texture
+                .as_ref()
+                .map(|texture| (texture.id(), texture.size_vec2()))
+            {
                 let avail = ui.available_size();
-                let tex_size = texture.size_vec2();
 
                 // Scale that fits the entire image within the panel (aspect-ratio preserving).
                 let fit_scale = {
                     let s = (avail.x / tex_size.x).min(avail.y / tex_size.y);
-                    if s.is_finite() && s > 0.0 { s } else { 1.0 }
+                    if s.is_finite() && s > 0.0 {
+                        s
+                    } else {
+                        1.0
+                    }
                 };
 
                 // Resolve the effective zoom: 0.0 means "fit to panel".
@@ -104,8 +112,20 @@ impl BmpViewerApp {
 
                 // Clip to the panel and paint.
                 let painter = ui.painter_at(panel_rect);
+                if self.viewport.has_transparency {
+                    update_checker_tile_with_hysteresis(&mut self.viewport.checker_tile_img_px, effective_zoom);
+                    self.ensure_checker_texture(ctx, self.viewport.checker_tile_img_px);
+                    if let Some(checker) = self.viewport.checker_texture.as_ref() {
+                        painter.image(
+                            checker.id(),
+                            img_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                }
                 painter.image(
-                    texture.id(),
+                    texture_id,
                     img_rect,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
@@ -361,6 +381,65 @@ impl BmpViewerApp {
                 ui.label("Or drag and drop a BMP file anywhere in this window.");
             }
         });
+    }
+
+    fn ensure_checker_texture(&mut self, ctx: &egui::Context, tile_img_px: u32) {
+        let Some(image) = self.document.transformed_image.as_ref() else {
+            self.viewport.checker_texture = None;
+            self.viewport.checker_texture_tile_img_px = 0;
+            self.viewport.checker_texture_size = [0, 0];
+            return;
+        };
+
+        let size = [image.width, image.height];
+        let same_config = self.viewport.checker_texture.is_some()
+            && self.viewport.checker_texture_tile_img_px == tile_img_px
+            && self.viewport.checker_texture_size == size;
+        if same_config {
+            return;
+        }
+
+        let checker = make_checkerboard_image(image.width as usize, image.height as usize, tile_img_px as usize);
+        self.viewport.checker_texture =
+            Some(ctx.load_texture("checker-background", checker, egui::TextureOptions::NEAREST));
+        self.viewport.checker_texture_tile_img_px = tile_img_px;
+        self.viewport.checker_texture_size = size;
+    }
+}
+
+fn make_checkerboard_image(width: usize, height: usize, tile: usize) -> egui::ColorImage {
+    let light = egui::Color32::from_gray(210);
+    let dark = egui::Color32::from_gray(170);
+    let mut image = egui::ColorImage::new([width, height], dark);
+
+    for y in 0..height {
+        for x in 0..width {
+            let is_light = ((x / tile) + (y / tile)) % 2 == 0;
+            image.pixels[y * width + x] = if is_light { light } else { dark };
+        }
+    }
+
+    image
+}
+
+fn update_checker_tile_with_hysteresis(tile: &mut u32, zoom: f32) {
+    // Keep tile size in image-space, but redraw only when the tile becomes too
+    // small or too large on screen.
+    const MIN_IMG_TILE: u32 = 1;
+    const MAX_IMG_TILE: u32 = 128;
+    const MIN_SCREEN_TILE: f32 = 10.0;
+    const MAX_SCREEN_TILE: f32 = 24.0;
+
+    if *tile == 0 {
+        *tile = 8;
+    }
+
+    while (*tile as f32 * zoom) < MIN_SCREEN_TILE && *tile < MAX_IMG_TILE {
+        *tile = (*tile * 2).min(MAX_IMG_TILE);
+    }
+
+    while (*tile as f32 * zoom) > MAX_SCREEN_TILE && *tile > MIN_IMG_TILE {
+        *tile = (*tile / 2).max(MIN_IMG_TILE);
     }
 }
 

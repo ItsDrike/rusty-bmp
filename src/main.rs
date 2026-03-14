@@ -3,10 +3,10 @@ use std::{fs::File, path::PathBuf};
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{DecodedImage, decode_to_rgba},
-        encode::{SaveFormat, SaveHeaderVersion, SourceMetadata, encode_rgba_to_bmp_ext, save_bmp_ext},
+        decode::{decode_to_rgba, DecodedImage},
+        encode::{encode_rgba_to_bmp_ext, save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
         steganography::{self, StegInfo},
-        transform::{ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode, apply_transform},
+        transform::{apply_transform, ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode},
     },
 };
 use eframe::egui;
@@ -49,6 +49,17 @@ pub(crate) struct DocumentState {
 pub(crate) struct ViewportState {
     /// Cached GPU texture for the currently displayed decoded image.
     pub(crate) texture: Option<egui::TextureHandle>,
+    /// Cached checkerboard texture drawn behind transparent images.
+    pub(crate) checker_texture: Option<egui::TextureHandle>,
+    /// Tile size (in image pixels) used to build `checker_texture`.
+    pub(crate) checker_texture_tile_img_px: u32,
+    /// Pixel dimensions of the image used to build `checker_texture`.
+    pub(crate) checker_texture_size: [u32; 2],
+    /// Whether the currently displayed image contains any non-opaque alpha.
+    pub(crate) has_transparency: bool,
+    /// Checker tile size in image pixels. Adjusted with hysteresis so redraws
+    /// only happen when tiles become too small/large on screen.
+    pub(crate) checker_tile_img_px: u32,
     /// Absolute zoom level: screen pixels per image pixel.
     /// A value of 0.0 means "fit the image to the available panel space".
     pub(crate) zoom: f32,
@@ -232,6 +243,11 @@ impl Default for BmpViewerApp {
             },
             viewport: ViewportState {
                 texture: None,
+                checker_texture: None,
+                checker_texture_tile_img_px: 0,
+                checker_texture_size: [0, 0],
+                has_transparency: false,
+                checker_tile_img_px: 8,
                 zoom: 0.0,
                 last_effective_zoom: 1.0,
                 hovered_pixel: None,
@@ -352,6 +368,10 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn set_display_image(&mut self, ctx: &egui::Context, image: DecodedImage, label: String) {
+        self.viewport.has_transparency = image.rgba.chunks_exact(4).any(|px| px[3] < u8::MAX);
+        self.viewport.checker_texture = None;
+        self.viewport.checker_texture_tile_img_px = 0;
+        self.viewport.checker_texture_size = [image.width, image.height];
         let color =
             egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
         self.viewport.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
