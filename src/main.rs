@@ -192,9 +192,9 @@ pub(crate) struct SteganographyUiState {
     /// applied on top of an embedded steg payload.
     /// Reset to `false` whenever the pipeline's top-most op is no longer steg.
     pub(crate) overwrite_warned: bool,
-    /// Path awaiting save confirmation because it would destroy steganography.
+    /// Path awaiting save confirmation because saving may alter image data.
     pub(crate) save_confirm_pending: Option<std::path::PathBuf>,
-    /// Human-readable reason shown in the save confirmation dialog.
+    /// Human-readable reasons shown in the save confirmation dialog.
     pub(crate) save_confirm_reason: Option<String>,
     /// Transform awaiting confirmation because it would likely corrupt an
     /// existing embedded steganography payload.
@@ -555,34 +555,131 @@ impl BmpViewerApp {
         Ok(round_payload == original_payload)
     }
 
+    /// Returns human-readable reasons why the selected save settings would
+    /// alter the currently displayed image, determined by an in-memory
+    /// encode+decode roundtrip.
+    fn save_roundtrip_difference_reasons(&self) -> Result<Vec<String>, String> {
+        let Some(image) = self.document.transformed_image.as_ref() else {
+            return Ok(Vec::new());
+        };
+
+        let encoded = encode_rgba_to_bmp_ext(
+            image,
+            self.document.save_format,
+            self.document.save_header_version,
+            self.document.source_metadata.as_ref(),
+        )
+        .map_err(|e| format!("failed to encode save-check roundtrip: {e}"))?;
+
+        let roundtrip = decode_to_rgba(&encoded).map_err(|e| format!("failed to decode save-check roundtrip: {e}"))?;
+
+        if roundtrip.width != image.width || roundtrip.height != image.height {
+            return Ok(vec![format!(
+                "Output dimensions change from {}x{} to {}x{}",
+                image.width, image.height, roundtrip.width, roundtrip.height
+            )]);
+        }
+
+        if roundtrip.rgba == image.rgba {
+            return Ok(Vec::new());
+        }
+
+        let mut changed_pixels = 0usize;
+        let mut rgb_changed_pixels = 0usize;
+        let mut alpha_changed_pixels = 0usize;
+        let mut had_transparency = false;
+        let mut transparent_pixels_lost = 0usize;
+
+        for (src, dst) in image.rgba.chunks_exact(4).zip(roundtrip.rgba.chunks_exact(4)) {
+            let src_transparent = src[3] < u8::MAX;
+            if src_transparent {
+                had_transparency = true;
+            }
+
+            let rgb_changed = src[0] != dst[0] || src[1] != dst[1] || src[2] != dst[2];
+            let alpha_changed = src[3] != dst[3];
+
+            if rgb_changed || alpha_changed {
+                changed_pixels += 1;
+            }
+            if rgb_changed {
+                rgb_changed_pixels += 1;
+            }
+            if alpha_changed {
+                alpha_changed_pixels += 1;
+            }
+            if src_transparent && dst[3] == u8::MAX {
+                transparent_pixels_lost += 1;
+            }
+        }
+
+        let total_pixels = (image.width as usize) * (image.height as usize);
+        let mut reasons = Vec::new();
+
+        if had_transparency && transparent_pixels_lost > 0 {
+            reasons.push(format!(
+                "Transparency would be lost for {} pixels (selected format/header cannot fully preserve alpha)",
+                transparent_pixels_lost
+            ));
+        } else if alpha_changed_pixels > 0 {
+            reasons.push(format!("Alpha values would change on {} pixels", alpha_changed_pixels));
+        }
+
+        if rgb_changed_pixels > 0 {
+            reasons.push(format!(
+                "Color values would change on {} of {} pixels (likely quantization/compression)",
+                rgb_changed_pixels, total_pixels
+            ));
+        }
+
+        if reasons.is_empty() && changed_pixels > 0 {
+            reasons.push(format!(
+                "Pixel data would change on {} of {} pixels",
+                changed_pixels, total_pixels
+            ));
+        }
+
+        Ok(reasons)
+    }
+
     pub(crate) fn save_to_path(&mut self, ctx: &egui::Context, path: &std::path::Path) {
         if self.document.transformed_image.is_none() {
             self.status = "Nothing to save".to_owned();
             return;
         }
 
+        let mut reasons = Vec::new();
+
         // If the image contains steganography and the chosen format would
-        // destroy it, open the confirmation dialog instead of saving immediately.
+        // destroy it, warn before saving.
         if self.steganography.detected.is_some() {
             match self.save_preserves_current_steg_payload() {
                 Ok(true) => {}
                 Ok(false) => {
-                    self.steganography.save_confirm_pending = Some(path.to_path_buf());
-                    self.steganography.save_confirm_reason = Some(
-                        "Roundtrip verification shows the selected format/header does not preserve the hidden payload"
+                    reasons.push(
+                        "Roundtrip verification shows the selected format/header does not preserve the hidden steganography payload"
                             .to_owned(),
                     );
-                    return;
                 }
                 Err(err) => {
-                    // Conservative fallback: if verification fails, require explicit consent.
-                    self.steganography.save_confirm_pending = Some(path.to_path_buf());
-                    self.steganography.save_confirm_reason = Some(format!(
+                    reasons.push(format!(
                         "Could not verify steganography preservation ({err}); saving may destroy hidden data"
                     ));
-                    return;
                 }
             }
+        }
+
+        match self.save_roundtrip_difference_reasons() {
+            Ok(mut diffs) => reasons.append(&mut diffs),
+            Err(err) => reasons.push(format!(
+                "Could not verify save roundtrip fidelity ({err}); output may differ from the current view"
+            )),
+        }
+
+        if !reasons.is_empty() {
+            self.steganography.save_confirm_pending = Some(path.to_path_buf());
+            self.steganography.save_confirm_reason = Some(reasons.join("\n"));
+            return;
         }
 
         self.do_save(ctx, path);
@@ -655,19 +752,19 @@ impl BmpViewerApp {
         self.save_to_path(ctx, &path);
     }
 
-    /// Shows a confirmation dialog when the user is about to save in a format
-    /// that would destroy an embedded steganography payload.
+    /// Shows a confirmation dialog when the selected save settings may alter
+    /// image data (e.g. quantization, alpha loss, steganography loss).
     ///
     /// Returns `true` while the dialog is still open (caller should skip other
     /// rendering that depends on interaction).
-    pub(crate) fn show_steg_save_confirm_window(&mut self, ctx: &egui::Context) {
+    pub(crate) fn show_save_confirm_window(&mut self, ctx: &egui::Context) {
         if self.steganography.save_confirm_pending.is_none() {
             return;
         }
 
         let reason = self.steganography.save_confirm_reason.clone().unwrap_or_else(|| {
             format!(
-                "The selected settings ({}, {}) are likely to overwrite LSB data",
+                "The selected settings ({}, {}) may alter image data",
                 self.document.save_format, self.document.save_header_version
             )
         });
@@ -675,7 +772,7 @@ impl BmpViewerApp {
         let mut confirmed = false;
         let mut cancelled = false;
 
-        egui::Window::new("Warning: Steganography May Be Corrupted")
+        egui::Window::new("Warning: Save May Alter Image Data")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -683,12 +780,15 @@ impl BmpViewerApp {
             .show(ctx, |ui| {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    "The selected save format may permanently corrupt the embedded steganographic payload.",
+                    "The selected save settings do not preserve the currently displayed image exactly.",
                 );
                 ui.add_space(4.0);
-                ui.label(format!("Reason: {reason}."));
+                ui.label("Detected issues:");
+                for line in reason.lines() {
+                    ui.label(format!("- {line}"));
+                }
                 ui.add_space(8.0);
-                ui.label("Save anyway and lose the hidden data?");
+                ui.label("Save anyway?");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Save Anyway").clicked() {
@@ -831,7 +931,7 @@ impl eframe::App for BmpViewerApp {
             self.apply_and_refresh(ctx, op);
         }
         self.show_steg_transform_confirm_window(ctx);
-        self.show_steg_save_confirm_window(ctx);
+        self.show_save_confirm_window(ctx);
 
         let side_actions = self.show_side_panel(ctx);
         self.apply_side_panel_actions(ctx, side_actions);
