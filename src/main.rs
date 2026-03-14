@@ -27,13 +27,11 @@ pub(crate) enum CropDragMode {
     BottomRight,
 }
 
-pub(crate) struct BmpViewerApp {
-    pub(crate) path_input: String,
-    pub(crate) status: String,
+/// Image/session data that is tied to the currently loaded BMP and transform pipeline.
+pub(crate) struct DocumentState {
     pub(crate) image_stats: String,
     pub(crate) decoded_stats: String,
     pub(crate) palette_colors: Vec<[u8; 4]>,
-    pub(crate) texture: Option<egui::TextureHandle>,
     /// The decoded image before any transforms (kept for pipeline reapply).
     pub(crate) original_image: Option<DecodedImage>,
     pub(crate) transformed_image: Option<DecodedImage>,
@@ -45,7 +43,12 @@ pub(crate) struct BmpViewerApp {
     pub(crate) source_metadata: Option<SourceMetadata>,
     /// Path of the currently loaded file (for "Save" without a dialog).
     pub(crate) loaded_path: Option<PathBuf>,
+}
 
+/// Viewport-related UI state for the central image panel.
+pub(crate) struct ViewportState {
+    /// Cached GPU texture for the currently displayed decoded image.
+    pub(crate) texture: Option<egui::TextureHandle>,
     /// Absolute zoom level: screen pixels per image pixel.
     /// A value of 0.0 means "fit the image to the available panel space".
     pub(crate) zoom: f32,
@@ -55,115 +58,158 @@ pub(crate) struct BmpViewerApp {
     pub(crate) hovered_pixel: Option<(u32, u32, [u8; 4])>,
     /// Pan offset in screen pixels (relative to the centered image position).
     pub(crate) pan_offset: egui::Vec2,
+}
 
-    // --- Convolution / custom kernel editor state ---
+/// Window/dialog state for transform tools and their per-tool inputs.
+pub(crate) struct TransformToolState {
+    pub(crate) kernel: KernelToolState,
+    pub(crate) rotate: RotateToolState,
+    pub(crate) resize: ResizeToolState,
+    pub(crate) skew: SkewToolState,
+    pub(crate) translate: TranslateToolState,
+    pub(crate) crop: CropToolState,
+    pub(crate) tonal: TonalAdjustState,
+}
+
+/// State for the custom kernel editor dialog.
+pub(crate) struct KernelToolState {
     /// Whether the custom kernel editor window is open.
-    pub(crate) custom_kernel_open: bool,
+    pub(crate) open: bool,
     /// Side length of the custom kernel being edited (1, 3, 5, or 7).
-    pub(crate) custom_kernel_size: usize,
+    pub(crate) size: usize,
     /// Per-cell weight strings for the kernel editor (size*size elements).
-    pub(crate) custom_kernel_weights: Vec<String>,
+    pub(crate) weights: Vec<String>,
     /// Divisor string for the kernel editor.
-    pub(crate) custom_kernel_divisor: String,
+    pub(crate) divisor: String,
     /// Bias string for the kernel editor.
-    pub(crate) custom_kernel_bias: String,
+    pub(crate) bias: String,
+}
 
+/// State for arbitrary-angle rotation dialog.
+pub(crate) struct RotateToolState {
     /// Whether the arbitrary-angle rotation window is open.
-    pub(crate) rotate_any_open: bool,
+    pub(crate) open: bool,
     /// Angle in degrees used by arbitrary-angle rotation.
-    pub(crate) rotate_any_angle: f32,
+    pub(crate) angle: f32,
     /// Interpolation method for arbitrary-angle rotation.
-    pub(crate) rotate_any_interpolation: RotationInterpolation,
+    pub(crate) interpolation: RotationInterpolation,
     /// Whether to expand output canvas to fit the full rotated image.
-    pub(crate) rotate_any_expand: bool,
+    pub(crate) expand: bool,
+}
 
+/// State for resize dialog.
+pub(crate) struct ResizeToolState {
     /// Whether the resize window is open.
-    pub(crate) resize_open: bool,
+    pub(crate) open: bool,
     /// Target width input for resize dialog.
-    pub(crate) resize_width_input: String,
+    pub(crate) width_input: String,
     /// Target height input for resize dialog.
-    pub(crate) resize_height_input: String,
+    pub(crate) height_input: String,
     /// Keep source aspect ratio when applying resize.
-    pub(crate) resize_keep_aspect: bool,
+    pub(crate) keep_aspect: bool,
     /// Interpolation method for resize.
-    pub(crate) resize_interpolation: RotationInterpolation,
+    pub(crate) interpolation: RotationInterpolation,
+}
 
+/// State for skew/shear dialog.
+pub(crate) struct SkewToolState {
     /// Whether the skew/shear window is open.
-    pub(crate) skew_open: bool,
+    pub(crate) open: bool,
     /// X shear (%) used by skew dialog.
-    pub(crate) skew_x_percent: f32,
+    pub(crate) x_percent: f32,
     /// Y shear (%) used by skew dialog.
-    pub(crate) skew_y_percent: f32,
+    pub(crate) y_percent: f32,
     /// Interpolation method for skew.
-    pub(crate) skew_interpolation: RotationInterpolation,
+    pub(crate) interpolation: RotationInterpolation,
     /// Whether to expand output canvas for skew.
-    pub(crate) skew_expand: bool,
+    pub(crate) expand: bool,
+}
 
+/// State for translate dialog.
+pub(crate) struct TranslateToolState {
     /// Whether the translate window is open.
-    pub(crate) translate_open: bool,
+    pub(crate) open: bool,
     /// Horizontal translation in pixels.
-    pub(crate) translate_dx: i32,
+    pub(crate) dx: i32,
     /// Vertical translation in pixels.
-    pub(crate) translate_dy: i32,
+    pub(crate) dy: i32,
     /// Crop/expand mode for translation.
-    pub(crate) translate_mode: TranslateMode,
+    pub(crate) mode: TranslateMode,
     /// Fill color for uncovered pixels after translation.
-    pub(crate) translate_fill: [u8; 4],
+    pub(crate) fill: [u8; 4],
+}
 
+/// State for side-panel brightness/contrast controls.
+pub(crate) struct TonalAdjustState {
     /// Pending brightness delta configured from side panel controls.
     pub(crate) brightness_input: i16,
     /// Pending contrast delta configured from side panel controls.
     pub(crate) contrast_input: i16,
+}
 
-    // --- Steganography state ---
+/// State for crop dialog and interactive crop handles in the viewer.
+pub(crate) struct CropToolState {
+    /// Whether the crop window is open.
+    pub(crate) open: bool,
+    /// Crop rectangle origin X in image pixels.
+    pub(crate) x: u32,
+    /// Crop rectangle origin Y in image pixels.
+    pub(crate) y: u32,
+    /// Crop rectangle width in image pixels.
+    pub(crate) width: u32,
+    /// Crop rectangle height in image pixels.
+    pub(crate) height: u32,
+    /// Keep crop rectangle aspect ratio tied to the image aspect ratio.
+    pub(crate) keep_aspect: bool,
+    /// Active crop drag mode for visual crop manipulation.
+    pub(crate) drag_mode: Option<CropDragMode>,
+    /// Pointer position in image coordinates at drag start.
+    pub(crate) drag_start_image: Option<egui::Pos2>,
+    /// Crop rect (x, y, w, h) snapshot at drag start.
+    pub(crate) drag_start_rect: Option<(u32, u32, u32, u32)>,
+}
+
+/// Steganography-related detection state and window inputs.
+pub(crate) struct SteganographyUiState {
     /// Steganography detected in the current transformed image, if any.
-    pub(crate) steg_detected: Option<StegInfo>,
+    pub(crate) detected: Option<StegInfo>,
     /// Whether the "Embed Steganography" window is open.
-    pub(crate) steg_embed_open: bool,
+    pub(crate) embed_open: bool,
     /// Whether the "Inspect Steganography" window is open.
-    pub(crate) steg_inspect_open: bool,
+    pub(crate) inspect_open: bool,
     /// Whether we already warned the user this frame that a transform was
     /// applied on top of an embedded steg payload.
     /// Reset to `false` whenever the pipeline's top-most op is no longer steg.
-    pub(crate) steg_overwrite_warned: bool,
+    pub(crate) overwrite_warned: bool,
     /// Path awaiting save confirmation because it would destroy steganography.
-    pub(crate) steg_save_confirm_pending: Option<std::path::PathBuf>,
+    pub(crate) save_confirm_pending: Option<std::path::PathBuf>,
     /// Human-readable reason shown in the save confirmation dialog.
-    pub(crate) steg_save_confirm_reason: Option<String>,
+    pub(crate) save_confirm_reason: Option<String>,
     /// Transform awaiting confirmation because it would likely corrupt an
     /// existing embedded steganography payload.
-    pub(crate) steg_transform_confirm_pending: Option<ImageTransform>,
+    pub(crate) transform_confirm_pending: Option<ImageTransform>,
 
     // --- Embed window inputs ---
-    pub(crate) steg_r_bits: u8,
-    pub(crate) steg_g_bits: u8,
-    pub(crate) steg_b_bits: u8,
-    pub(crate) steg_a_bits: u8,
-    pub(crate) steg_text_input: String,
+    pub(crate) r_bits: u8,
+    pub(crate) g_bits: u8,
+    pub(crate) b_bits: u8,
+    pub(crate) a_bits: u8,
+    pub(crate) text_input: String,
 
     // --- Inspect window: cached extracted payload ---
     /// Result of the last explicit "Extract" action in the inspect window.
     /// `None` = not yet extracted; `Some(Ok(bytes))` = payload; `Some(Err(msg))` = error.
-    pub(crate) steg_extracted: Option<Result<Vec<u8>, String>>,
+    pub(crate) extracted: Option<Result<Vec<u8>, String>>,
+}
 
-    /// Whether the crop window is open.
-    pub(crate) crop_open: bool,
-    /// Crop rectangle origin X in image pixels.
-    pub(crate) crop_x: u32,
-    /// Crop rectangle origin Y in image pixels.
-    pub(crate) crop_y: u32,
-    /// Crop rectangle width in image pixels.
-    pub(crate) crop_width: u32,
-    /// Crop rectangle height in image pixels.
-    pub(crate) crop_height: u32,
-    /// Keep crop rectangle aspect ratio tied to the image aspect ratio.
-    pub(crate) crop_keep_aspect: bool,
-    /// Active crop drag mode for visual crop manipulation.
-    pub(crate) crop_drag_mode: Option<CropDragMode>,
-    /// Pointer position in image coordinates at drag start.
-    pub(crate) crop_drag_start_image: Option<egui::Pos2>,
-    /// Crop rect (x, y, w, h) snapshot at drag start.
-    pub(crate) crop_drag_start_rect: Option<(u32, u32, u32, u32)>,
+pub(crate) struct BmpViewerApp {
+    pub(crate) path_input: String,
+    /// UI feedback/status message shown in toolbar.
+    pub(crate) status: String,
+    pub(crate) document: DocumentState,
+    pub(crate) viewport: ViewportState,
+    pub(crate) transforms: TransformToolState,
+    pub(crate) steganography: SteganographyUiState,
 }
 
 impl Default for BmpViewerApp {
@@ -171,70 +217,92 @@ impl Default for BmpViewerApp {
         Self {
             path_input: String::new(),
             status: String::new(),
-            image_stats: String::new(),
-            decoded_stats: String::new(),
-            palette_colors: Vec::new(),
-            texture: None,
-            original_image: None,
-            transformed_image: None,
-            pipeline: TransformPipeline::default(),
-            redo_stack: Vec::new(),
-            save_format: SaveFormat::default(),
-            save_header_version: SaveHeaderVersion::default(),
-            source_metadata: None,
-            loaded_path: None,
-            zoom: 0.0,
-            last_effective_zoom: 1.0,
-            hovered_pixel: None,
-            pan_offset: egui::Vec2::ZERO,
-            custom_kernel_open: false,
-            custom_kernel_size: 3,
-            custom_kernel_weights: vec!["0".to_owned(); 9],
-            custom_kernel_divisor: "1".to_owned(),
-            custom_kernel_bias: "0".to_owned(),
-            rotate_any_open: false,
-            rotate_any_angle: 0.0,
-            rotate_any_interpolation: RotationInterpolation::Bilinear,
-            rotate_any_expand: true,
-            resize_open: false,
-            resize_width_input: String::new(),
-            resize_height_input: String::new(),
-            resize_keep_aspect: true,
-            resize_interpolation: RotationInterpolation::Bilinear,
-            skew_open: false,
-            skew_x_percent: 0.0,
-            skew_y_percent: 0.0,
-            skew_interpolation: RotationInterpolation::Bilinear,
-            skew_expand: true,
-            translate_open: false,
-            translate_dx: 0,
-            translate_dy: 0,
-            translate_mode: TranslateMode::Crop,
-            translate_fill: [0, 0, 0, 0],
-            brightness_input: 0,
-            contrast_input: 0,
-            steg_detected: None,
-            steg_embed_open: false,
-            steg_inspect_open: false,
-            steg_overwrite_warned: false,
-            steg_save_confirm_pending: None,
-            steg_save_confirm_reason: None,
-            steg_transform_confirm_pending: None,
-            steg_r_bits: 1,
-            steg_g_bits: 1,
-            steg_b_bits: 1,
-            steg_a_bits: 0,
-            steg_text_input: String::new(),
-            steg_extracted: None,
-            crop_open: false,
-            crop_x: 0,
-            crop_y: 0,
-            crop_width: 1,
-            crop_height: 1,
-            crop_keep_aspect: false,
-            crop_drag_mode: None,
-            crop_drag_start_image: None,
-            crop_drag_start_rect: None,
+            document: DocumentState {
+                image_stats: String::new(),
+                decoded_stats: String::new(),
+                palette_colors: Vec::new(),
+                original_image: None,
+                transformed_image: None,
+                pipeline: TransformPipeline::default(),
+                redo_stack: Vec::new(),
+                save_format: SaveFormat::default(),
+                save_header_version: SaveHeaderVersion::default(),
+                source_metadata: None,
+                loaded_path: None,
+            },
+            viewport: ViewportState {
+                texture: None,
+                zoom: 0.0,
+                last_effective_zoom: 1.0,
+                hovered_pixel: None,
+                pan_offset: egui::Vec2::ZERO,
+            },
+            transforms: TransformToolState {
+                kernel: KernelToolState {
+                    open: false,
+                    size: 3,
+                    weights: vec!["0".to_owned(); 9],
+                    divisor: "1".to_owned(),
+                    bias: "0".to_owned(),
+                },
+                rotate: RotateToolState {
+                    open: false,
+                    angle: 0.0,
+                    interpolation: RotationInterpolation::Bilinear,
+                    expand: true,
+                },
+                resize: ResizeToolState {
+                    open: false,
+                    width_input: String::new(),
+                    height_input: String::new(),
+                    keep_aspect: true,
+                    interpolation: RotationInterpolation::Bilinear,
+                },
+                skew: SkewToolState {
+                    open: false,
+                    x_percent: 0.0,
+                    y_percent: 0.0,
+                    interpolation: RotationInterpolation::Bilinear,
+                    expand: true,
+                },
+                translate: TranslateToolState {
+                    open: false,
+                    dx: 0,
+                    dy: 0,
+                    mode: TranslateMode::Crop,
+                    fill: [0, 0, 0, 0],
+                },
+                crop: CropToolState {
+                    open: false,
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                    keep_aspect: false,
+                    drag_mode: None,
+                    drag_start_image: None,
+                    drag_start_rect: None,
+                },
+                tonal: TonalAdjustState {
+                    brightness_input: 0,
+                    contrast_input: 0,
+                },
+            },
+            steganography: SteganographyUiState {
+                detected: None,
+                embed_open: false,
+                inspect_open: false,
+                overwrite_warned: false,
+                save_confirm_pending: None,
+                save_confirm_reason: None,
+                transform_confirm_pending: None,
+                r_bits: 1,
+                g_bits: 1,
+                b_bits: 1,
+                a_bits: 0,
+                text_input: String::new(),
+                extracted: None,
+            },
         }
     }
 }
@@ -252,23 +320,23 @@ impl BmpViewerApp {
     }
 
     fn update_transformed_image(&mut self, ctx: &egui::Context, image: DecodedImage) {
-        self.steg_detected = bmp::runtime::steganography::detect(&image);
-        self.steg_extracted = None;
+        self.steganography.detected = bmp::runtime::steganography::detect(&image);
+        self.steganography.extracted = None;
         self.set_display_image(ctx, image, "transformed".to_owned());
     }
 
     pub(crate) fn render_palette_grid(&self, ui: &mut egui::Ui) {
-        if self.palette_colors.is_empty() {
+        if self.document.palette_colors.is_empty() {
             return;
         }
 
-        ui.small(format!("{} colors", self.palette_colors.len()));
+        ui.small(format!("{} colors", self.document.palette_colors.len()));
 
         let swatch_size = 18.0f32;
         let old_spacing = ui.spacing().item_spacing;
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
         ui.horizontal_wrapped(|ui| {
-            for (i, color) in self.palette_colors.iter().copied().enumerate() {
+            for (i, color) in self.document.palette_colors.iter().copied().enumerate() {
                 let rgba = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
                 let (rect, response) =
                     ui.allocate_exact_size(egui::vec2(swatch_size, swatch_size), egui::Sense::hover());
@@ -286,8 +354,8 @@ impl BmpViewerApp {
     pub(crate) fn set_display_image(&mut self, ctx: &egui::Context, image: DecodedImage, label: String) {
         let color =
             egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
-        self.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
-        self.transformed_image = Some(image);
+        self.viewport.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
+        self.document.transformed_image = Some(image);
     }
 
     pub(crate) fn load_path(&mut self, ctx: &egui::Context, path: PathBuf) {
@@ -315,26 +383,26 @@ impl BmpViewerApp {
             }
         };
 
-        self.pipeline.clear();
-        self.save_format = SaveFormat::from_bmp(&bmp);
-        self.save_header_version = SaveHeaderVersion::from_bmp(&bmp);
-        self.source_metadata = SourceMetadata::from_bmp(&bmp);
+        self.document.pipeline.clear();
+        self.document.save_format = SaveFormat::from_bmp(&bmp);
+        self.document.save_header_version = SaveHeaderVersion::from_bmp(&bmp);
+        self.document.source_metadata = SourceMetadata::from_bmp(&bmp);
         let info = gui::metadata::format_bmp_info_sections(&bmp, &decoded);
-        self.image_stats = info.image_stats;
-        self.decoded_stats = info.decoded_stats;
-        self.palette_colors = gui::palette::extract_palette_colors(&bmp);
-        self.steg_detected = bmp::runtime::steganography::detect(&decoded);
-        self.steg_extracted = None;
-        self.steg_overwrite_warned = false;
-        self.steg_transform_confirm_pending = None;
-        self.steg_save_confirm_pending = None;
-        self.steg_save_confirm_reason = None;
-        self.original_image = Some(decoded.clone());
+        self.document.image_stats = info.image_stats;
+        self.document.decoded_stats = info.decoded_stats;
+        self.document.palette_colors = gui::palette::extract_palette_colors(&bmp);
+        self.steganography.detected = bmp::runtime::steganography::detect(&decoded);
+        self.steganography.extracted = None;
+        self.steganography.overwrite_warned = false;
+        self.steganography.transform_confirm_pending = None;
+        self.steganography.save_confirm_pending = None;
+        self.steganography.save_confirm_reason = None;
+        self.document.original_image = Some(decoded.clone());
         // New image load resets viewport to fit.
-        self.zoom = 0.0;
-        self.pan_offset = egui::Vec2::ZERO;
+        self.viewport.zoom = 0.0;
+        self.viewport.pan_offset = egui::Vec2::ZERO;
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
-        self.loaded_path = Some(path.clone());
+        self.document.loaded_path = Some(path.clone());
         self.status = format!("Loaded {}", path.display());
     }
 
@@ -350,9 +418,9 @@ impl BmpViewerApp {
     }
 
     fn apply_transform_now(&mut self, ctx: &egui::Context, op: ImageTransform) {
-        if let Some(current) = self.transformed_image.as_ref() {
+        if let Some(current) = self.document.transformed_image.as_ref() {
             if matches!(op, ImageTransform::EmbedSteganography { .. }) {
-                self.steg_overwrite_warned = false;
+                self.steganography.overwrite_warned = false;
             }
 
             if let Err(err) = self.validate_embed_fits_current_image(current, &op) {
@@ -364,25 +432,25 @@ impl BmpViewerApp {
             }
 
             let next = apply_transform(current, &op);
-            self.pipeline.push(op, Some(current));
-            self.redo_stack.clear();
+            self.document.pipeline.push(op, Some(current));
+            self.document.redo_stack.clear();
             self.update_transformed_image(ctx, next);
         }
     }
 
     pub(crate) fn apply_and_refresh(&mut self, ctx: &egui::Context, op: ImageTransform) {
-        let should_confirm_overwrite = !self.steg_overwrite_warned
+        let should_confirm_overwrite = !self.steganography.overwrite_warned
             && !matches!(
                 op,
                 ImageTransform::EmbedSteganography { .. } | ImageTransform::RemoveSteganography { .. }
             )
             && matches!(
-                self.pipeline.ops().last(),
+                self.document.pipeline.ops().last(),
                 Some(ImageTransform::EmbedSteganography { .. })
             );
 
         if should_confirm_overwrite {
-            self.steg_transform_confirm_pending = Some(op);
+            self.steganography.transform_confirm_pending = Some(op);
             return;
         }
 
@@ -391,19 +459,19 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn undo_transform(&mut self, ctx: &egui::Context) {
-        if let Some(op) = self.pipeline.pop() {
+        if let Some(op) = self.document.pipeline.pop() {
             if let Some(inv) = op.inverse() {
-                self.redo_stack.push(op);
+                self.document.redo_stack.push(op);
                 // O(1) path: apply the inverse transform.
-                if let Some(current) = self.transformed_image.as_ref() {
+                if let Some(current) = self.document.transformed_image.as_ref() {
                     let result = apply_transform(current, &inv);
                     self.update_transformed_image(ctx, result);
                 }
             } else {
-                self.redo_stack.push(op);
+                self.document.redo_stack.push(op);
                 // Lossy transform: replay the remaining pipeline from the original image.
-                if let Some(original) = self.original_image.as_ref() {
-                    let (result, warnings) = self.pipeline.apply_with_warnings(original);
+                if let Some(original) = self.document.original_image.as_ref() {
+                    let (result, warnings) = self.document.pipeline.apply_with_warnings(original);
                     if !warnings.is_empty() {
                         self.status = warnings.join(" ");
                     }
@@ -411,13 +479,13 @@ impl BmpViewerApp {
                 }
             }
             // After undo, reset the overwrite warning so it can fire again if needed.
-            self.steg_overwrite_warned = false;
+            self.steganography.overwrite_warned = false;
         }
     }
 
     pub(crate) fn redo_transform(&mut self, ctx: &egui::Context) {
-        if let Some(op) = self.redo_stack.pop()
-            && let Some(current) = self.transformed_image.as_ref()
+        if let Some(op) = self.document.redo_stack.pop()
+            && let Some(current) = self.document.transformed_image.as_ref()
         {
             if let Err(err) = self.validate_embed_fits_current_image(current, &op) {
                 self.status = format!(
@@ -428,7 +496,7 @@ impl BmpViewerApp {
             }
 
             let next = apply_transform(current, &op);
-            self.pipeline.push(op, Some(current));
+            self.document.pipeline.push(op, Some(current));
             self.update_transformed_image(ctx, next);
         }
     }
@@ -436,7 +504,10 @@ impl BmpViewerApp {
     /// Returns whether the currently selected save settings preserve the exact
     /// embedded steganography payload, determined by an in-memory roundtrip.
     fn save_preserves_current_steg_payload(&self) -> Result<bool, String> {
-        let (image, info) = match (self.transformed_image.as_ref(), self.steg_detected.as_ref()) {
+        let (image, info) = match (
+            self.document.transformed_image.as_ref(),
+            self.steganography.detected.as_ref(),
+        ) {
             (Some(img), Some(info)) => (img, info),
             _ => return Ok(true),
         };
@@ -446,9 +517,9 @@ impl BmpViewerApp {
 
         let encoded = encode_rgba_to_bmp_ext(
             image,
-            self.save_format,
-            self.save_header_version,
-            self.source_metadata.as_ref(),
+            self.document.save_format,
+            self.document.save_header_version,
+            self.document.source_metadata.as_ref(),
         )
         .map_err(|e| format!("failed to encode save-check roundtrip: {e}"))?;
 
@@ -465,19 +536,19 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn save_to_path(&mut self, ctx: &egui::Context, path: &std::path::Path) {
-        if self.transformed_image.is_none() {
+        if self.document.transformed_image.is_none() {
             self.status = "Nothing to save".to_owned();
             return;
         }
 
         // If the image contains steganography and the chosen format would
         // destroy it, open the confirmation dialog instead of saving immediately.
-        if self.steg_detected.is_some() {
+        if self.steganography.detected.is_some() {
             match self.save_preserves_current_steg_payload() {
                 Ok(true) => {}
                 Ok(false) => {
-                    self.steg_save_confirm_pending = Some(path.to_path_buf());
-                    self.steg_save_confirm_reason = Some(
+                    self.steganography.save_confirm_pending = Some(path.to_path_buf());
+                    self.steganography.save_confirm_reason = Some(
                         "Roundtrip verification shows the selected format/header does not preserve the hidden payload"
                             .to_owned(),
                     );
@@ -485,8 +556,8 @@ impl BmpViewerApp {
                 }
                 Err(err) => {
                     // Conservative fallback: if verification fails, require explicit consent.
-                    self.steg_save_confirm_pending = Some(path.to_path_buf());
-                    self.steg_save_confirm_reason = Some(format!(
+                    self.steganography.save_confirm_pending = Some(path.to_path_buf());
+                    self.steganography.save_confirm_reason = Some(format!(
                         "Could not verify steganography preservation ({err}); saving may destroy hidden data"
                     ));
                     return;
@@ -501,7 +572,7 @@ impl BmpViewerApp {
     /// `save_to_path` when no steg is present, or after user confirms the
     /// steg-destroy dialog).
     pub(crate) fn do_save(&mut self, ctx: &egui::Context, path: &std::path::Path) {
-        let Some(image) = self.transformed_image.as_ref() else {
+        let Some(image) = self.document.transformed_image.as_ref() else {
             self.status = "Nothing to save".to_owned();
             return;
         };
@@ -509,36 +580,36 @@ impl BmpViewerApp {
         match save_bmp_ext(
             path,
             image,
-            self.save_format,
-            self.save_header_version,
-            self.source_metadata.as_ref(),
+            self.document.save_format,
+            self.document.save_header_version,
+            self.document.source_metadata.as_ref(),
         ) {
             Ok(()) => {
-                self.steg_save_confirm_pending = None;
-                self.steg_save_confirm_reason = None;
+                self.steganography.save_confirm_pending = None;
+                self.steganography.save_confirm_reason = None;
                 let saved_path = path.to_path_buf();
                 self.path_input = saved_path.display().to_string();
-                self.loaded_path = Some(saved_path.clone());
+                self.document.loaded_path = Some(saved_path.clone());
                 self.status = format!(
                     "Saved {} ({}, {})",
                     saved_path.display(),
-                    self.save_format,
-                    self.save_header_version
+                    self.document.save_format,
+                    self.document.save_header_version
                 );
                 // Re-load from disk so metadata, original_image, and pipeline
                 // all reflect the file as it was actually written.
                 self.load_path(ctx, saved_path);
             }
             Err(err) => {
-                self.steg_save_confirm_pending = None;
-                self.steg_save_confirm_reason = None;
+                self.steganography.save_confirm_pending = None;
+                self.steganography.save_confirm_reason = None;
                 self.status = format!("Save failed: {err}");
             }
         }
     }
 
     pub(crate) fn save_current(&mut self, ctx: &egui::Context) {
-        if self.transformed_image.is_none() {
+        if self.document.transformed_image.is_none() {
             self.status = "Nothing to save".to_owned();
             return;
         }
@@ -556,7 +627,7 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn save_overwrite(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.loaded_path.clone() else {
+        let Some(path) = self.document.loaded_path.clone() else {
             self.status = "No file to overwrite".to_owned();
             return;
         };
@@ -570,14 +641,14 @@ impl BmpViewerApp {
     /// Returns `true` while the dialog is still open (caller should skip other
     /// rendering that depends on interaction).
     pub(crate) fn show_steg_save_confirm_window(&mut self, ctx: &egui::Context) {
-        if self.steg_save_confirm_pending.is_none() {
+        if self.steganography.save_confirm_pending.is_none() {
             return;
         }
 
-        let reason = self.steg_save_confirm_reason.clone().unwrap_or_else(|| {
+        let reason = self.steganography.save_confirm_reason.clone().unwrap_or_else(|| {
             format!(
                 "The selected settings ({}, {}) are likely to overwrite LSB data",
-                self.save_format, self.save_header_version
+                self.document.save_format, self.document.save_header_version
             )
         });
 
@@ -610,18 +681,18 @@ impl BmpViewerApp {
             });
 
         if confirmed {
-            let path = self.steg_save_confirm_pending.take().unwrap();
+            let path = self.steganography.save_confirm_pending.take().unwrap();
             self.do_save(ctx, &path);
         } else if cancelled {
-            self.steg_save_confirm_pending = None;
-            self.steg_save_confirm_reason = None;
+            self.steganography.save_confirm_pending = None;
+            self.steganography.save_confirm_reason = None;
         }
     }
 
     /// Shows confirmation before applying a transform that would likely
     /// corrupt a just-embedded steganography payload.
     pub(crate) fn show_steg_transform_confirm_window(&mut self, ctx: &egui::Context) {
-        let Some(op) = self.steg_transform_confirm_pending.as_ref() else {
+        let Some(op) = self.steganography.transform_confirm_pending.as_ref() else {
             return;
         };
 
@@ -655,12 +726,12 @@ impl BmpViewerApp {
             });
 
         if confirmed {
-            if let Some(op) = self.steg_transform_confirm_pending.take() {
-                self.steg_overwrite_warned = true;
+            if let Some(op) = self.steganography.transform_confirm_pending.take() {
+                self.steganography.overwrite_warned = true;
                 self.apply_transform_now(ctx, op);
             }
         } else if cancelled {
-            self.steg_transform_confirm_pending = None;
+            self.steganography.transform_confirm_pending = None;
         }
     }
 }

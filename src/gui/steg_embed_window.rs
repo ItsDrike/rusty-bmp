@@ -6,11 +6,11 @@ use crate::BmpViewerApp;
 
 impl BmpViewerApp {
     pub(crate) fn show_steg_embed_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
-        if !self.steg_embed_open {
+        if !self.steganography.embed_open {
             return None;
         }
 
-        let mut open = self.steg_embed_open;
+        let mut open = self.steganography.embed_open;
         let mut apply = false;
         let mut close_requested = false;
 
@@ -29,19 +29,19 @@ impl BmpViewerApp {
                     .spacing([12.0, 4.0])
                     .show(ui, |ui| {
                         ui.label("Red:");
-                        ui.add(egui::Slider::new(&mut self.steg_r_bits, 0u8..=8).suffix(" bits"));
+                        ui.add(egui::Slider::new(&mut self.steganography.r_bits, 0u8..=8).suffix(" bits"));
                         ui.end_row();
 
                         ui.label("Green:");
-                        ui.add(egui::Slider::new(&mut self.steg_g_bits, 0u8..=8).suffix(" bits"));
+                        ui.add(egui::Slider::new(&mut self.steganography.g_bits, 0u8..=8).suffix(" bits"));
                         ui.end_row();
 
                         ui.label("Blue:");
-                        ui.add(egui::Slider::new(&mut self.steg_b_bits, 0u8..=8).suffix(" bits"));
+                        ui.add(egui::Slider::new(&mut self.steganography.b_bits, 0u8..=8).suffix(" bits"));
                         ui.end_row();
 
                         ui.label("Alpha:");
-                        ui.add(egui::Slider::new(&mut self.steg_a_bits, 0u8..=8).suffix(" bits"));
+                        ui.add(egui::Slider::new(&mut self.steganography.a_bits, 0u8..=8).suffix(" bits"));
                         ui.end_row();
                     });
 
@@ -49,15 +49,15 @@ impl BmpViewerApp {
 
                 // Capacity indicator
                 let config = StegConfig {
-                    r_bits: self.steg_r_bits,
-                    g_bits: self.steg_g_bits,
-                    b_bits: self.steg_b_bits,
-                    a_bits: self.steg_a_bits,
+                    r_bits: self.steganography.r_bits,
+                    g_bits: self.steganography.g_bits,
+                    b_bits: self.steganography.b_bits,
+                    a_bits: self.steganography.a_bits,
                 };
 
-                let (capacity_bytes, payload_bytes) = if let Some(img) = &self.transformed_image {
+                let (capacity_bytes, payload_bytes) = if let Some(img) = &self.document.transformed_image {
                     let cap = config.capacity_bytes(img.width, img.height);
-                    let payload = self.steg_text_input.len() as u64;
+                    let payload = self.steganography.text_input.len() as u64;
                     (Some(cap), payload)
                 } else {
                     (None, 0)
@@ -97,7 +97,7 @@ impl BmpViewerApp {
                     .max_height(120.0)
                     .show(ui, |ui| {
                         ui.add(
-                            egui::TextEdit::multiline(&mut self.steg_text_input)
+                            egui::TextEdit::multiline(&mut self.steganography.text_input)
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(5),
                         );
@@ -108,7 +108,7 @@ impl BmpViewerApp {
                 // Validation and apply
                 let valid = !no_channels
                     && capacity_bytes.is_some()
-                    && !self.steg_text_input.is_empty()
+                    && !self.steganography.text_input.is_empty()
                     && capacity_bytes.is_some_and(|c| payload_bytes <= c);
 
                 ui.horizontal(|ui| {
@@ -116,7 +116,7 @@ impl BmpViewerApp {
                         .add_enabled(valid, egui::Button::new("Embed"))
                         .on_disabled_hover_text(if no_channels {
                             "Select at least one channel"
-                        } else if self.steg_text_input.is_empty() {
+                        } else if self.steganography.text_input.is_empty() {
                             "Enter text to embed"
                         } else if capacity_bytes.is_none() {
                             "No image loaded"
@@ -133,19 +133,19 @@ impl BmpViewerApp {
                 });
             });
 
-        self.steg_embed_open = open && !close_requested;
+        self.steganography.embed_open = open && !close_requested;
 
         if !apply {
             return None;
         }
 
         let config = StegConfig {
-            r_bits: self.steg_r_bits,
-            g_bits: self.steg_g_bits,
-            b_bits: self.steg_b_bits,
-            a_bits: self.steg_a_bits,
+            r_bits: self.steganography.r_bits,
+            g_bits: self.steganography.g_bits,
+            b_bits: self.steganography.b_bits,
+            a_bits: self.steganography.a_bits,
         };
-        let payload = self.steg_text_input.as_bytes().to_vec();
+        let payload = self.steganography.text_input.as_bytes().to_vec();
 
         Some(ImageTransform::EmbedSteganography { config, payload })
     }

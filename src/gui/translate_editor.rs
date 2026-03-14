@@ -7,16 +7,16 @@ use crate::BmpViewerApp;
 
 impl BmpViewerApp {
     pub(crate) fn show_translate_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
-        if !self.translate_open {
+        if !self.transforms.translate.open {
             return None;
         }
 
-        let Some(current) = self.transformed_image.as_ref() else {
-            self.translate_open = false;
+        let Some(current) = self.document.transformed_image.as_ref() else {
+            self.transforms.translate.open = false;
             return None;
         };
 
-        let mut open = self.translate_open;
+        let mut open = self.transforms.translate.open;
         let mut apply = false;
         let mut close_requested = false;
 
@@ -30,48 +30,48 @@ impl BmpViewerApp {
 
                 ui.horizontal(|ui| {
                     ui.label("dx:");
-                    ui.add(egui::DragValue::new(&mut self.translate_dx).speed(1));
+                    ui.add(egui::DragValue::new(&mut self.transforms.translate.dx).speed(1));
                     ui.label("dy:");
-                    ui.add(egui::DragValue::new(&mut self.translate_dy).speed(1));
+                    ui.add(egui::DragValue::new(&mut self.transforms.translate.dy).speed(1));
                 });
 
                 ui.horizontal(|ui| {
                     if ui.small_button("dx -10").clicked() {
-                        self.translate_dx -= 10;
+                        self.transforms.translate.dx -= 10;
                     }
                     if ui.small_button("dx +10").clicked() {
-                        self.translate_dx += 10;
+                        self.transforms.translate.dx += 10;
                     }
                     if ui.small_button("dy -10").clicked() {
-                        self.translate_dy -= 10;
+                        self.transforms.translate.dy -= 10;
                     }
                     if ui.small_button("dy +10").clicked() {
-                        self.translate_dy += 10;
+                        self.transforms.translate.dy += 10;
                     }
                     if ui.small_button("Reset").clicked() {
-                        self.translate_dx = 0;
-                        self.translate_dy = 0;
+                        self.transforms.translate.dx = 0;
+                        self.transforms.translate.dy = 0;
                     }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Mode:");
                     egui::ComboBox::from_id_salt("translate_mode")
-                        .selected_text(self.translate_mode.to_string())
+                        .selected_text(self.transforms.translate.mode.to_string())
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.translate_mode, TranslateMode::Crop, "Crop");
-                            ui.selectable_value(&mut self.translate_mode, TranslateMode::Expand, "Expand");
+                            ui.selectable_value(&mut self.transforms.translate.mode, TranslateMode::Crop, "Crop");
+                            ui.selectable_value(&mut self.transforms.translate.mode, TranslateMode::Expand, "Expand");
                         });
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Fill:");
-                    let prev_fill = self.translate_fill;
+                    let prev_fill = self.transforms.translate.fill;
                     let mut color = egui::Color32::from_rgba_unmultiplied(
-                        self.translate_fill[0],
-                        self.translate_fill[1],
-                        self.translate_fill[2],
-                        self.translate_fill[3],
+                        self.transforms.translate.fill[0],
+                        self.transforms.translate.fill[1],
+                        self.transforms.translate.fill[2],
+                        self.transforms.translate.fill[3],
                     );
                     let response =
                         color_picker::color_edit_button_srgba(ui, &mut color, color_picker::Alpha::OnlyBlend);
@@ -81,22 +81,22 @@ impl BmpViewerApp {
                     if prev_fill == [0, 0, 0, 0] && response.clicked() {
                         next_fill[3] = 255;
                     }
-                    self.translate_fill = next_fill;
+                    self.transforms.translate.fill = next_fill;
 
                     if ui.small_button("Transparent").clicked() {
-                        self.translate_fill = [0, 0, 0, 0];
+                        self.transforms.translate.fill = [0, 0, 0, 0];
                     }
                     if ui.small_button("Black").clicked() {
-                        self.translate_fill = [0, 0, 0, 255];
+                        self.transforms.translate.fill = [0, 0, 0, 255];
                     }
                     if ui.small_button("White").clicked() {
-                        self.translate_fill = [255, 255, 255, 255];
+                        self.transforms.translate.fill = [255, 255, 255, 255];
                     }
                 });
 
-                if matches!(self.translate_mode, TranslateMode::Expand) {
-                    let new_w = current.width + self.translate_dx.unsigned_abs();
-                    let new_h = current.height + self.translate_dy.unsigned_abs();
+                if matches!(self.transforms.translate.mode, TranslateMode::Expand) {
+                    let new_w = current.width + self.transforms.translate.dx.unsigned_abs();
+                    let new_h = current.height + self.transforms.translate.dy.unsigned_abs();
                     ui.small(format!("Output size: {}x{}", new_w, new_h));
                 }
 
@@ -111,17 +111,17 @@ impl BmpViewerApp {
                 });
             });
 
-        self.translate_open = open && !close_requested;
+        self.transforms.translate.open = open && !close_requested;
 
         if !apply {
             return None;
         }
 
         Some(ImageTransform::Translate {
-            dx: self.translate_dx,
-            dy: self.translate_dy,
-            mode: self.translate_mode,
-            fill: self.translate_fill,
+            dx: self.transforms.translate.dx,
+            dy: self.transforms.translate.dy,
+            mode: self.transforms.translate.mode,
+            fill: self.transforms.translate.fill,
         })
     }
 }

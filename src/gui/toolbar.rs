@@ -43,27 +43,31 @@ impl BmpViewerApp {
             ui.horizontal(|ui| {
                 ui.label("Header:");
                 egui::ComboBox::from_id_salt("save_header_version")
-                    .selected_text(self.save_header_version.to_string())
+                    .selected_text(self.document.save_header_version.to_string())
                     .show_ui(ui, |ui| {
                         for &ver in SaveHeaderVersion::ALL {
-                            ui.selectable_value(&mut self.save_header_version, ver, ver.to_string());
+                            ui.selectable_value(&mut self.document.save_header_version, ver, ver.to_string());
                         }
                     });
                 // If the current format is not compatible with the selected header
                 // version, reset to the first compatible format.
-                if !self.save_header_version.is_compatible(self.save_format) {
-                    self.save_format = self.save_header_version.compatible_formats()[0];
+                if !self
+                    .document
+                    .save_header_version
+                    .is_compatible(self.document.save_format)
+                {
+                    self.document.save_format = self.document.save_header_version.compatible_formats()[0];
                 }
                 ui.label("Format:");
                 egui::ComboBox::from_id_salt("save_format")
-                    .selected_text(self.save_format.to_string())
+                    .selected_text(self.document.save_format.to_string())
                     .show_ui(ui, |ui| {
-                        for &fmt in self.save_header_version.compatible_formats() {
-                            ui.selectable_value(&mut self.save_format, fmt, fmt.to_string());
+                        for &fmt in self.document.save_header_version.compatible_formats() {
+                            ui.selectable_value(&mut self.document.save_format, fmt, fmt.to_string());
                         }
                     });
                 let save_as_clicked = ui.button("Save As...").clicked();
-                let can_save = self.loaded_path.is_some() && self.transformed_image.is_some();
+                let can_save = self.document.loaded_path.is_some() && self.document.transformed_image.is_some();
                 let save_clicked = ui.add_enabled(can_save, egui::Button::new("Save")).clicked();
                 if save_as_clicked {
                     self.save_current(ctx);

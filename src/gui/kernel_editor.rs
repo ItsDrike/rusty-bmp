@@ -10,10 +10,10 @@ impl BmpViewerApp {
     /// When growing, new cells default to "0". When shrinking, excess cells
     /// are discarded. The weights are stored in row-major order.
     pub(crate) fn resize_kernel_weights(&mut self) {
-        let n = self.custom_kernel_size;
+        let n = self.transforms.kernel.size;
         let needed = n * n;
-        self.custom_kernel_weights.resize(needed, "0".to_owned());
-        self.custom_kernel_weights.truncate(needed);
+        self.transforms.kernel.weights.resize(needed, "0".to_owned());
+        self.transforms.kernel.weights.truncate(needed);
     }
 
     /// Shows the custom kernel editor as a floating `egui::Window`.
@@ -22,11 +22,11 @@ impl BmpViewerApp {
     /// user clicks "Apply" with a valid kernel, so the caller can apply it
     /// via `apply_and_refresh`.
     pub(crate) fn show_kernel_editor(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
-        if !self.custom_kernel_open {
+        if !self.transforms.kernel.open {
             return None;
         }
 
-        let mut open = self.custom_kernel_open;
+        let mut open = self.transforms.kernel.open;
         let mut apply = false;
         let mut close_requested = false;
 
@@ -38,15 +38,18 @@ impl BmpViewerApp {
                 // --- Size selector ---
                 ui.horizontal(|ui| {
                     ui.label("Kernel size:");
-                    let old_size = self.custom_kernel_size;
+                    let old_size = self.transforms.kernel.size;
                     egui::ComboBox::from_id_salt("kernel_size")
-                        .selected_text(format!("{}x{}", self.custom_kernel_size, self.custom_kernel_size))
+                        .selected_text(format!(
+                            "{}x{}",
+                            self.transforms.kernel.size, self.transforms.kernel.size
+                        ))
                         .show_ui(ui, |ui| {
                             for &s in &[1, 3, 5, 7] {
-                                ui.selectable_value(&mut self.custom_kernel_size, s, format!("{s}x{s}"));
+                                ui.selectable_value(&mut self.transforms.kernel.size, s, format!("{s}x{s}"));
                             }
                         });
-                    if self.custom_kernel_size != old_size {
+                    if self.transforms.kernel.size != old_size {
                         self.resize_kernel_weights();
                     }
                 });
@@ -54,7 +57,7 @@ impl BmpViewerApp {
                 ui.add_space(4.0);
 
                 // --- Weight grid ---
-                let n = self.custom_kernel_size;
+                let n = self.transforms.kernel.size;
                 let half = n / 2;
                 egui::Grid::new("kernel_weights_grid")
                     .spacing([4.0, 4.0])
@@ -63,7 +66,7 @@ impl BmpViewerApp {
                             for x in 0..n {
                                 let idx = y * n + x;
                                 let is_center = x == half && y == half;
-                                let widget = egui::TextEdit::singleline(&mut self.custom_kernel_weights[idx])
+                                let widget = egui::TextEdit::singleline(&mut self.transforms.kernel.weights[idx])
                                     .desired_width(36.0)
                                     .horizontal_align(egui::Align::Center);
                                 let response = ui.add(widget);
@@ -88,13 +91,13 @@ impl BmpViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("Divisor:");
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.custom_kernel_divisor)
+                        egui::TextEdit::singleline(&mut self.transforms.kernel.divisor)
                             .desired_width(50.0)
                             .horizontal_align(egui::Align::Center),
                     );
                     ui.label("Bias:");
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.custom_kernel_bias)
+                        egui::TextEdit::singleline(&mut self.transforms.kernel.bias)
                             .desired_width(50.0)
                             .horizontal_align(egui::Align::Center),
                     );
@@ -144,7 +147,7 @@ impl BmpViewerApp {
                 });
             });
 
-        self.custom_kernel_open = open && !close_requested;
+        self.transforms.kernel.open = open && !close_requested;
 
         if apply {
             self.validate_custom_kernel().ok().map(ImageTransform::CustomKernel)
@@ -156,19 +159,19 @@ impl BmpViewerApp {
     /// Validates the current kernel editor fields and returns the `Kernel` or
     /// an error message.
     fn validate_custom_kernel(&self) -> Result<Kernel, String> {
-        let n = self.custom_kernel_size;
+        let n = self.transforms.kernel.size;
         let expected = n * n;
 
-        if self.custom_kernel_weights.len() != expected {
+        if self.transforms.kernel.weights.len() != expected {
             return Err(format!(
                 "Expected {} weights, got {}",
                 expected,
-                self.custom_kernel_weights.len()
+                self.transforms.kernel.weights.len()
             ));
         }
 
         let mut weights = Vec::with_capacity(expected);
-        for (i, s) in self.custom_kernel_weights.iter().enumerate() {
+        for (i, s) in self.transforms.kernel.weights.iter().enumerate() {
             let trimmed = s.trim();
             if trimmed.is_empty() {
                 return Err(format!("Weight cell {} is empty", i + 1));
@@ -189,29 +192,33 @@ impl BmpViewerApp {
         }
 
         let divisor: i32 = self
-            .custom_kernel_divisor
+            .transforms
+            .kernel
+            .divisor
             .trim()
             .parse()
-            .map_err(|_| format!("Invalid divisor: \"{}\"", self.custom_kernel_divisor.trim()))?;
+            .map_err(|_| format!("Invalid divisor: \"{}\"", self.transforms.kernel.divisor.trim()))?;
 
         if divisor == 0 {
             return Err("Divisor must not be zero".to_owned());
         }
 
         let bias: i32 = self
-            .custom_kernel_bias
+            .transforms
+            .kernel
+            .bias
             .trim()
             .parse()
-            .map_err(|_| format!("Invalid bias: \"{}\"", self.custom_kernel_bias.trim()))?;
+            .map_err(|_| format!("Invalid bias: \"{}\"", self.transforms.kernel.bias.trim()))?;
 
         Ok(Kernel::new(weights, n, divisor, bias))
     }
 
     /// Loads a preset kernel into the editor fields.
     fn load_kernel_preset(&mut self, weights: &[i32], size: usize, divisor: i32, bias: i32) {
-        self.custom_kernel_size = size;
-        self.custom_kernel_weights = weights.iter().map(|w| w.to_string()).collect();
-        self.custom_kernel_divisor = divisor.to_string();
-        self.custom_kernel_bias = bias.to_string();
+        self.transforms.kernel.size = size;
+        self.transforms.kernel.weights = weights.iter().map(|w| w.to_string()).collect();
+        self.transforms.kernel.divisor = divisor.to_string();
+        self.transforms.kernel.bias = bias.to_string();
     }
 }

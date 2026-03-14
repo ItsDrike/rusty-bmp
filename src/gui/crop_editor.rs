@@ -6,34 +6,34 @@ use crate::BmpViewerApp;
 
 impl BmpViewerApp {
     pub(crate) fn open_crop_window(&mut self) {
-        let Some(image) = self.transformed_image.as_ref() else {
+        let Some(image) = self.document.transformed_image.as_ref() else {
             self.status = "Load an image first".to_owned();
             return;
         };
 
-        self.crop_x = (image.width.saturating_sub(1)) / 2;
-        self.crop_y = (image.height.saturating_sub(1)) / 2;
-        self.crop_width = image.width.max(1);
-        self.crop_height = image.height.max(1);
-        self.crop_drag_mode = None;
-        self.crop_drag_start_image = None;
-        self.crop_drag_start_rect = None;
-        self.crop_open = true;
+        self.transforms.crop.x = (image.width.saturating_sub(1)) / 2;
+        self.transforms.crop.y = (image.height.saturating_sub(1)) / 2;
+        self.transforms.crop.width = image.width.max(1);
+        self.transforms.crop.height = image.height.max(1);
+        self.transforms.crop.drag_mode = None;
+        self.transforms.crop.drag_start_image = None;
+        self.transforms.crop.drag_start_rect = None;
+        self.transforms.crop.open = true;
     }
 
     pub(crate) fn show_crop_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
-        if !self.crop_open {
+        if !self.transforms.crop.open {
             return None;
         }
 
-        let Some(image) = self.transformed_image.as_ref() else {
-            self.crop_open = false;
+        let Some(image) = self.document.transformed_image.as_ref() else {
+            self.transforms.crop.open = false;
             return None;
         };
         let img_w = image.width;
         let img_h = image.height;
 
-        let mut open = self.crop_open;
+        let mut open = self.transforms.crop.open;
         let mut apply = false;
         let mut close_requested = false;
 
@@ -51,13 +51,13 @@ impl BmpViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("center x:");
                     ui.add(
-                        egui::DragValue::new(&mut self.crop_x)
+                        egui::DragValue::new(&mut self.transforms.crop.x)
                             .speed(1)
                             .range(0..=img_w.saturating_sub(1)),
                     );
                     ui.label("center y:");
                     ui.add(
-                        egui::DragValue::new(&mut self.crop_y)
+                        egui::DragValue::new(&mut self.transforms.crop.y)
                             .speed(1)
                             .range(0..=img_h.saturating_sub(1)),
                     );
@@ -66,32 +66,43 @@ impl BmpViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("width:");
                     let width_resp = ui.add(
-                        egui::DragValue::new(&mut self.crop_width)
+                        egui::DragValue::new(&mut self.transforms.crop.width)
                             .speed(1)
                             .range(1..=img_w.max(1)),
                     );
                     ui.label("height:");
                     let height_resp = ui.add(
-                        egui::DragValue::new(&mut self.crop_height)
+                        egui::DragValue::new(&mut self.transforms.crop.height)
                             .speed(1)
                             .range(1..=img_h.max(1)),
                     );
 
-                    if self.crop_keep_aspect && width_resp.changed() && !height_resp.has_focus() && img_w > 0 {
+                    if self.transforms.crop.keep_aspect
+                        && width_resp.changed()
+                        && !height_resp.has_focus()
+                        && img_w > 0
+                    {
                         let ratio = img_h as f32 / img_w as f32;
-                        self.crop_height = ((self.crop_width as f32 * ratio).round().max(1.0)) as u32;
+                        self.transforms.crop.height =
+                            ((self.transforms.crop.width as f32 * ratio).round().max(1.0)) as u32;
                     }
-                    if self.crop_keep_aspect && height_resp.changed() && !width_resp.has_focus() && img_h > 0 {
+                    if self.transforms.crop.keep_aspect
+                        && height_resp.changed()
+                        && !width_resp.has_focus()
+                        && img_h > 0
+                    {
                         let ratio = img_w as f32 / img_h as f32;
-                        self.crop_width = ((self.crop_height as f32 * ratio).round().max(1.0)) as u32;
+                        self.transforms.crop.width =
+                            ((self.transforms.crop.height as f32 * ratio).round().max(1.0)) as u32;
                     }
                 });
 
                 ui.horizontal(|ui| {
-                    let keep_aspect_resp = ui.checkbox(&mut self.crop_keep_aspect, "Keep aspect ratio");
-                    if self.crop_keep_aspect && keep_aspect_resp.changed() && img_w > 0 {
+                    let keep_aspect_resp = ui.checkbox(&mut self.transforms.crop.keep_aspect, "Keep aspect ratio");
+                    if self.transforms.crop.keep_aspect && keep_aspect_resp.changed() && img_w > 0 {
                         let ratio = img_h as f32 / img_w as f32;
-                        self.crop_height = ((self.crop_width as f32 * ratio).round().max(1.0)) as u32;
+                        self.transforms.crop.height =
+                            ((self.transforms.crop.width as f32 * ratio).round().max(1.0)) as u32;
                     }
                 });
 
@@ -99,26 +110,26 @@ impl BmpViewerApp {
 
                 ui.horizontal(|ui| {
                     if ui.small_button("Reset full").clicked() {
-                        self.crop_x = (img_w.saturating_sub(1)) / 2;
-                        self.crop_y = (img_h.saturating_sub(1)) / 2;
-                        self.crop_width = img_w.max(1);
-                        self.crop_height = img_h.max(1);
+                        self.transforms.crop.x = (img_w.saturating_sub(1)) / 2;
+                        self.transforms.crop.y = (img_h.saturating_sub(1)) / 2;
+                        self.transforms.crop.width = img_w.max(1);
+                        self.transforms.crop.height = img_h.max(1);
                     }
                     if ui.small_button("Center 50%").clicked() {
-                        self.crop_width = (img_w / 2).max(1);
-                        self.crop_height = (img_h / 2).max(1);
-                        self.crop_x = (img_w.saturating_sub(1)) / 2;
-                        self.crop_y = (img_h.saturating_sub(1)) / 2;
+                        self.transforms.crop.width = (img_w / 2).max(1);
+                        self.transforms.crop.height = (img_h / 2).max(1);
+                        self.transforms.crop.x = (img_w.saturating_sub(1)) / 2;
+                        self.transforms.crop.y = (img_h.saturating_sub(1)) / 2;
                     }
                 });
 
                 self.clamp_crop_inputs(img_w, img_h);
 
                 let (x, y, w, h) = clamped_crop_rect(
-                    self.crop_x,
-                    self.crop_y,
-                    self.crop_width,
-                    self.crop_height,
+                    self.transforms.crop.x,
+                    self.transforms.crop.y,
+                    self.transforms.crop.width,
+                    self.transforms.crop.height,
                     img_w,
                     img_h,
                 );
@@ -139,17 +150,17 @@ impl BmpViewerApp {
                 });
             });
 
-        self.crop_open = open && !close_requested;
+        self.transforms.crop.open = open && !close_requested;
 
         if !apply {
             return None;
         }
 
         let (x, y, width, height) = clamped_crop_rect(
-            self.crop_x,
-            self.crop_y,
-            self.crop_width,
-            self.crop_height,
+            self.transforms.crop.x,
+            self.transforms.crop.y,
+            self.transforms.crop.width,
+            self.transforms.crop.height,
             img_w,
             img_h,
         );
@@ -158,10 +169,10 @@ impl BmpViewerApp {
     }
 
     fn clamp_crop_inputs(&mut self, img_w: u32, img_h: u32) {
-        self.crop_x = self.crop_x.min(img_w.saturating_sub(1));
-        self.crop_y = self.crop_y.min(img_h.saturating_sub(1));
-        self.crop_width = self.crop_width.max(1).min(img_w.max(1));
-        self.crop_height = self.crop_height.max(1).min(img_h.max(1));
+        self.transforms.crop.x = self.transforms.crop.x.min(img_w.saturating_sub(1));
+        self.transforms.crop.y = self.transforms.crop.y.min(img_h.saturating_sub(1));
+        self.transforms.crop.width = self.transforms.crop.width.max(1).min(img_w.max(1));
+        self.transforms.crop.height = self.transforms.crop.height.max(1).min(img_h.max(1));
     }
 
     /// Returns the clamped crop rectangle (top-left + size) for the given image size.
@@ -170,10 +181,10 @@ impl BmpViewerApp {
     /// rectangle representation used by the transform and by viewer preview overlays.
     pub(crate) fn crop_rect_for_image(&self, img_w: u32, img_h: u32) -> (u32, u32, u32, u32) {
         clamped_crop_rect(
-            self.crop_x,
-            self.crop_y,
-            self.crop_width,
-            self.crop_height,
+            self.transforms.crop.x,
+            self.transforms.crop.y,
+            self.transforms.crop.width,
+            self.transforms.crop.height,
             img_w,
             img_h,
         )
@@ -185,10 +196,10 @@ impl BmpViewerApp {
         let h = height.max(1).min(img_h.max(1));
         let x0 = x.min(img_w.saturating_sub(w));
         let y0 = y.min(img_h.saturating_sub(h));
-        self.crop_width = w;
-        self.crop_height = h;
-        self.crop_x = (x0 + w / 2).min(img_w.saturating_sub(1));
-        self.crop_y = (y0 + h / 2).min(img_h.saturating_sub(1));
+        self.transforms.crop.width = w;
+        self.transforms.crop.height = h;
+        self.transforms.crop.x = (x0 + w / 2).min(img_w.saturating_sub(1));
+        self.transforms.crop.y = (y0 + h / 2).min(img_h.saturating_sub(1));
     }
 }
 

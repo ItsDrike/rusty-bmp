@@ -8,22 +8,22 @@ impl BmpViewerApp {
     /// `text_has_focus` is used to suppress plain-key zoom shortcuts when a text widget is focused.
     pub(crate) fn show_viewer(&mut self, ctx: &egui::Context, text_has_focus: bool) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(texture) = &self.texture {
+            if let Some(texture) = &self.viewport.texture {
                 let avail = ui.available_size();
                 let tex_size = texture.size_vec2();
 
                 // Scale that fits the entire image within the panel (aspect-ratio preserving).
                 let fit_scale = {
                     let s = (avail.x / tex_size.x).min(avail.y / tex_size.y);
-                    if s.is_finite() && s > 0.0 {
-                        s
-                    } else {
-                        1.0
-                    }
+                    if s.is_finite() && s > 0.0 { s } else { 1.0 }
                 };
 
                 // Resolve the effective zoom: 0.0 means "fit to panel".
-                let effective_zoom = if self.zoom == 0.0 { fit_scale } else { self.zoom };
+                let effective_zoom = if self.viewport.zoom == 0.0 {
+                    fit_scale
+                } else {
+                    self.viewport.zoom
+                };
 
                 // Allocate the full available area and sense drag + scroll.
                 let (panel_rect, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
@@ -42,18 +42,18 @@ impl BmpViewerApp {
                 });
 
                 if kb_zoom_in {
-                    self.zoom = (effective_zoom * 1.25).clamp(0.01, 50.0);
+                    self.viewport.zoom = (effective_zoom * 1.25).clamp(0.01, 50.0);
                 }
                 if kb_zoom_out {
-                    self.zoom = (effective_zoom / 1.25).clamp(0.01, 50.0);
+                    self.viewport.zoom = (effective_zoom / 1.25).clamp(0.01, 50.0);
                 }
                 if kb_zoom_fit {
-                    self.zoom = 0.0;
-                    self.pan_offset = egui::Vec2::ZERO;
+                    self.viewport.zoom = 0.0;
+                    self.viewport.pan_offset = egui::Vec2::ZERO;
                 }
                 if kb_zoom_1to1 {
-                    self.zoom = 1.0;
-                    self.pan_offset = egui::Vec2::ZERO;
+                    self.viewport.zoom = 1.0;
+                    self.viewport.pan_offset = egui::Vec2::ZERO;
                 }
 
                 // --- Scroll-to-zoom (anchored to cursor position) ---
@@ -66,36 +66,40 @@ impl BmpViewerApp {
                     // the cursor stays fixed.
                     if let Some(pointer) = response.hover_pos() {
                         let panel_center = panel_rect.center();
-                        let img_center = panel_center + self.pan_offset;
+                        let img_center = panel_center + self.viewport.pan_offset;
                         let cursor_rel = pointer - img_center;
                         let ratio = new_zoom / effective_zoom;
-                        self.pan_offset = pointer - panel_center - cursor_rel * ratio;
+                        self.viewport.pan_offset = pointer - panel_center - cursor_rel * ratio;
                     }
 
-                    self.zoom = new_zoom;
+                    self.viewport.zoom = new_zoom;
                 }
 
                 let mut crop_drag_captured = false;
 
                 // --- Double-click to fit ---
                 if response.double_clicked() {
-                    self.zoom = 0.0;
-                    self.pan_offset = egui::Vec2::ZERO;
+                    self.viewport.zoom = 0.0;
+                    self.viewport.pan_offset = egui::Vec2::ZERO;
                 }
 
                 // Re-resolve after possible changes above.
-                let effective_zoom = if self.zoom == 0.0 { fit_scale } else { self.zoom };
+                let effective_zoom = if self.viewport.zoom == 0.0 {
+                    fit_scale
+                } else {
+                    self.viewport.zoom
+                };
                 let display_size = tex_size * effective_zoom;
 
                 // Clamp pan so the image can't be dragged entirely off-screen.
                 let margin = display_size * 0.4;
                 let max_pan_x = ((display_size.x - avail.x) / 2.0 + margin.x).max(0.0);
                 let max_pan_y = ((display_size.y - avail.y) / 2.0 + margin.y).max(0.0);
-                self.pan_offset.x = self.pan_offset.x.clamp(-max_pan_x, max_pan_x);
-                self.pan_offset.y = self.pan_offset.y.clamp(-max_pan_y, max_pan_y);
+                self.viewport.pan_offset.x = self.viewport.pan_offset.x.clamp(-max_pan_x, max_pan_x);
+                self.viewport.pan_offset.y = self.viewport.pan_offset.y.clamp(-max_pan_y, max_pan_y);
 
                 // Position the image centered in the panel, offset by pan.
-                let img_center = panel_rect.center() + self.pan_offset;
+                let img_center = panel_rect.center() + self.viewport.pan_offset;
                 let img_rect = egui::Rect::from_center_size(img_center, display_size);
 
                 // Clip to the panel and paint.
@@ -108,9 +112,12 @@ impl BmpViewerApp {
                 );
 
                 // --- Crop preview overlay + interactive visual editing ---
-                if self.crop_open {
-                    if let Some((image_width, image_height)) =
-                        self.transformed_image.as_ref().map(|image| (image.width, image.height))
+                if self.transforms.crop.open {
+                    if let Some((image_width, image_height)) = self
+                        .document
+                        .transformed_image
+                        .as_ref()
+                        .map(|image| (image.width, image.height))
                     {
                         let (cx, cy, cw, ch) = self.crop_rect_for_image(image_width, image_height);
                         let crop_min = egui::pos2(
@@ -216,7 +223,7 @@ impl BmpViewerApp {
                         // Fallback capture: if drag_started was not latched this frame,
                         // attempt to start crop interaction while already dragging.
                         if response.dragged()
-                            && self.crop_drag_mode.is_none()
+                            && self.transforms.crop.drag_mode.is_none()
                             && let Some(pointer) = response.interact_pointer_pos()
                             && start_crop_drag(
                                 self,
@@ -234,9 +241,9 @@ impl BmpViewerApp {
                         // Apply ongoing drag delta.
                         if response.dragged()
                             && let (Some(mode), Some(start_rect), Some(start_pos), Some(pointer)) = (
-                                self.crop_drag_mode,
-                                self.crop_drag_start_rect,
-                                self.crop_drag_start_image,
+                                self.transforms.crop.drag_mode,
+                                self.transforms.crop.drag_start_rect,
+                                self.transforms.crop.drag_start_image,
                                 response.interact_pointer_pos(),
                             )
                         {
@@ -251,25 +258,25 @@ impl BmpViewerApp {
 
                         // Finish drag.
                         if response.drag_stopped() {
-                            self.crop_drag_mode = None;
-                            self.crop_drag_start_image = None;
-                            self.crop_drag_start_rect = None;
+                            self.transforms.crop.drag_mode = None;
+                            self.transforms.crop.drag_start_image = None;
+                            self.transforms.crop.drag_start_rect = None;
                         }
                     }
                 } else {
-                    self.crop_drag_mode = None;
-                    self.crop_drag_start_image = None;
-                    self.crop_drag_start_rect = None;
+                    self.transforms.crop.drag_mode = None;
+                    self.transforms.crop.drag_start_image = None;
+                    self.transforms.crop.drag_start_rect = None;
                 }
 
                 // --- Drag to pan (only when crop interaction is not active) ---
-                if response.dragged() && self.crop_drag_mode.is_none() && !crop_drag_captured {
-                    self.pan_offset += response.drag_delta();
+                if response.dragged() && self.transforms.crop.drag_mode.is_none() && !crop_drag_captured {
+                    self.viewport.pan_offset += response.drag_delta();
                 }
 
                 // --- Pixel inspector (only at high zoom where pixels are visible) ---
                 const MIN_PIXEL_SIZE: f32 = 8.0;
-                self.hovered_pixel = None;
+                self.viewport.hovered_pixel = None;
                 if effective_zoom >= MIN_PIXEL_SIZE
                     && let Some(pointer) = response.hover_pos()
                     && img_rect.contains(pointer)
@@ -279,7 +286,7 @@ impl BmpViewerApp {
                     let px = (rel.x / effective_zoom) as u32;
                     let py = (rel.y / effective_zoom) as u32;
 
-                    if let Some(image) = &self.transformed_image
+                    if let Some(image) = &self.document.transformed_image
                         && px < image.width
                         && py < image.height
                     {
@@ -290,7 +297,7 @@ impl BmpViewerApp {
                             image.rgba[idx + 2],
                             image.rgba[idx + 3],
                         ];
-                        self.hovered_pixel = Some((px, py, rgba));
+                        self.viewport.hovered_pixel = Some((px, py, rgba));
 
                         // Draw highlight outline around the hovered pixel.
                         let pixel_screen_x = img_rect.min.x + px as f32 * effective_zoom;
@@ -317,7 +324,7 @@ impl BmpViewerApp {
                 }
 
                 // Store effective zoom for the zoom bar (rendered before this panel).
-                self.last_effective_zoom = effective_zoom;
+                self.viewport.last_effective_zoom = effective_zoom;
             } else {
                 Self::show_empty_state(ui);
             }
@@ -377,9 +384,9 @@ fn start_crop_drag(
         return false;
     };
 
-    app.crop_drag_mode = Some(mode);
-    app.crop_drag_start_rect = Some(start_rect);
-    app.crop_drag_start_image = Some(screen_to_image(pointer, img_rect, zoom));
+    app.transforms.crop.drag_mode = Some(mode);
+    app.transforms.crop.drag_start_rect = Some(start_rect);
+    app.transforms.crop.drag_start_image = Some(screen_to_image(pointer, img_rect, zoom));
     true
 }
 

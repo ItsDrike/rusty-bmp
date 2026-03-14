@@ -51,7 +51,7 @@ impl BmpViewerApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Inspector");
-                    if self.steg_detected.is_some() {
+                    if self.steganography.detected.is_some() {
                         ui.add_space(6.0);
                         ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "\u{25cf} steg")
                             .on_hover_text("This image contains an embedded steganography payload.");
@@ -60,7 +60,7 @@ impl BmpViewerApp {
                 ui.separator();
                 egui::ScrollArea::vertical().id_salt("inspector_scroll").show(ui, |ui| {
                     egui::CollapsingHeader::new("Edit").default_open(true).show(ui, |ui| {
-                        let has_image = self.transformed_image.is_some();
+                        let has_image = self.document.transformed_image.is_some();
                         if !has_image {
                             ui.label("Load an image to enable editing tools.");
                             return;
@@ -120,24 +120,33 @@ impl BmpViewerApp {
 
                         ui.horizontal(|ui| {
                             ui.add_sized([70.0, 0.0], egui::Label::new("Brightness:"));
-                            ui.add(egui::Slider::new(&mut self.brightness_input, -255..=255));
+                            ui.add(egui::Slider::new(
+                                &mut self.transforms.tonal.brightness_input,
+                                -255..=255,
+                            ));
                             if ui
-                                .add_enabled(self.brightness_input != 0, egui::Button::new("Apply").small())
+                                .add_enabled(
+                                    self.transforms.tonal.brightness_input != 0,
+                                    egui::Button::new("Apply").small(),
+                                )
                                 .clicked()
                             {
-                                apply_op = Some(ImageTransform::Brightness(self.brightness_input));
-                                self.brightness_input = 0;
+                                apply_op = Some(ImageTransform::Brightness(self.transforms.tonal.brightness_input));
+                                self.transforms.tonal.brightness_input = 0;
                             }
                         });
                         ui.horizontal(|ui| {
                             ui.add_sized([70.0, 0.0], egui::Label::new("Contrast:"));
-                            ui.add(egui::Slider::new(&mut self.contrast_input, -255..=255));
+                            ui.add(egui::Slider::new(&mut self.transforms.tonal.contrast_input, -255..=255));
                             if ui
-                                .add_enabled(self.contrast_input != 0, egui::Button::new("Apply").small())
+                                .add_enabled(
+                                    self.transforms.tonal.contrast_input != 0,
+                                    egui::Button::new("Apply").small(),
+                                )
                                 .clicked()
                             {
-                                apply_op = Some(ImageTransform::Contrast(self.contrast_input));
-                                self.contrast_input = 0;
+                                apply_op = Some(ImageTransform::Contrast(self.transforms.tonal.contrast_input));
+                                self.transforms.tonal.contrast_input = 0;
                             }
                         });
 
@@ -173,22 +182,22 @@ impl BmpViewerApp {
                         });
                     });
 
-                    egui::CollapsingHeader::new(if self.pipeline.is_empty() {
+                    egui::CollapsingHeader::new(if self.document.pipeline.is_empty() {
                         "Transforms History".to_owned()
                     } else {
-                        format!("Transforms History ({})", self.pipeline.len())
+                        format!("Transforms History ({})", self.document.pipeline.len())
                     })
                     .default_open(true)
                     .show(ui, |ui| {
-                        let has_history = !self.pipeline.is_empty();
-                        let has_redo = !self.redo_stack.is_empty();
+                        let has_history = !self.document.pipeline.is_empty();
+                        let has_redo = !self.document.redo_stack.is_empty();
 
                         if !has_history && !has_redo {
                             ui.label("Apply a transformation to see transform history.");
                         } else {
                             ui.horizontal(|ui| {
                                 let can_undo = has_history;
-                                let undo_tooltip = if let Some(op) = self.pipeline.ops().last() {
+                                let undo_tooltip = if let Some(op) = self.document.pipeline.ops().last() {
                                     format!("Undo {} (Ctrl+Z)", op)
                                 } else {
                                     "Nothing to undo".to_owned()
@@ -202,7 +211,7 @@ impl BmpViewerApp {
                                 }
 
                                 let can_redo = has_redo;
-                                let redo_tooltip = if let Some(op) = self.redo_stack.last() {
+                                let redo_tooltip = if let Some(op) = self.document.redo_stack.last() {
                                     format!("Redo {} (Ctrl+Shift+Z)", op)
                                 } else {
                                     "Nothing to redo".to_owned()
@@ -225,7 +234,7 @@ impl BmpViewerApp {
                                 }
                             });
 
-                            for (i, op) in self.pipeline.ops().iter().enumerate() {
+                            for (i, op) in self.document.pipeline.ops().iter().enumerate() {
                                 ui.horizontal(|ui| {
                                     ui.monospace(format!("{}.", i + 1));
                                     ui.label(op.to_string());
@@ -246,7 +255,7 @@ impl BmpViewerApp {
                     egui::CollapsingHeader::new("BMP Details")
                         .default_open(true)
                         .show(ui, |ui| {
-                            if self.image_stats.is_empty() {
+                            if self.document.image_stats.is_empty() {
                                 ui.label("Load a BMP file to inspect its metadata.");
                                 return;
                             }
@@ -256,7 +265,7 @@ impl BmpViewerApp {
                                 .id_salt("file_info_scroll")
                                 .max_height(220.0)
                                 .show(ui, |ui| {
-                                    ui.monospace(&self.image_stats);
+                                    ui.monospace(&self.document.image_stats);
                                 });
 
                             ui.separator();
@@ -265,14 +274,14 @@ impl BmpViewerApp {
                                 .id_salt("decoded_info_scroll")
                                 .max_height(150.0)
                                 .show(ui, |ui| {
-                                    ui.monospace(&self.decoded_stats);
+                                    ui.monospace(&self.document.decoded_stats);
                                 });
                         });
 
                     egui::CollapsingHeader::new("Color Palette")
                         .default_open(false)
                         .show(ui, |ui| {
-                            if self.palette_colors.is_empty() {
+                            if self.document.palette_colors.is_empty() {
                                 ui.label("No palette available for this image.");
                             } else {
                                 egui::ScrollArea::vertical()
@@ -309,42 +318,40 @@ impl BmpViewerApp {
             self.apply_and_refresh(ctx, op);
         }
         if actions.open_rotate_any {
-            self.rotate_any_open = true;
+            self.transforms.rotate.open = true;
         }
         if actions.open_resize {
             self.open_resize_window();
         }
         if actions.open_skew {
-            self.skew_open = true;
+            self.transforms.skew.open = true;
         }
         if actions.open_translate {
-            self.translate_open = true;
+            self.transforms.translate.open = true;
         }
         if actions.open_crop {
             self.open_crop_window();
         }
         if actions.open_custom_kernel {
-            self.custom_kernel_open = true;
+            self.transforms.kernel.open = true;
         }
         if let Some(index) = actions.remove_transform {
-            self.pipeline.remove(index);
-            self.redo_stack.clear();
-            self.steg_overwrite_warned = false;
-            if let Some(original) = &self.original_image {
-                let (result, warnings) = self.pipeline.apply_with_warnings(original);
+            self.document.pipeline.remove(index);
+            self.document.redo_stack.clear();
+            self.steganography.overwrite_warned = false;
+            if let Some(original) = &self.document.original_image {
+                let (result, warnings) = self.document.pipeline.apply_with_warnings(original);
                 if !warnings.is_empty() {
                     self.status = warnings.join(" ");
                 }
-                self.steg_detected = bmp::runtime::steganography::detect(&result);
-                self.steg_extracted = None;
-                self.set_display_image(ctx, result, "transformed".to_owned());
+                self.update_transformed_image(ctx, result);
             }
         }
         if actions.open_steg_embed {
-            self.steg_embed_open = true;
+            self.steganography.embed_open = true;
         }
         if actions.open_steg_inspect {
-            self.steg_inspect_open = true;
+            self.steganography.inspect_open = true;
         }
         if actions.do_undo {
             self.undo_transform(ctx);
@@ -353,14 +360,12 @@ impl BmpViewerApp {
             self.redo_transform(ctx);
         }
         if actions.do_clear {
-            self.pipeline.clear();
-            self.redo_stack.clear();
-            self.steg_overwrite_warned = false;
-            if let Some(original) = &self.original_image {
+            self.document.pipeline.clear();
+            self.document.redo_stack.clear();
+            self.steganography.overwrite_warned = false;
+            if let Some(original) = &self.document.original_image {
                 let result = original.clone();
-                self.steg_detected = bmp::runtime::steganography::detect(&result);
-                self.steg_extracted = None;
-                self.set_display_image(ctx, result, "transformed".to_owned());
+                self.update_transformed_image(ctx, result);
             }
         }
     }
