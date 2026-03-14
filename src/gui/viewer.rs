@@ -112,10 +112,12 @@ impl BmpViewerApp {
                     update_checker_tile_with_hysteresis(&mut self.viewport.checker_tile_img_px, effective_zoom);
                     self.ensure_checker_texture(ctx, self.viewport.checker_tile_img_px);
                     if let Some(checker) = self.viewport.checker_texture.as_ref() {
+                        let repeats_x = (tex_size.x / (self.viewport.checker_tile_img_px as f32 * 2.0)).max(1.0);
+                        let repeats_y = (tex_size.y / (self.viewport.checker_tile_img_px as f32 * 2.0)).max(1.0);
                         painter.image(
                             checker.id(),
                             img_rect,
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(repeats_x, repeats_y)),
                             egui::Color32::WHITE,
                         );
                     }
@@ -380,32 +382,31 @@ impl BmpViewerApp {
     }
 
     fn ensure_checker_texture(&mut self, ctx: &egui::Context, tile_img_px: u32) {
-        let Some(image) = self.document.transformed_image.as_ref() else {
+        if self.document.transformed_image.is_none() {
             self.viewport.checker_texture = None;
             self.viewport.checker_texture_tile_img_px = 0;
-            self.viewport.checker_texture_size = [0, 0];
             return;
-        };
+        }
 
-        let size = [image.width, image.height];
-        let same_config = self.viewport.checker_texture.is_some()
-            && self.viewport.checker_texture_tile_img_px == tile_img_px
-            && self.viewport.checker_texture_size == size;
+        let same_config =
+            self.viewport.checker_texture.is_some() && self.viewport.checker_texture_tile_img_px == tile_img_px;
         if same_config {
             return;
         }
 
-        let checker = make_checkerboard_image(image.width as usize, image.height as usize, tile_img_px as usize);
+        let checker = make_checkerboard_image(tile_img_px as usize);
         self.viewport.checker_texture =
-            Some(ctx.load_texture("checker-background", checker, egui::TextureOptions::NEAREST));
+            Some(ctx.load_texture("checker-background", checker, egui::TextureOptions::NEAREST_REPEAT));
         self.viewport.checker_texture_tile_img_px = tile_img_px;
-        self.viewport.checker_texture_size = size;
     }
 }
 
-fn make_checkerboard_image(width: usize, height: usize, tile: usize) -> egui::ColorImage {
+fn make_checkerboard_image(tile: usize) -> egui::ColorImage {
     let light = egui::Color32::from_gray(210);
     let dark = egui::Color32::from_gray(170);
+    let tile = tile.max(1);
+    let width = tile * 2;
+    let height = tile * 2;
     let mut image = egui::ColorImage::new([width, height], dark);
 
     for y in 0..height {
