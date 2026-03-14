@@ -321,10 +321,10 @@ impl RgbMasks {
     /// Returns the default RGB888 bit masks used by 32-bit BI_RGB bitmaps.
     ///
     /// Layout (LSB -> MSB):
-    /// - Bits 0–7   : Blue   (8 bits)
-    /// - Bits 8–15  : Green  (8 bits)
-    /// - Bits 16–23 : Red    (8 bits)
-    /// - Bits 24–31 : Unused (8 bits)
+    /// - Bits 0-7   : Blue   (8 bits)
+    /// - Bits 8-15  : Green  (8 bits)
+    /// - Bits 16-23 : Red    (8 bits)
+    /// - Bits 24-31 : Unused (8 bits)
     ///
     /// Alpha is not used.
     #[must_use]

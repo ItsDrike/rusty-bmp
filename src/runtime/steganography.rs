@@ -4,12 +4,12 @@
 //!
 //! ```text
 //! Bit offset  Field           Width   Notes
-//! ─────────────────────────────────────────────────────────
+//! ---------------------------------------------------------
 //!  0          magic "STEG"   32 bits  0x53 0x54 0x45 0x47
 //! 32          version         3 bits  0 = v1; any other value is rejected
 //! 35          channel config 13 bits  base-9 packed: r + g*9 + b*81 + a*729
 //! 48          payload_len    32 bits  u32 little-endian, bytes in payload
-//! ─────────────────────────────────────────────────────────
+//! ---------------------------------------------------------
 //! Total                      80 bits
 //! ```
 //!
@@ -20,11 +20,11 @@ use thiserror::Error;
 
 use crate::runtime::decode::DecodedImage;
 
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Public types
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
-/// Per-channel LSB depths.  0 means the channel is skipped; 1–8 means that
+/// Per-channel LSB depths.  0 means the channel is skipped; 1-8 means that
 /// many least-significant bits of the channel are used to carry steg data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StegConfig {
@@ -71,9 +71,9 @@ pub enum StegError {
     ArithmeticOverflow(&'static str),
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // StegConfig helpers
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Number of bits in the header, independent of config.
 const HEADER_BITS: u64 = 80;
@@ -138,7 +138,7 @@ impl StegConfig {
         let g = ((raw / 9) % 9) as u8;
         let b = ((raw / 81) % 9) as u8;
         let a = (raw / 729) as u8;
-        // Paranoia: each component must be ≤ 8.
+        // Paranoia: each component must be <= 8.
         if r > 8 || g > 8 || b > 8 || a > 8 {
             return None;
         }
@@ -151,14 +151,14 @@ impl StegConfig {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Bit-stream primitives
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Iterator state that walks the pixel RGBA buffer, extracting or writing bits
 /// from/to the LSBs of each enabled channel.
 ///
-/// Channels are visited in R → G → B → A order within each pixel.
+/// Channels are visited in R -> G -> B -> A order within each pixel.
 /// Pixels are visited left-to-right, top-to-bottom (row-major).
 /// Within each channel the LSB is emitted/consumed first (bit 0 first).
 struct BitCursor {
@@ -252,7 +252,7 @@ fn write_bit(rgba: &mut [u8], cursor: &BitCursor, bit: u8) {
 }
 
 /// Read `n` bits (LSB first) from the buffer starting at cursor, advancing
-/// the cursor.  `n` must be ≤ 64.
+/// the cursor.  `n` must be <= 64.
 fn read_bits(rgba: &[u8], cursor: &mut BitCursor, n: u8, total_pixels: usize) -> Option<u64> {
     let mut value: u64 = 0;
     for i in 0..n {
@@ -267,7 +267,7 @@ fn read_bits(rgba: &[u8], cursor: &mut BitCursor, n: u8, total_pixels: usize) ->
 }
 
 /// Write `n` bits (LSB first) into the buffer starting at cursor, advancing
-/// the cursor.  `n` must be ≤ 64.
+/// the cursor.  `n` must be <= 64.
 fn write_bits(rgba: &mut [u8], cursor: &mut BitCursor, value: u64, n: u8, total_pixels: usize) -> bool {
     for i in 0..n {
         if cursor.exhausted(total_pixels) {
@@ -280,9 +280,9 @@ fn write_bits(rgba: &mut [u8], cursor: &mut BitCursor, value: u64, n: u8, total_
     true
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Header read / write
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Write the 80-bit steg header into the RGBA buffer starting at bit-cursor
 /// position 0, using `config` as the embedding parameters.
@@ -387,9 +387,9 @@ fn try_read_header(rgba: &[u8], config: StegConfig) -> Option<StegInfo> {
     })
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Public API
-// ──────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Embed `payload` bytes into a clone of `image` using `config` as the LSB
 /// parameters.

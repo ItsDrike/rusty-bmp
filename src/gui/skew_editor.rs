@@ -80,7 +80,7 @@ impl BmpViewerApp {
                 if det.abs() < 1e-4 {
                     ui.colored_label(
                         egui::Color32::RED,
-                        "Invalid parameters: near-singular transform (1 - kx*ky ≈ 0)",
+                        "Invalid parameters: near-singular transform (1 - kx*ky ~= 0)",
                     );
                 } else {
                     ui.colored_label(

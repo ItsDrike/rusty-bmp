@@ -147,7 +147,7 @@ impl SaveFormat {
     /// because they destroy the LSBs used to carry the hidden payload.
     ///
     /// If `steg_config` is provided and the config uses the alpha channel
-    /// (`a_bits > 0`), formats that discard alpha (Rgb24, Rgb32 — which stores
+    /// (`a_bits > 0`), formats that discard alpha (Rgb24, Rgb32 - which stores
     /// the fourth byte as reserved/zero) are also considered unsafe.
     pub fn preserves_steganography(self, steg_config: Option<crate::runtime::steganography::StegConfig>) -> bool {
         // Base check: does the format keep all 8 bits per channel intact?
@@ -162,7 +162,7 @@ impl SaveFormat {
             && config.a_bits > 0
         {
             // Rgb24 has no alpha byte at all.
-            // Rgb32 stores the 4th byte as a reserved zero — alpha data is lost.
+            // Rgb32 stores the 4th byte as a reserved zero - alpha data is lost.
             // BitFields32 uses standard RGB888 masks with no alpha mask.
             // None of the three safe base formats preserve alpha channel data.
             return false;
@@ -523,7 +523,7 @@ fn build_bmp_v4(
     source: Option<&SourceMetadata>,
 ) -> Result<Bmp, EncodeError> {
     let dib_size = 4 + BitmapV4Header::HEADER_SIZE;
-    // V4 does NOT have separate color masks — they're embedded in the header
+    // V4 does NOT have separate color masks - they are embedded in the header
     let color_table_bytes = (color_table.len() as u32)
         .checked_mul(4)
         .ok_or(EncodeError::ArithmeticOverflow)?;

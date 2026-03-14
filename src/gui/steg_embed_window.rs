@@ -22,7 +22,7 @@ impl BmpViewerApp {
                 ui.label("Embed arbitrary UTF-8 text into the image LSBs.");
                 ui.add_space(4.0);
 
-                // ── Channel configuration ──────────────────────────────────
+                // Channel configuration
                 ui.label("Bits per channel (0 = skip channel):");
                 egui::Grid::new("steg_channel_grid")
                     .num_columns(2)
@@ -47,7 +47,7 @@ impl BmpViewerApp {
 
                 ui.add_space(4.0);
 
-                // ── Capacity indicator ─────────────────────────────────────
+                // Capacity indicator
                 let config = StegConfig {
                     r_bits: self.steg_r_bits,
                     g_bits: self.steg_g_bits,
@@ -70,13 +70,13 @@ impl BmpViewerApp {
                         ui.colored_label(egui::Color32::DARK_GRAY, "No image loaded.");
                     }
                     Some(_) if no_channels => {
-                        ui.colored_label(egui::Color32::RED, "No channels selected — cannot embed.");
+                        ui.colored_label(egui::Color32::RED, "No channels selected - cannot embed.");
                     }
                     Some(cap) => {
                         let (color, label) = if payload_bytes > cap {
                             (
                                 egui::Color32::RED,
-                                format!("Capacity: {cap} bytes — payload too large ({payload_bytes} bytes)"),
+                                format!("Capacity: {cap} bytes - payload too large ({payload_bytes} bytes)"),
                             )
                         } else {
                             (
@@ -90,7 +90,7 @@ impl BmpViewerApp {
 
                 ui.add_space(6.0);
 
-                // ── Text input ─────────────────────────────────────────────
+                // Text input
                 ui.label("Text to embed (UTF-8):");
                 egui::ScrollArea::vertical()
                     .id_salt("steg_embed_text")
@@ -105,7 +105,7 @@ impl BmpViewerApp {
 
                 ui.add_space(8.0);
 
-                // ── Validation and apply ───────────────────────────────────
+                // Validation and apply
                 let valid = !no_channels
                     && capacity_bytes.is_some()
                     && !self.steg_text_input.is_empty()

@@ -11,7 +11,7 @@ use crate::raw::{error::ValidationError, helpers::wingdi, BitsPerPixel};
 /// header versions or bits-per-pixel values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Compression {
-    /// BI_RGB (0) – no compression.
+    /// BI_RGB (0) - no compression.
     ///
     /// * If the bits_per_pixel amount is 1, 4 or 8, the bitmap array
     ///   values are indices into the color table.
@@ -22,7 +22,7 @@ pub enum Compression {
     /// This is the most common choice.
     Rgb,
 
-    /// BI_RLE8 (1) – run-length encoding for 8-bit paletted images.
+    /// BI_RLE8 (1) - run-length encoding for 8-bit paletted images.
     ///
     /// The compression format is a two-byte format consisting of a count byte
     /// followed by a byte containing a color index.
@@ -30,7 +30,7 @@ pub enum Compression {
     /// This is only valid when used with 8-bpp bitmaps.
     Rle8,
 
-    /// BI_RLE4 (2) – run-length encoding for 4-bit paletted images.
+    /// BI_RLE4 (2) - run-length encoding for 4-bit paletted images.
     ///
     /// The compression format is a two-byte format consisting of a count byte
     /// followed by two word-length color indexes.

@@ -33,7 +33,7 @@ impl<R: Seek> BoundedStream<R> {
         }
     }
 
-    /// Shrinks the window’s upper bound to the underlying stream’s end.
+    /// Shrinks the window's upper bound to the underlying stream's end.
     ///
     /// If the stream end lies within the current bounds, the upper bound is
     /// reduced. If it lies beyond the current upper bound, this is a no-op.

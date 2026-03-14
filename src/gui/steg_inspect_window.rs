@@ -25,7 +25,7 @@ impl BmpViewerApp {
                         ui.colored_label(egui::Color32::DARK_GRAY, "No steganography detected in this image.");
                     }
                     Some(info) => {
-                        // ── Header info ────────────────────────────────────
+                        // Header info
                         ui.label("Detected steganography header:");
                         egui::Grid::new("steg_inspect_grid")
                             .num_columns(2)
@@ -58,7 +58,7 @@ impl BmpViewerApp {
 
                         ui.add_space(6.0);
 
-                        // ── Extract payload ────────────────────────────────
+                        // Extract payload
                         ui.horizontal(|ui| {
                             if ui.button("Extract Payload").clicked() {
                                 do_extract = true;
@@ -75,7 +75,7 @@ impl BmpViewerApp {
                             }
                         });
 
-                        // ── Extraction result ──────────────────────────────
+                        // Extraction result
                         if let Some(result) = &self.steg_extracted {
                             ui.add_space(6.0);
                             match result {
@@ -108,7 +108,7 @@ impl BmpViewerApp {
                                             // Not valid UTF-8: show a hex dump of the
                                             // first 256 bytes.
                                             ui.label(format!(
-                                                "Payload (binary, {} bytes — showing first 256):",
+                                                "Payload (binary, {} bytes - showing first 256):",
                                                 bytes.len()
                                             ));
                                             let hex: String = bytes
@@ -149,16 +149,14 @@ impl BmpViewerApp {
 
         // Handle extract: do it here while we still have &mut self, then store
         // the result in steg_extracted.
-        if do_extract
-            && let (Some(img), Some(info)) = (&self.transformed_image, &self.steg_detected) {
-                let result = steganography::extract(img, info).map_err(|e| e.to_string());
-                self.steg_extracted = Some(result);
-            }
+        if do_extract && let (Some(img), Some(info)) = (&self.transformed_image, &self.steg_detected) {
+            let result = steganography::extract(img, info).map_err(|e| e.to_string());
+            self.steg_extracted = Some(result);
+        }
 
-        if do_remove
-            && let Some(info) = self.steg_detected.as_ref() {
-                return Some(ImageTransform::RemoveSteganography { config: info.config });
-            }
+        if do_remove && let Some(info) = self.steg_detected.as_ref() {
+            return Some(ImageTransform::RemoveSteganography { config: info.config });
+        }
 
         None
     }

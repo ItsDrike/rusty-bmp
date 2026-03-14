@@ -59,7 +59,7 @@ impl Kernel {
     pub fn separable(&self) -> Option<(Vec<i32>, Vec<i32>)> {
         let n = self.size;
         if n == 1 {
-            // 1x1 kernel is trivially separable: [w] = [1] × [w] (or [w] × [1]).
+            // 1x1 kernel is trivially separable: [w] = [1] x [w] (or [w] x [1]).
             return Some((vec![1], self.weights.clone()));
         }
 
@@ -102,14 +102,14 @@ impl Kernel {
     /// The cost approximates the amount of work per pixel and is used by the
     /// transform pipeline to decide when to create checkpoints.
     ///
-    /// Non-separable kernels require a full 2D convolution with `N × N` taps,
-    /// while separable kernels can be applied as two 1D passes (`2 × N` taps).
+    /// Non-separable kernels require a full 2D convolution with `N x N` taps,
+    /// while separable kernels can be applied as two 1D passes (`2 x N` taps).
     ///
     /// Examples:
-    /// - 3×3 separable kernel -> `2N = 6`
-    /// - 3×3 non-separable kernel -> `N² = 9`
-    /// - 5×5 separable kernel -> `2N = 10`
-    /// - 5×5 non-separable kernel -> `N² = 25`
+    /// - 3x3 separable kernel -> `2N = 6`
+    /// - 3x3 non-separable kernel -> `N^2 = 9`
+    /// - 5x5 separable kernel -> `2N = 10`
+    /// - 5x5 non-separable kernel -> `N^2 = 25`
     pub fn replay_cost(&self) -> u32 {
         let n = self.size as u32;
         if self.separable().is_some() {
@@ -137,13 +137,13 @@ impl ConvolutionFilter {
     /// Returns the convolution kernel for this filter preset.
     pub fn kernel(&self) -> Kernel {
         match self {
-            // Gaussian blur 3x3 — weighted average, softens image.
+            // Gaussian blur 3x3 - weighted average, softens image.
             Self::Blur => Kernel::new(vec![1, 2, 1, 2, 4, 2, 1, 2, 1], 3, 16, 0),
-            // Sharpening — emphasizes differences from neighbors.
+            // Sharpening - emphasizes differences from neighbors.
             Self::Sharpen => Kernel::new(vec![0, -1, 0, -1, 5, -1, 0, -1, 0], 3, 1, 0),
-            // Laplacian edge detection — highlights regions of rapid intensity change.
+            // Laplacian edge detection - highlights regions of rapid intensity change.
             Self::EdgeDetect => Kernel::new(vec![-1, -1, -1, -1, 8, -1, -1, -1, -1], 3, 1, 0),
-            // Emboss — directional relief effect, biased to gray midpoint.
+            // Emboss - directional relief effect, biased to gray midpoint.
             Self::Emboss => Kernel::new(vec![-2, -1, 0, -1, 1, 1, 0, 1, 2], 3, 1, 128),
         }
     }
@@ -196,7 +196,7 @@ impl fmt::Display for TranslateMode {
 pub enum ImageTransform {
     RotateLeft90,
     RotateRight90,
-    /// Rotate by an arbitrary angle in 0.1° units.
+    /// Rotate by an arbitrary angle in 0.1 degree units.
     RotateAny {
         angle_tenths: i16,
         interpolation: RotationInterpolation,
@@ -273,7 +273,7 @@ impl fmt::Display for ImageTransform {
             } => {
                 let angle = *angle_tenths as f32 / 10.0;
                 let mode = if *expand { "Expand" } else { "Crop" };
-                write!(f, "Rotate {angle:+.1}° ({interpolation}, {mode})")
+                write!(f, "Rotate {angle:+.1} deg ({interpolation}, {mode})")
             }
             Self::Resize {
                 width,
@@ -374,7 +374,7 @@ impl ImageTransform {
     /// and return a higher value.
     pub fn replay_cost(&self) -> u32 {
         match self {
-            // Invertible — never replayed on undo, so checkpoint cost is 0.
+            // Invertible - never replayed on undo, so checkpoint cost is 0.
             Self::RotateLeft90
             | Self::RotateRight90
             | Self::MirrorHorizontal
@@ -403,7 +403,7 @@ impl ImageTransform {
             // Convolutions scale with kernel footprint.
             Self::Convolution(filter) => filter.kernel().replay_cost(),
             Self::CustomKernel(kernel) => kernel.replay_cost(),
-            // Steganography is a per-pixel LSB pass — similar cost to a cheap
+            // Steganography is a per-pixel LSB pass - similar cost to a cheap
             // color transform.
             Self::EmbedSteganography { .. } => 2,
             Self::RemoveSteganography { .. } => 1,
@@ -899,7 +899,7 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
     let w = image.width as i32;
     let h = image.height as i32;
     // Allow a tiny epsilon for floating-point error near borders (e.g. exact
-    // 90° rotations without canvas expansion), then clamp into valid bounds.
+    // 90-degree rotations without canvas expansion), then clamp into valid bounds.
     let max_x = (w - 1) as f32;
     let max_y = (h - 1) as f32;
     const EPS: f32 = 1e-3;
@@ -1190,7 +1190,7 @@ pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
 /// Apply an arbitrary NxN convolution kernel to an image.
 ///
 /// If the kernel is separable (rank-1), a faster two-pass approach is used
-/// (horizontal then vertical), reducing the per-pixel work from N² to 2N
+/// (horizontal then vertical), reducing the per-pixel work from N^2 to 2N
 /// multiply-accumulates. Otherwise, the standard 2D convolution is applied.
 ///
 /// Out-of-bounds neighbor coordinates are clamped to the nearest edge pixel.
@@ -1487,7 +1487,7 @@ mod tests {
             rgba: vec![100, 150, 200, 128],
         };
         let gray = super::grayscale(&image);
-        // BT.601: 0.299*100 + 0.587*150 + 0.114*200 = 29.9 + 88.05 + 22.8 = 140.75 → 141
+        // BT.601: 0.299*100 + 0.587*150 + 0.114*200 = 29.9 + 88.05 + 22.8 = 140.75 -> 141
         assert_eq!(gray.rgba[0], 141);
         assert_eq!(gray.rgba[1], 141);
         assert_eq!(gray.rgba[2], 141);
@@ -1502,9 +1502,9 @@ mod tests {
             rgba: vec![100, 150, 200, 128],
         };
         let result = sepia(&image);
-        // R: 0.393*100 + 0.769*150 + 0.189*200 = 39.3 + 115.35 + 37.8 = 192.45 → 192
-        // G: 0.349*100 + 0.686*150 + 0.168*200 = 34.9 + 102.9  + 33.6 = 171.4  → 171
-        // B: 0.272*100 + 0.534*150 + 0.131*200 = 27.2 + 80.1   + 26.2 = 133.5  → 134
+        // R: 0.393*100 + 0.769*150 + 0.189*200 = 39.3 + 115.35 + 37.8 = 192.45 -> 192
+        // G: 0.349*100 + 0.686*150 + 0.168*200 = 34.9 + 102.9  + 33.6 = 171.4  -> 171
+        // B: 0.272*100 + 0.534*150 + 0.131*200 = 27.2 + 80.1   + 26.2 = 133.5  -> 134
         assert_eq!(result.rgba[0], 192);
         assert_eq!(result.rgba[1], 171);
         assert_eq!(result.rgba[2], 134);
@@ -1520,9 +1520,9 @@ mod tests {
             rgba: vec![255, 255, 255, 255],
         };
         let result = sepia(&image);
-        // R: 1.351 * 255 = 344.5 → clamped to 255
-        // G: 1.203 * 255 = 306.8 → clamped to 255
-        // B: 0.937 * 255 = 238.9 → 239
+        // R: 1.351 * 255 = 344.5 -> clamped to 255
+        // G: 1.203 * 255 = 306.8 -> clamped to 255
+        // B: 0.937 * 255 = 238.9 -> 239
         assert_eq!(result.rgba[0], 255);
         assert_eq!(result.rgba[1], 255);
         assert_eq!(result.rgba[2], 239);
@@ -1564,14 +1564,14 @@ mod tests {
             width: 2,
             height: 1,
             rgba: vec![
-                100, 150, 200, 128, // pixel 0: 200+80=280 → clamped to 255
+                100, 150, 200, 128, // pixel 0: 200+80=280 -> clamped to 255
                 10, 20, 30, 255, // pixel 1: no clamping needed
             ],
         };
         let result = super::brightness(&image, 80);
         assert_eq!(result.rgba[0], 180); // 100+80
         assert_eq!(result.rgba[1], 230); // 150+80
-        assert_eq!(result.rgba[2], 255); // 200+80=280 → 255
+        assert_eq!(result.rgba[2], 255); // 200+80=280 -> 255
         assert_eq!(result.rgba[3], 128); // alpha unchanged
         assert_eq!(result.rgba[4], 90); // 10+80
         assert_eq!(result.rgba[5], 100); // 20+80
@@ -1587,7 +1587,7 @@ mod tests {
             rgba: vec![30, 100, 200, 64],
         };
         let result = super::brightness(&image, -50);
-        assert_eq!(result.rgba[0], 0); // 30-50=-20 → 0
+        assert_eq!(result.rgba[0], 0); // 30-50=-20 -> 0
         assert_eq!(result.rgba[1], 50); // 100-50
         assert_eq!(result.rgba[2], 150); // 200-50
         assert_eq!(result.rgba[3], 64); // alpha unchanged
@@ -1618,7 +1618,7 @@ mod tests {
             width: 2,
             height: 1,
             rgba: vec![
-                100, 128, 200, 255, // pixel 0: 100 < 128 → darker, 128 → same, 200 > 128 → brighter
+                100, 128, 200, 255, // pixel 0: 100 < 128 -> darker, 128 -> same, 200 > 128 -> brighter
                 0, 255, 64, 128, // pixel 1: extremes stay clamped
             ],
         };
@@ -1742,7 +1742,7 @@ mod tests {
 
     #[test]
     fn convolution_blur_reduces_contrast() {
-        // A 3x3 image with a bright center pixel — blur should reduce the center value.
+        // A 3x3 image with a bright center pixel - blur should reduce the center value.
         let image = DecodedImage {
             width: 3,
             height: 3,
@@ -1771,7 +1771,7 @@ mod tests {
         let result = apply_convolution(&image, &kernel);
         assert_eq!(result.rgba[0], 178); // 50+128
         assert_eq!(result.rgba[1], 228); // 100+128
-        assert_eq!(result.rgba[2], 255); // 200+128=328 → clamped to 255
+        assert_eq!(result.rgba[2], 255); // 200+128=328 -> clamped to 255
     }
 
     #[test]
@@ -1814,7 +1814,7 @@ mod tests {
             interpolation: RotationInterpolation::Bicubic,
             expand: false,
         };
-        assert_eq!(op.to_string(), "Rotate -12.5° (Bicubic, Crop)");
+        assert_eq!(op.to_string(), "Rotate -12.5 deg (Bicubic, Crop)");
     }
 
     #[test]
@@ -2126,7 +2126,7 @@ mod tests {
     fn blur_kernel_is_separable() {
         let kernel = ConvolutionFilter::Blur.kernel();
         let (col, row) = kernel.separable().expect("blur kernel should be separable");
-        // [1,2,1;2,4,2;1,2,1] = [1,2,1]^T × [1,2,1]
+        // [1,2,1;2,4,2;1,2,1] = [1,2,1]^T x [1,2,1]
         assert_eq!(col, vec![1, 2, 1]);
         assert_eq!(row, vec![1, 2, 1]);
     }
@@ -2159,7 +2159,7 @@ mod tests {
 
     #[test]
     fn gaussian_5x5_is_separable() {
-        // 5x5 Gaussian: [1,4,6,4,1]^T × [1,4,6,4,1], divisor=256
+        // 5x5 Gaussian: [1,4,6,4,1]^T x [1,4,6,4,1], divisor=256
         let row_vec = vec![1, 4, 6, 4, 1];
         let mut weights = Vec::with_capacity(25);
         for &r in &row_vec {
@@ -2362,7 +2362,7 @@ mod tests {
             let cur = pipeline.apply(&img);
             pipeline.push(ImageTransform::Brightness(1), Some(&cur));
         }
-        // Cost = 5, threshold = 10 — no checkpoint yet.
+        // Cost = 5, threshold = 10 - no checkpoint yet.
         assert!(pipeline.checkpoints.is_empty());
     }
 
@@ -2405,7 +2405,7 @@ mod tests {
     fn invertible_ops_do_not_trigger_checkpoint() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        // Push 50 invertible ops — none should create checkpoints since cost is 0.
+        // Push 50 invertible ops - none should create checkpoints since cost is 0.
         for _ in 0..50 {
             let cur = pipeline.apply(&img);
             pipeline.push(ImageTransform::MirrorHorizontal, Some(&cur));
@@ -2519,7 +2519,7 @@ mod tests {
         }
         assert!(!pipeline.checkpoints.is_empty());
 
-        // Remove op at index 0 — all checkpoints should be invalidated.
+        // Remove op at index 0 - all checkpoints should be invalidated.
         pipeline.remove(0);
         assert!(
             pipeline.checkpoints.is_empty(),

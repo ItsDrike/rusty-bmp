@@ -189,35 +189,37 @@ impl BmpViewerApp {
                         }
 
                         if let Some(pointer) = response.hover_pos()
-                            && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
-                                let icon = cursor_icon_for_crop_mode(mode);
-                                ui.ctx().set_cursor_icon(icon);
-                            }
+                            && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0)
+                        {
+                            let icon = cursor_icon_for_crop_mode(mode);
+                            ui.ctx().set_cursor_icon(icon);
+                        }
 
                         // Start interactive crop manipulation.
                         if response.drag_started()
                             && let Some(pointer) = response.interact_pointer_pos()
-                                && img_rect.contains(pointer)
-                                    && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
-                                        self.crop_drag_mode = Some(mode);
-                                        self.crop_drag_start_rect = Some((cx, cy, cw, ch));
-                                        self.crop_drag_start_image =
-                                            Some(screen_to_image(pointer, img_rect, effective_zoom));
-                                        crop_drag_captured = true;
-                                    }
+                            && img_rect.contains(pointer)
+                            && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0)
+                        {
+                            self.crop_drag_mode = Some(mode);
+                            self.crop_drag_start_rect = Some((cx, cy, cw, ch));
+                            self.crop_drag_start_image = Some(screen_to_image(pointer, img_rect, effective_zoom));
+                            crop_drag_captured = true;
+                        }
 
                         // Fallback capture: if drag_started wasn't latched this frame,
                         // attempt to start crop interaction while already dragging.
-                        if response.dragged() && self.crop_drag_mode.is_none()
+                        if response.dragged()
+                            && self.crop_drag_mode.is_none()
                             && let Some(pointer) = response.interact_pointer_pos()
-                                && img_rect.contains(pointer)
-                                    && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
-                                        self.crop_drag_mode = Some(mode);
-                                        self.crop_drag_start_rect = Some((cx, cy, cw, ch));
-                                        self.crop_drag_start_image =
-                                            Some(screen_to_image(pointer, img_rect, effective_zoom));
-                                        crop_drag_captured = true;
-                                    }
+                            && img_rect.contains(pointer)
+                            && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0)
+                        {
+                            self.crop_drag_mode = Some(mode);
+                            self.crop_drag_start_rect = Some((cx, cy, cw, ch));
+                            self.crop_drag_start_image = Some(screen_to_image(pointer, img_rect, effective_zoom));
+                            crop_drag_captured = true;
+                        }
 
                         // Apply ongoing drag delta.
                         if response.dragged()
@@ -226,15 +228,16 @@ impl BmpViewerApp {
                                 self.crop_drag_start_rect,
                                 self.crop_drag_start_image,
                                 response.interact_pointer_pos(),
-                            ) {
-                                crop_drag_captured = true;
-                                let cur = screen_to_image(pointer, img_rect, effective_zoom);
-                                let dx = (cur.x - start_pos.x).round() as i32;
-                                let dy = (cur.y - start_pos.y).round() as i32;
-                                let (nx, ny, nw, nh) =
-                                    dragged_crop_rect(mode, start_rect, dx, dy, image.width, image.height);
-                                self.set_crop_from_rect(nx, ny, nw, nh, image.width, image.height);
-                            }
+                            )
+                        {
+                            crop_drag_captured = true;
+                            let cur = screen_to_image(pointer, img_rect, effective_zoom);
+                            let dx = (cur.x - start_pos.x).round() as i32;
+                            let dy = (cur.y - start_pos.y).round() as i32;
+                            let (nx, ny, nw, nh) =
+                                dragged_crop_rect(mode, start_rect, dx, dy, image.width, image.height);
+                            self.set_crop_from_rect(nx, ny, nw, nh, image.width, image.height);
+                        }
 
                         // Finish drag.
                         if response.drag_stopped() {
@@ -259,46 +262,49 @@ impl BmpViewerApp {
                 self.hovered_pixel = None;
                 if effective_zoom >= MIN_PIXEL_SIZE
                     && let Some(pointer) = response.hover_pos()
-                        && img_rect.contains(pointer) {
-                            // Map screen position to image pixel coordinates.
-                            let rel = pointer - img_rect.min;
-                            let px = (rel.x / effective_zoom) as u32;
-                            let py = (rel.y / effective_zoom) as u32;
+                    && img_rect.contains(pointer)
+                {
+                    // Map screen position to image pixel coordinates.
+                    let rel = pointer - img_rect.min;
+                    let px = (rel.x / effective_zoom) as u32;
+                    let py = (rel.y / effective_zoom) as u32;
 
-                            if let Some(image) = &self.transformed_image
-                                && px < image.width && py < image.height {
-                                    let idx = ((py * image.width + px) * 4) as usize;
-                                    let rgba = [
-                                        image.rgba[idx],
-                                        image.rgba[idx + 1],
-                                        image.rgba[idx + 2],
-                                        image.rgba[idx + 3],
-                                    ];
-                                    self.hovered_pixel = Some((px, py, rgba));
+                    if let Some(image) = &self.transformed_image
+                        && px < image.width
+                        && py < image.height
+                    {
+                        let idx = ((py * image.width + px) * 4) as usize;
+                        let rgba = [
+                            image.rgba[idx],
+                            image.rgba[idx + 1],
+                            image.rgba[idx + 2],
+                            image.rgba[idx + 3],
+                        ];
+                        self.hovered_pixel = Some((px, py, rgba));
 
-                                    // Draw highlight outline around the hovered pixel.
-                                    let pixel_screen_x = img_rect.min.x + px as f32 * effective_zoom;
-                                    let pixel_screen_y = img_rect.min.y + py as f32 * effective_zoom;
-                                    let pixel_rect = egui::Rect::from_min_size(
-                                        egui::pos2(pixel_screen_x, pixel_screen_y),
-                                        egui::vec2(effective_zoom, effective_zoom),
-                                    );
-                                    // Use a contrasting outline: white with a black inner border
-                                    // so it's visible on any pixel color.
-                                    painter.rect_stroke(
-                                        pixel_rect.expand(1.0),
-                                        0.0,
-                                        egui::Stroke::new(1.0, egui::Color32::BLACK),
-                                        egui::epaint::StrokeKind::Outside,
-                                    );
-                                    painter.rect_stroke(
-                                        pixel_rect,
-                                        0.0,
-                                        egui::Stroke::new(1.0, egui::Color32::WHITE),
-                                        egui::epaint::StrokeKind::Outside,
-                                    );
-                                }
-                        }
+                        // Draw highlight outline around the hovered pixel.
+                        let pixel_screen_x = img_rect.min.x + px as f32 * effective_zoom;
+                        let pixel_screen_y = img_rect.min.y + py as f32 * effective_zoom;
+                        let pixel_rect = egui::Rect::from_min_size(
+                            egui::pos2(pixel_screen_x, pixel_screen_y),
+                            egui::vec2(effective_zoom, effective_zoom),
+                        );
+                        // Use a contrasting outline: white with a black inner border
+                        // so it's visible on any pixel color.
+                        painter.rect_stroke(
+                            pixel_rect.expand(1.0),
+                            0.0,
+                            egui::Stroke::new(1.0, egui::Color32::BLACK),
+                            egui::epaint::StrokeKind::Outside,
+                        );
+                        painter.rect_stroke(
+                            pixel_rect,
+                            0.0,
+                            egui::Stroke::new(1.0, egui::Color32::WHITE),
+                            egui::epaint::StrokeKind::Outside,
+                        );
+                    }
+                }
 
                 // Store effective zoom for the zoom bar (rendered before this panel).
                 self.last_effective_zoom = effective_zoom;
@@ -317,7 +323,7 @@ impl BmpViewerApp {
             ui.label("Use the Browse button or Ctrl+O to open a BMP file.");
             ui.label("You can also type a path into the text field above.");
 
-            // Drag & drop hint — but warn on Wayland where it doesn't work.
+            // Drag and drop hint, with a Wayland warning.
             let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
             let warn_color = egui::Color32::from_rgb(200, 170, 60);
             if on_wayland {
