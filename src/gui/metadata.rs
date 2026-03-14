@@ -71,11 +71,7 @@ fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
 }
 
 fn orientation_from_height(height: i32) -> &'static str {
-    if height < 0 {
-        "top-down"
-    } else {
-        "bottom-up"
-    }
+    if height < 0 { "top-down" } else { "bottom-up" }
 }
 
 #[expect(

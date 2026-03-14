@@ -1,12 +1,18 @@
-use std::{fs::File, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fs::File,
+    path::PathBuf,
+    sync::mpsc::{self, Receiver, TryRecvError},
+    time::Duration,
+};
 
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{decode_to_rgba, DecodedImage},
-        encode::{encode_rgba_to_bmp_ext, save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
+        decode::{DecodedImage, decode_to_rgba},
+        encode::{SaveFormat, SaveHeaderVersion, SourceMetadata, encode_rgba_to_bmp_ext, save_bmp_ext},
         steganography::{self, StegInfo},
-        transform::{apply_transform, ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode},
+        transform::{ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode, apply_transform},
     },
 };
 use eframe::egui;
@@ -213,6 +219,17 @@ pub(crate) struct SteganographyUiState {
     pub(crate) extracted: Option<Result<Vec<u8>, String>>,
 }
 
+struct PendingSaveTask {
+    rx: Receiver<SaveTaskResult>,
+}
+
+struct SaveTaskResult {
+    path: PathBuf,
+    format: SaveFormat,
+    header: SaveHeaderVersion,
+    result: Result<(), String>,
+}
+
 pub(crate) struct BmpViewerApp {
     pub(crate) path_input: String,
     /// UI feedback/status message shown in toolbar.
@@ -221,6 +238,7 @@ pub(crate) struct BmpViewerApp {
     pub(crate) viewport: ViewportState,
     pub(crate) transforms: TransformToolState,
     pub(crate) steganography: SteganographyUiState,
+    pending_save: Option<PendingSaveTask>,
 }
 
 impl Default for BmpViewerApp {
@@ -319,6 +337,7 @@ impl Default for BmpViewerApp {
                 text_input: String::new(),
                 extracted: None,
             },
+            pending_save: None,
         }
     }
 }
@@ -555,94 +574,58 @@ impl BmpViewerApp {
         Ok(round_payload == original_payload)
     }
 
-    /// Returns human-readable reasons why the selected save settings would
-    /// alter the currently displayed image, determined by an in-memory
-    /// encode+decode roundtrip.
-    fn save_roundtrip_difference_reasons(&self) -> Result<Vec<String>, String> {
+    /// Fast save-quality checks that avoid costly encode+decode roundtrips.
+    fn save_quality_warning_reasons(&self) -> Vec<String> {
         let Some(image) = self.document.transformed_image.as_ref() else {
-            return Ok(Vec::new());
+            return Vec::new();
         };
 
-        let encoded = encode_rgba_to_bmp_ext(
-            image,
-            self.document.save_format,
-            self.document.save_header_version,
-            self.document.source_metadata.as_ref(),
-        )
-        .map_err(|e| format!("failed to encode save-check roundtrip: {e}"))?;
-
-        let roundtrip = decode_to_rgba(&encoded).map_err(|e| format!("failed to decode save-check roundtrip: {e}"))?;
-
-        if roundtrip.width != image.width || roundtrip.height != image.height {
-            return Ok(vec![format!(
-                "Output dimensions change from {}x{} to {}x{}",
-                image.width, image.height, roundtrip.width, roundtrip.height
-            )]);
-        }
-
-        if roundtrip.rgba == image.rgba {
-            return Ok(Vec::new());
-        }
-
-        let mut changed_pixels = 0usize;
-        let mut rgb_changed_pixels = 0usize;
-        let mut alpha_changed_pixels = 0usize;
-        let mut had_transparency = false;
-        let mut transparent_pixels_lost = 0usize;
-
-        for (src, dst) in image.rgba.chunks_exact(4).zip(roundtrip.rgba.chunks_exact(4)) {
-            let src_transparent = src[3] < u8::MAX;
-            if src_transparent {
-                had_transparency = true;
-            }
-
-            let rgb_changed = src[0] != dst[0] || src[1] != dst[1] || src[2] != dst[2];
-            let alpha_changed = src[3] != dst[3];
-
-            if rgb_changed || alpha_changed {
-                changed_pixels += 1;
-            }
-            if rgb_changed {
-                rgb_changed_pixels += 1;
-            }
-            if alpha_changed {
-                alpha_changed_pixels += 1;
-            }
-            if src_transparent && dst[3] == u8::MAX {
-                transparent_pixels_lost += 1;
-            }
-        }
-
-        let total_pixels = (image.width as usize) * (image.height as usize);
+        let format = self.document.save_format;
+        let has_transparency = image.rgba.chunks_exact(4).any(|px| px[3] < u8::MAX);
         let mut reasons = Vec::new();
 
-        if had_transparency && transparent_pixels_lost > 0 {
-            reasons.push(format!(
-                "Transparency would be lost for {} pixels (selected format/header cannot fully preserve alpha)",
-                transparent_pixels_lost
-            ));
-        } else if alpha_changed_pixels > 0 {
-            reasons.push(format!("Alpha values would change on {} pixels", alpha_changed_pixels));
+        if has_transparency {
+            reasons.push("Selected format/header does not preserve alpha; transparency will be lost".to_owned());
         }
 
-        if rgb_changed_pixels > 0 {
-            reasons.push(format!(
-                "Color values would change on {} of {} pixels (likely quantization/compression)",
-                rgb_changed_pixels, total_pixels
-            ));
+        match format {
+            SaveFormat::Rgb1 => {
+                if unique_rgb_colors_exceed(image, 2) {
+                    reasons.push("Image has more than 2 colors and will be quantized to 1-bpp palette".to_owned());
+                }
+            }
+            SaveFormat::Rgb4 | SaveFormat::Rle4 => {
+                if unique_rgb_colors_exceed(image, 16) {
+                    reasons.push("Image has more than 16 colors and will be quantized to 4-bpp palette".to_owned());
+                }
+            }
+            SaveFormat::Rgb8 | SaveFormat::Rle8 => {
+                if unique_rgb_colors_exceed(image, 256) {
+                    reasons.push("Image has more than 256 colors and will be quantized to 8-bpp palette".to_owned());
+                }
+            }
+            SaveFormat::Rgb16 | SaveFormat::BitFields16Rgb555 => {
+                if !all_pixels_exact_in_5bit_grid(image) {
+                    reasons.push("RGB channels will be reduced to RGB555 precision".to_owned());
+                }
+            }
+            SaveFormat::BitFields16Rgb565 => {
+                if !all_pixels_exact_in_565_grid(image) {
+                    reasons.push("RGB channels will be reduced to RGB565 precision".to_owned());
+                }
+            }
+            SaveFormat::Rgb24 | SaveFormat::Rgb32 | SaveFormat::BitFields32 => {}
         }
 
-        if reasons.is_empty() && changed_pixels > 0 {
-            reasons.push(format!(
-                "Pixel data would change on {} of {} pixels",
-                changed_pixels, total_pixels
-            ));
-        }
-
-        Ok(reasons)
+        reasons
     }
 
     pub(crate) fn save_to_path(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        if self.pending_save.is_some() {
+            self.status = "A save operation is already in progress".to_owned();
+            return;
+        }
+
         if self.document.transformed_image.is_none() {
             self.status = "Nothing to save".to_owned();
             return;
@@ -669,12 +652,7 @@ impl BmpViewerApp {
             }
         }
 
-        match self.save_roundtrip_difference_reasons() {
-            Ok(mut diffs) => reasons.append(&mut diffs),
-            Err(err) => reasons.push(format!(
-                "Could not verify save roundtrip fidelity ({err}); output may differ from the current view"
-            )),
-        }
+        reasons.append(&mut self.save_quality_warning_reasons());
 
         if !reasons.is_empty() {
             self.steganography.save_confirm_pending = Some(path.to_path_buf());
@@ -689,37 +667,76 @@ impl BmpViewerApp {
     /// `save_to_path` when no steg is present, or after user confirms the
     /// steg-destroy dialog).
     pub(crate) fn do_save(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        if self.pending_save.is_some() {
+            self.status = "A save operation is already in progress".to_owned();
+            return;
+        }
+
         let Some(image) = self.document.transformed_image.as_ref() else {
             self.status = "Nothing to save".to_owned();
             return;
         };
 
-        match save_bmp_ext(
-            path,
-            image,
-            self.document.save_format,
-            self.document.save_header_version,
-            self.document.source_metadata.as_ref(),
-        ) {
+        let image = image.clone();
+        let source = self.document.source_metadata.clone();
+        let format = self.document.save_format;
+        let header = self.document.save_header_version;
+        let save_path = path.to_path_buf();
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = save_bmp_ext(&save_path, &image, format, header, source.as_ref()).map_err(|e| e.to_string());
+            let _ = tx.send(SaveTaskResult {
+                path: save_path,
+                format,
+                header,
+                result,
+            });
+        });
+
+        self.pending_save = Some(PendingSaveTask { rx });
+        self.steganography.save_confirm_pending = None;
+        self.steganography.save_confirm_reason = None;
+        self.status = format!("Saving {}...", path.display());
+        ctx.request_repaint();
+    }
+
+    fn poll_pending_save(&mut self, ctx: &egui::Context) {
+        let Some(task) = self.pending_save.as_mut() else {
+            return;
+        };
+
+        let outcome = match task.rx.try_recv() {
+            Ok(done) => Some(done),
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(33));
+                None
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.pending_save = None;
+                self.status = "Save failed: worker disconnected".to_owned();
+                None
+            }
+        };
+
+        let Some(done) = outcome else {
+            return;
+        };
+
+        self.pending_save = None;
+        self.steganography.save_confirm_pending = None;
+        self.steganography.save_confirm_reason = None;
+
+        match done.result {
             Ok(()) => {
-                self.steganography.save_confirm_pending = None;
-                self.steganography.save_confirm_reason = None;
-                let saved_path = path.to_path_buf();
-                self.path_input = saved_path.display().to_string();
-                self.document.loaded_path = Some(saved_path.clone());
-                self.status = format!(
-                    "Saved {} ({}, {})",
-                    saved_path.display(),
-                    self.document.save_format,
-                    self.document.save_header_version
-                );
+                self.path_input = done.path.display().to_string();
+                self.document.loaded_path = Some(done.path.clone());
+                self.status = format!("Saved {} ({}, {})", done.path.display(), done.format, done.header);
                 // Re-load from disk so metadata, original_image, and pipeline
                 // all reflect the file as it was actually written.
-                self.load_path(ctx, saved_path);
+                self.load_path(ctx, done.path);
             }
             Err(err) => {
-                self.steganography.save_confirm_pending = None;
-                self.steganography.save_confirm_reason = None;
                 self.status = format!("Save failed: {err}");
             }
         }
@@ -856,8 +873,49 @@ impl BmpViewerApp {
     }
 }
 
+fn unique_rgb_colors_exceed(image: &DecodedImage, limit: usize) -> bool {
+    let mut unique = HashSet::with_capacity(limit.saturating_add(1));
+    for px in image.rgba.chunks_exact(4) {
+        unique.insert([px[0], px[1], px[2]]);
+        if unique.len() > limit {
+            return true;
+        }
+    }
+    false
+}
+
+fn all_pixels_exact_in_5bit_grid(image: &DecodedImage) -> bool {
+    image.rgba.chunks_exact(4).all(|px| {
+        let r5 = (px[0] as u16 * 31 + 127) / 255;
+        let g5 = (px[1] as u16 * 31 + 127) / 255;
+        let b5 = (px[2] as u16 * 31 + 127) / 255;
+
+        let r8 = ((r5 * 255 + 15) / 31) as u8;
+        let g8 = ((g5 * 255 + 15) / 31) as u8;
+        let b8 = ((b5 * 255 + 15) / 31) as u8;
+
+        px[0] == r8 && px[1] == g8 && px[2] == b8
+    })
+}
+
+fn all_pixels_exact_in_565_grid(image: &DecodedImage) -> bool {
+    image.rgba.chunks_exact(4).all(|px| {
+        let r5 = (px[0] as u16 * 31 + 127) / 255;
+        let g6 = (px[1] as u16 * 63 + 127) / 255;
+        let b5 = (px[2] as u16 * 31 + 127) / 255;
+
+        let r8 = ((r5 * 255 + 15) / 31) as u8;
+        let g8 = ((g6 * 255 + 31) / 63) as u8;
+        let b8 = ((b5 * 255 + 15) / 31) as u8;
+
+        px[0] == r8 && px[1] == g8 && px[2] == b8
+    })
+}
+
 impl eframe::App for BmpViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_pending_save(ctx);
+
         // --- Global keyboard shortcuts ---
         let text_has_focus = ctx.memory(|m| m.focused().is_some());
         let kb = ctx.input(|i| {

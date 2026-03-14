@@ -19,11 +19,7 @@ impl BmpViewerApp {
                 // Scale that fits the entire image within the panel (aspect-ratio preserving).
                 let fit_scale = {
                     let s = (avail.x / tex_size.x).min(avail.y / tex_size.y);
-                    if s.is_finite() && s > 0.0 {
-                        s
-                    } else {
-                        1.0
-                    }
+                    if s.is_finite() && s > 0.0 { s } else { 1.0 }
                 };
 
                 // Resolve the effective zoom: 0.0 means "fit to panel".
