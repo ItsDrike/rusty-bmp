@@ -149,18 +149,16 @@ impl BmpViewerApp {
 
         // Handle extract: do it here while we still have &mut self, then store
         // the result in steg_extracted.
-        if do_extract {
-            if let (Some(img), Some(info)) = (&self.transformed_image, &self.steg_detected) {
+        if do_extract
+            && let (Some(img), Some(info)) = (&self.transformed_image, &self.steg_detected) {
                 let result = steganography::extract(img, info).map_err(|e| e.to_string());
                 self.steg_extracted = Some(result);
             }
-        }
 
-        if do_remove {
-            if let Some(info) = self.steg_detected.as_ref() {
+        if do_remove
+            && let Some(info) = self.steg_detected.as_ref() {
                 return Some(ImageTransform::RemoveSteganography { config: info.config });
             }
-        }
 
         None
     }

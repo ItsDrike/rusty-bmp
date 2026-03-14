@@ -158,14 +158,14 @@ impl SaveFormat {
         }
 
         // Additional check: does the config use alpha, and does this format drop alpha?
-        if let Some(config) = steg_config {
-            if config.a_bits > 0 {
-                // Rgb24 has no alpha byte at all.
-                // Rgb32 stores the 4th byte as a reserved zero — alpha data is lost.
-                // BitFields32 uses standard RGB888 masks with no alpha mask.
-                // None of the three safe base formats preserve alpha channel data.
-                return false;
-            }
+        if let Some(config) = steg_config
+            && config.a_bits > 0
+        {
+            // Rgb24 has no alpha byte at all.
+            // Rgb32 stores the 4th byte as a reserved zero — alpha data is lost.
+            // BitFields32 uses standard RGB888 masks with no alpha mask.
+            // None of the three safe base formats preserve alpha channel data.
+            return false;
         }
 
         true
@@ -371,6 +371,7 @@ fn quantize_image(image: &DecodedImage, max_colors: usize) -> (Vec<RgbQuad>, Vec
 // Build BitmapInfoData skeleton
 // ---------------------------------------------------------------------------
 
+#[expect(clippy::too_many_arguments, reason = "BMP assembly needs explicit per-field inputs")]
 fn build_bmp_info(
     width: u32,
     height: u32,
@@ -506,6 +507,10 @@ fn default_zeroed_gamma() -> GammaTriple {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "BMP V4 assembly needs explicit per-field inputs"
+)]
 fn build_bmp_v4(
     width: u32,
     height: u32,
@@ -556,6 +561,10 @@ fn build_bmp_v4(
 // Build BitmapV5Data skeleton
 // ---------------------------------------------------------------------------
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "BMP V5 assembly needs explicit per-field inputs"
+)]
 fn build_bmp_v5(
     width: u32,
     height: u32,

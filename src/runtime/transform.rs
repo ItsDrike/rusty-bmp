@@ -86,9 +86,9 @@ impl Kernel {
         }
 
         // Verify: col[y] * row[x] must equal weights[y * n + x] for all y, x.
-        for y in 0..n {
-            for x in 0..n {
-                if col_vec[y] * row_vec[x] != self.weights[y * n + x] {
+        for (y, col) in col_vec.iter().enumerate() {
+            for (x, row) in row_vec.iter().enumerate() {
+                if *col * *row != self.weights[y * n + x] {
                     return None;
                 }
             }
@@ -957,7 +957,7 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
             ];
 
             let mut out = [0_u8; 4];
-            for c in 0..4 {
+            for (c, out_chan) in out.iter_mut().enumerate() {
                 let mut sum = 0.0f32;
                 for (j, &w_y) in wy.iter().enumerate() {
                     let sy = (y0 + j as i32 - 1).clamp(0, h - 1);
@@ -966,7 +966,7 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
                         sum += pixel_at(image, sx, sy)[c] as f32 * w_x * w_y;
                     }
                 }
-                out[c] = sum.round().clamp(0.0, 255.0) as u8;
+                *out_chan = sum.round().clamp(0.0, 255.0) as u8;
             }
             out
         }
@@ -1231,10 +1231,9 @@ fn apply_convolution_separable(
             let mut sum_g: i32 = 0;
             let mut sum_b: i32 = 0;
 
-            for k in 0..kernel.size {
+            for (k, &weight) in row_vec.iter().enumerate().take(kernel.size) {
                 let sx = (x as isize + k as isize - half).clamp(0, w as isize - 1) as usize;
                 let src = (y * w + sx) * 4;
-                let weight = row_vec[k];
 
                 sum_r += image.rgba[src] as i32 * weight;
                 sum_g += image.rgba[src + 1] as i32 * weight;
@@ -1258,10 +1257,9 @@ fn apply_convolution_separable(
             let mut sum_g: i32 = 0;
             let mut sum_b: i32 = 0;
 
-            for k in 0..kernel.size {
+            for (k, &weight) in col_vec.iter().enumerate().take(kernel.size) {
                 let sy = (y as isize + k as isize - half).clamp(0, h as isize - 1) as usize;
                 let src = sy * row_channels + x * 3;
-                let weight = col_vec[k];
 
                 sum_r += tmp[src] * weight;
                 sum_g += tmp[src + 1] * weight;
@@ -1333,7 +1331,6 @@ mod tests {
         TranslateMode, CHECKPOINT_COST_THRESHOLD,
     };
     use crate::runtime::decode::DecodedImage;
-    use crate::runtime::steganography::{self, StegConfig};
 
     #[test]
     fn invert_colors_flips_rgb_and_keeps_alpha() {
@@ -1755,7 +1752,7 @@ mod tests {
             ],
         };
         let result = apply_convolution(&image, &ConvolutionFilter::Blur.kernel());
-        let center = (1 * 3 + 1) * 4;
+        let center = (3 + 1) * 4;
         // Center was 255, should now be 255*4/16 = 63 (only center weight 4 hits the bright pixel).
         assert_eq!(result.rgba[center], 63);
         assert_eq!(result.rgba[center + 1], 63);

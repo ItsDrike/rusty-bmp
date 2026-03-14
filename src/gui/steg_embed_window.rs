@@ -109,7 +109,7 @@ impl BmpViewerApp {
                 let valid = !no_channels
                     && capacity_bytes.is_some()
                     && !self.steg_text_input.is_empty()
-                    && capacity_bytes.map_or(false, |c| payload_bytes <= c);
+                    && capacity_bytes.is_some_and(|c| payload_bytes <= c);
 
                 ui.horizontal(|ui| {
                     if ui

@@ -188,47 +188,40 @@ impl BmpViewerApp {
                             );
                         }
 
-                        if let Some(pointer) = response.hover_pos() {
-                            if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
+                        if let Some(pointer) = response.hover_pos()
+                            && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
                                 let icon = cursor_icon_for_crop_mode(mode);
                                 ui.ctx().set_cursor_icon(icon);
                             }
-                        }
 
                         // Start interactive crop manipulation.
-                        if response.drag_started() {
-                            if let Some(pointer) = response.interact_pointer_pos() {
-                                if img_rect.contains(pointer) {
-                                    if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
+                        if response.drag_started()
+                            && let Some(pointer) = response.interact_pointer_pos()
+                                && img_rect.contains(pointer)
+                                    && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
                                         self.crop_drag_mode = Some(mode);
                                         self.crop_drag_start_rect = Some((cx, cy, cw, ch));
                                         self.crop_drag_start_image =
                                             Some(screen_to_image(pointer, img_rect, effective_zoom));
                                         crop_drag_captured = true;
                                     }
-                                }
-                            }
-                        }
 
                         // Fallback capture: if drag_started wasn't latched this frame,
                         // attempt to start crop interaction while already dragging.
-                        if response.dragged() && self.crop_drag_mode.is_none() {
-                            if let Some(pointer) = response.interact_pointer_pos() {
-                                if img_rect.contains(pointer) {
-                                    if let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
+                        if response.dragged() && self.crop_drag_mode.is_none()
+                            && let Some(pointer) = response.interact_pointer_pos()
+                                && img_rect.contains(pointer)
+                                    && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0) {
                                         self.crop_drag_mode = Some(mode);
                                         self.crop_drag_start_rect = Some((cx, cy, cw, ch));
                                         self.crop_drag_start_image =
                                             Some(screen_to_image(pointer, img_rect, effective_zoom));
                                         crop_drag_captured = true;
                                     }
-                                }
-                            }
-                        }
 
                         // Apply ongoing drag delta.
-                        if response.dragged() {
-                            if let (Some(mode), Some(start_rect), Some(start_pos), Some(pointer)) = (
+                        if response.dragged()
+                            && let (Some(mode), Some(start_rect), Some(start_pos), Some(pointer)) = (
                                 self.crop_drag_mode,
                                 self.crop_drag_start_rect,
                                 self.crop_drag_start_image,
@@ -242,7 +235,6 @@ impl BmpViewerApp {
                                     dragged_crop_rect(mode, start_rect, dx, dy, image.width, image.height);
                                 self.set_crop_from_rect(nx, ny, nw, nh, image.width, image.height);
                             }
-                        }
 
                         // Finish drag.
                         if response.drag_stopped() {
@@ -265,16 +257,16 @@ impl BmpViewerApp {
                 // --- Pixel inspector (only at high zoom where pixels are visible) ---
                 const MIN_PIXEL_SIZE: f32 = 8.0;
                 self.hovered_pixel = None;
-                if effective_zoom >= MIN_PIXEL_SIZE {
-                    if let Some(pointer) = response.hover_pos() {
-                        if img_rect.contains(pointer) {
+                if effective_zoom >= MIN_PIXEL_SIZE
+                    && let Some(pointer) = response.hover_pos()
+                        && img_rect.contains(pointer) {
                             // Map screen position to image pixel coordinates.
                             let rel = pointer - img_rect.min;
                             let px = (rel.x / effective_zoom) as u32;
                             let py = (rel.y / effective_zoom) as u32;
 
-                            if let Some(image) = &self.transformed_image {
-                                if px < image.width && py < image.height {
+                            if let Some(image) = &self.transformed_image
+                                && px < image.width && py < image.height {
                                     let idx = ((py * image.width + px) * 4) as usize;
                                     let rgba = [
                                         image.rgba[idx],
@@ -306,10 +298,7 @@ impl BmpViewerApp {
                                         egui::epaint::StrokeKind::Outside,
                                     );
                                 }
-                            }
                         }
-                    }
-                }
 
                 // Store effective zoom for the zoom bar (rendered before this panel).
                 self.last_effective_zoom = effective_zoom;

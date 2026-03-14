@@ -149,7 +149,7 @@ impl BmpViewerApp {
         if apply {
             self.validate_custom_kernel()
                 .ok()
-                .map(|k| ImageTransform::CustomKernel(k))
+                .map(ImageTransform::CustomKernel)
         } else {
             None
         }

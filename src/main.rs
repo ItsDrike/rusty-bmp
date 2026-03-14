@@ -338,15 +338,14 @@ impl BmpViewerApp {
                 self.steg_overwrite_warned = false;
             }
 
-            if let ImageTransform::EmbedSteganography { config, payload } = &op {
-                if let Err(err) = steganography::embed(current, *config, payload) {
+            if let ImageTransform::EmbedSteganography { config, payload } = &op
+                && let Err(err) = steganography::embed(current, *config, payload) {
                     self.status = format!(
                         "Embedding aborted: payload no longer fits current image ({}). The steganography transform was not applied.",
                         err
                     );
                     return;
                 }
-            }
 
             let next = apply_transform(current, &op);
             self.pipeline.push(op, Some(current));
@@ -407,17 +406,16 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn redo_transform(&mut self, ctx: &egui::Context) {
-        if let Some(op) = self.redo_stack.pop() {
-            if let Some(current) = self.transformed_image.as_ref() {
-                if let ImageTransform::EmbedSteganography { config, payload } = &op {
-                    if let Err(err) = steganography::embed(current, *config, payload) {
+        if let Some(op) = self.redo_stack.pop()
+            && let Some(current) = self.transformed_image.as_ref() {
+                if let ImageTransform::EmbedSteganography { config, payload } = &op
+                    && let Err(err) = steganography::embed(current, *config, payload) {
                         self.status = format!(
                             "Redo skipped: steganography payload no longer fits after prior edits ({}). The embed step was dropped.",
                             err
                         );
                         return;
                     }
-                }
 
                 let next = apply_transform(current, &op);
                 self.pipeline.push(op, Some(current));
@@ -425,7 +423,6 @@ impl BmpViewerApp {
                 self.steg_extracted = None;
                 self.set_display_image(ctx, next, "transformed".to_owned());
             }
-        }
     }
 
     /// Returns whether the currently selected save settings preserve the exact
@@ -699,12 +696,11 @@ impl eframe::App for BmpViewerApp {
         // implemented on Wayland as of winit 0.30.x (see winit#1881). It works
         // fine on X11 and will work on Wayland once winit merges DnD support.
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
-        if let Some(file) = dropped_files.first() {
-            if let Some(path) = &file.path {
+        if let Some(file) = dropped_files.first()
+            && let Some(path) = &file.path {
                 self.path_input = path.display().to_string();
                 self.load_path(ctx, path.clone());
             }
-        }
 
         // --- Panels (order matters: top/side/bottom claim space before central) ---
         self.show_toolbar(ctx);
