@@ -3,10 +3,10 @@ use std::{fs::File, path::PathBuf};
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{decode_to_rgba, DecodedImage},
-        encode::{encode_rgba_to_bmp_ext, save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
+        decode::{DecodedImage, decode_to_rgba},
+        encode::{SaveFormat, SaveHeaderVersion, SourceMetadata, encode_rgba_to_bmp_ext, save_bmp_ext},
         steganography::{self, StegInfo},
-        transform::{apply_transform, ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode},
+        transform::{ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode, apply_transform},
     },
 };
 use eframe::egui;
@@ -240,6 +240,23 @@ impl Default for BmpViewerApp {
 }
 
 impl BmpViewerApp {
+    fn validate_embed_fits_current_image(
+        &self,
+        current: &DecodedImage,
+        op: &ImageTransform,
+    ) -> Result<(), steganography::StegError> {
+        let ImageTransform::EmbedSteganography { config, payload } = op else {
+            return Ok(());
+        };
+        steganography::embed(current, *config, payload).map(|_| ())
+    }
+
+    fn update_transformed_image(&mut self, ctx: &egui::Context, image: DecodedImage) {
+        self.steg_detected = bmp::runtime::steganography::detect(&image);
+        self.steg_extracted = None;
+        self.set_display_image(ctx, image, "transformed".to_owned());
+    }
+
     pub(crate) fn render_palette_grid(&self, ui: &mut egui::Ui) {
         if self.palette_colors.is_empty() {
             return;
@@ -338,21 +355,18 @@ impl BmpViewerApp {
                 self.steg_overwrite_warned = false;
             }
 
-            if let ImageTransform::EmbedSteganography { config, payload } = &op
-                && let Err(err) = steganography::embed(current, *config, payload) {
-                    self.status = format!(
-                        "Embedding aborted: payload no longer fits current image ({}). The steganography transform was not applied.",
-                        err
-                    );
-                    return;
-                }
+            if let Err(err) = self.validate_embed_fits_current_image(current, &op) {
+                self.status = format!(
+                    "Embedding aborted: payload no longer fits current image ({}). The steganography transform was not applied.",
+                    err
+                );
+                return;
+            }
 
             let next = apply_transform(current, &op);
             self.pipeline.push(op, Some(current));
             self.redo_stack.clear();
-            self.steg_detected = bmp::runtime::steganography::detect(&next);
-            self.steg_extracted = None;
-            self.set_display_image(ctx, next, "transformed".to_owned());
+            self.update_transformed_image(ctx, next);
         }
     }
 
@@ -383,9 +397,7 @@ impl BmpViewerApp {
                 // O(1) path: apply the inverse transform.
                 if let Some(current) = self.transformed_image.as_ref() {
                     let result = apply_transform(current, &inv);
-                    self.steg_detected = bmp::runtime::steganography::detect(&result);
-                    self.steg_extracted = None;
-                    self.set_display_image(ctx, result, "transformed".to_owned());
+                    self.update_transformed_image(ctx, result);
                 }
             } else {
                 self.redo_stack.push(op);
@@ -395,9 +407,7 @@ impl BmpViewerApp {
                     if !warnings.is_empty() {
                         self.status = warnings.join(" ");
                     }
-                    self.steg_detected = bmp::runtime::steganography::detect(&result);
-                    self.steg_extracted = None;
-                    self.set_display_image(ctx, result, "transformed".to_owned());
+                    self.update_transformed_image(ctx, result);
                 }
             }
             // After undo, reset the overwrite warning so it can fire again if needed.
@@ -407,22 +417,20 @@ impl BmpViewerApp {
 
     pub(crate) fn redo_transform(&mut self, ctx: &egui::Context) {
         if let Some(op) = self.redo_stack.pop()
-            && let Some(current) = self.transformed_image.as_ref() {
-                if let ImageTransform::EmbedSteganography { config, payload } = &op
-                    && let Err(err) = steganography::embed(current, *config, payload) {
-                        self.status = format!(
-                            "Redo skipped: steganography payload no longer fits after prior edits ({}). The embed step was dropped.",
-                            err
-                        );
-                        return;
-                    }
-
-                let next = apply_transform(current, &op);
-                self.pipeline.push(op, Some(current));
-                self.steg_detected = bmp::runtime::steganography::detect(&next);
-                self.steg_extracted = None;
-                self.set_display_image(ctx, next, "transformed".to_owned());
+            && let Some(current) = self.transformed_image.as_ref()
+        {
+            if let Err(err) = self.validate_embed_fits_current_image(current, &op) {
+                self.status = format!(
+                    "Redo skipped: steganography payload no longer fits after prior edits ({}). The embed step was dropped.",
+                    err
+                );
+                return;
             }
+
+            let next = apply_transform(current, &op);
+            self.pipeline.push(op, Some(current));
+            self.update_transformed_image(ctx, next);
+        }
     }
 
     /// Returns whether the currently selected save settings preserve the exact
@@ -697,10 +705,11 @@ impl eframe::App for BmpViewerApp {
         // fine on X11 and will work on Wayland once winit merges DnD support.
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
         if let Some(file) = dropped_files.first()
-            && let Some(path) = &file.path {
-                self.path_input = path.display().to_string();
-                self.load_path(ctx, path.clone());
-            }
+            && let Some(path) = &file.path
+        {
+            self.path_input = path.display().to_string();
+            self.load_path(ctx, path.clone());
+        }
 
         // --- Panels (order matters: top/side/bottom claim space before central) ---
         self.show_toolbar(ctx);

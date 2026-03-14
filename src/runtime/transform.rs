@@ -112,11 +112,7 @@ impl Kernel {
     /// - 5x5 non-separable kernel -> `N^2 = 25`
     pub fn replay_cost(&self) -> u32 {
         let n = self.size as u32;
-        if self.separable().is_some() {
-            2 * n
-        } else {
-            n * n
-        }
+        if self.separable().is_some() { 2 * n } else { n * n }
     }
 }
 
@@ -1326,9 +1322,9 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_convolution, apply_transform, crop_image, invert_colors, resize_image, rotate_any, sepia, skew_image,
-        translate_image, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation, TransformPipeline,
-        TranslateMode, CHECKPOINT_COST_THRESHOLD,
+        CHECKPOINT_COST_THRESHOLD, ConvolutionFilter, ImageTransform, Kernel, RotationInterpolation,
+        TransformPipeline, TranslateMode, apply_convolution, apply_transform, crop_image, invert_colors, resize_image,
+        rotate_any, sepia, skew_image, translate_image,
     };
     use crate::runtime::decode::DecodedImage;
 

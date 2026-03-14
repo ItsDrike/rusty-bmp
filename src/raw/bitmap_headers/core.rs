@@ -3,9 +3,9 @@ use std::io::{self, Read, Write};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::raw::{
+    DibVariant,
     error::{StructuralError, ValidationError},
     types::BitsPerPixel,
-    DibVariant,
 };
 
 /// The BMP CORE (12 byte) header.

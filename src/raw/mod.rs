@@ -11,8 +11,8 @@ pub use error::{
 };
 pub use file_header::FileHeader;
 pub use types::{
-    BitsPerPixel, CieXyz, CieXyzTriple, ColorMaskChannel, ColorMasks, ColorSpaceType, Compression, FixedPoint16Dot16,
-    FixedPoint2Dot30, GammaTriple, RgbMasks, RgbQuad, RgbTriple, RgbaMasks,
+    BitsPerPixel, CieXyz, CieXyzTriple, ColorMaskChannel, ColorMasks, ColorSpaceType, Compression, FixedPoint2Dot30,
+    FixedPoint16Dot16, GammaTriple, RgbMasks, RgbQuad, RgbTriple, RgbaMasks,
 };
 
 // Private helpers

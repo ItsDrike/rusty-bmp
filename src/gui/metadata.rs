@@ -70,59 +70,78 @@ fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
     }
 }
 
+fn orientation_from_height(height: i32) -> &'static str {
+    if height < 0 { "top-down" } else { "bottom-up" }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "metadata output keeps explicit fields for readability"
+)]
+fn write_common_section(
+    out: &mut String,
+    variant: &str,
+    width: u32,
+    height: u32,
+    orientation: &str,
+    bits_per_pixel: u16,
+    compression_line: &str,
+    header_image_size: Option<u32>,
+    pixel_data_size: usize,
+    palette_entries: usize,
+    file_size: u32,
+    pixel_data_offset: u32,
+) {
+    let _ = writeln!(out, "Variant: {variant}");
+    let _ = writeln!(out, "Size: {width} x {height} px");
+    let _ = writeln!(out, "Orientation: {orientation}");
+    let _ = writeln!(out, "Bits per pixel: {bits_per_pixel}");
+    let _ = writeln!(out, "Compression: {compression_line}");
+    if let Some(image_size) = header_image_size {
+        let _ = writeln!(out, "Header image_size: {}", format_bytes(image_size as u64));
+    }
+    let _ = writeln!(out, "Pixel data size: {}", format_bytes(pixel_data_size as u64));
+    let _ = writeln!(out, "Palette entries: {palette_entries}");
+    let _ = writeln!(out, "File size: {}", format_bytes(file_size as u64));
+    let _ = writeln!(out, "Pixel data offset: {}", format_bytes(pixel_data_offset as u64));
+}
+
 pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSections {
     let mut out = String::new();
     match bmp {
         Bmp::Core(data) => {
-            let _ = writeln!(&mut out, "Variant: CORE (BITMAPCOREHEADER)");
-            let _ = writeln!(
+            write_common_section(
                 &mut out,
-                "Size: {} x {} px",
-                data.bmp_header.width, data.bmp_header.height
-            );
-            let _ = writeln!(&mut out, "Orientation: bottom-up");
-            let _ = writeln!(&mut out, "Bits per pixel: {}", data.bmp_header.bit_count.bit_count());
-            let _ = writeln!(&mut out, "Compression: BI_RGB (implicit)");
-            let _ = writeln!(&mut out, "Palette entries: {}", data.color_table.len());
-            let _ = writeln!(
-                &mut out,
-                "Pixel data size: {}",
-                format_bytes(data.bitmap_array.len() as u64)
-            );
-            let _ = writeln!(
-                &mut out,
-                "File size: {}",
-                format_bytes(data.file_header.file_size as u64)
-            );
-            let _ = writeln!(
-                &mut out,
-                "Pixel data offset: {}",
-                format_bytes(data.file_header.pixel_data_offset as u64)
+                "CORE (BITMAPCOREHEADER)",
+                data.bmp_header.width as u32,
+                data.bmp_header.height as u32,
+                "bottom-up",
+                data.bmp_header.bit_count.bit_count(),
+                "BI_RGB (implicit)",
+                None,
+                data.bitmap_array.len(),
+                data.color_table.len(),
+                data.file_header.file_size,
+                data.file_header.pixel_data_offset,
             );
         }
         Bmp::Info(data) => {
             let h = data.bmp_header;
-            let _ = writeln!(&mut out, "Variant: INFO (BITMAPINFOHEADER)");
-            let _ = writeln!(&mut out, "Size: {} x {} px", decoded.width, decoded.height);
-            let _ = writeln!(
+            let compression_line = format!("{} ({:?})", compression_name(h.compression), h.compression);
+            write_common_section(
                 &mut out,
-                "Orientation: {}",
-                if h.height < 0 { "top-down" } else { "bottom-up" }
+                "INFO (BITMAPINFOHEADER)",
+                decoded.width,
+                decoded.height,
+                orientation_from_height(h.height),
+                h.bit_count.bit_count(),
+                &compression_line,
+                Some(h.image_size),
+                data.bitmap_array.len(),
+                data.color_table.len(),
+                data.file_header.file_size,
+                data.file_header.pixel_data_offset,
             );
-            let _ = writeln!(&mut out, "Bits per pixel: {}", h.bit_count.bit_count());
-            let _ = writeln!(
-                &mut out,
-                "Compression: {} ({:?})",
-                compression_name(h.compression),
-                h.compression
-            );
-            let _ = writeln!(&mut out, "Header image_size: {}", format_bytes(h.image_size as u64));
-            let _ = writeln!(
-                &mut out,
-                "Pixel data size: {}",
-                format_bytes(data.bitmap_array.len() as u64)
-            );
-            let _ = writeln!(&mut out, "Palette entries: {}", data.color_table.len());
             if let Some(masks) = data.color_masks {
                 let _ = writeln!(
                     &mut out,
@@ -130,82 +149,50 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
                     masks.red_mask, masks.green_mask, masks.blue_mask
                 );
             }
-            let _ = writeln!(
-                &mut out,
-                "File size: {}",
-                format_bytes(data.file_header.file_size as u64)
-            );
-            let _ = writeln!(
-                &mut out,
-                "Pixel data offset: {}",
-                format_bytes(data.file_header.pixel_data_offset as u64)
-            );
         }
         Bmp::V4(data) => {
             let h = data.bmp_header.info;
             let m = data.bmp_header.masks;
-            let _ = writeln!(&mut out, "Variant: V4 (BITMAPV4HEADER)");
-            let _ = writeln!(&mut out, "Size: {} x {} px", decoded.width, decoded.height);
-            let _ = writeln!(
+            let compression_line = format!("{} ({:?})", compression_name(h.compression), h.compression);
+            write_common_section(
                 &mut out,
-                "Orientation: {}",
-                if h.height < 0 { "top-down" } else { "bottom-up" }
+                "V4 (BITMAPV4HEADER)",
+                decoded.width,
+                decoded.height,
+                orientation_from_height(h.height),
+                h.bit_count.bit_count(),
+                &compression_line,
+                Some(h.image_size),
+                data.bitmap_array.len(),
+                data.color_table.len(),
+                data.file_header.file_size,
+                data.file_header.pixel_data_offset,
             );
-            let _ = writeln!(&mut out, "Bits per pixel: {}", h.bit_count.bit_count());
-            let _ = writeln!(
-                &mut out,
-                "Compression: {} ({:?})",
-                compression_name(h.compression),
-                h.compression
-            );
-            let _ = writeln!(&mut out, "Header image_size: {}", format_bytes(h.image_size as u64));
-            let _ = writeln!(
-                &mut out,
-                "Pixel data size: {}",
-                format_bytes(data.bitmap_array.len() as u64)
-            );
-            let _ = writeln!(&mut out, "Palette entries: {}", data.color_table.len());
             let _ = writeln!(
                 &mut out,
                 "Bit masks: R={:#010X} G={:#010X} B={:#010X} A={:#010X}",
                 m.red_mask, m.green_mask, m.blue_mask, m.alpha_mask
             );
             let _ = writeln!(&mut out, "Color space: {:?}", data.bmp_header.cs_type);
-            let _ = writeln!(
-                &mut out,
-                "File size: {}",
-                format_bytes(data.file_header.file_size as u64)
-            );
-            let _ = writeln!(
-                &mut out,
-                "Pixel data offset: {}",
-                format_bytes(data.file_header.pixel_data_offset as u64)
-            );
         }
         Bmp::V5(data) => {
             let h = data.bmp_header.v4.info;
             let m = data.bmp_header.v4.masks;
-            let _ = writeln!(&mut out, "Variant: V5 (BITMAPV5HEADER)");
-            let _ = writeln!(&mut out, "Size: {} x {} px", decoded.width, decoded.height);
-            let _ = writeln!(
+            let compression_line = format!("{} ({:?})", compression_name(h.compression), h.compression);
+            write_common_section(
                 &mut out,
-                "Orientation: {}",
-                if h.height < 0 { "top-down" } else { "bottom-up" }
+                "V5 (BITMAPV5HEADER)",
+                decoded.width,
+                decoded.height,
+                orientation_from_height(h.height),
+                h.bit_count.bit_count(),
+                &compression_line,
+                Some(h.image_size),
+                data.bitmap_array.len(),
+                data.color_table.len(),
+                data.file_header.file_size,
+                data.file_header.pixel_data_offset,
             );
-            let _ = writeln!(&mut out, "Bits per pixel: {}", h.bit_count.bit_count());
-            let _ = writeln!(
-                &mut out,
-                "Compression: {} ({:?})",
-                compression_name(h.compression),
-                h.compression
-            );
-            let _ = writeln!(&mut out, "Header image_size: {}", format_bytes(h.image_size as u64));
-            let _ = writeln!(
-                &mut out,
-                "Pixel data size: {}",
-                format_bytes(data.bitmap_array.len() as u64)
-            );
-            let _ = writeln!(&mut out, "Palette entries: {}", data.color_table.len());
             let _ = writeln!(
                 &mut out,
                 "Bit masks: R={:#010X} G={:#010X} B={:#010X} A={:#010X}",
@@ -227,16 +214,6 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
                 &mut out,
                 "ICC profile bytes loaded: {}",
                 format_bytes(data.icc_profile.as_ref().map_or(0, Vec::len) as u64)
-            );
-            let _ = writeln!(
-                &mut out,
-                "File size: {}",
-                format_bytes(data.file_header.file_size as u64)
-            );
-            let _ = writeln!(
-                &mut out,
-                "Pixel data offset: {}",
-                format_bytes(data.file_header.pixel_data_offset as u64)
             );
         }
     }

@@ -109,8 +109,10 @@ impl BmpViewerApp {
 
                 // --- Crop preview overlay + interactive visual editing ---
                 if self.crop_open {
-                    if let Some(image) = &self.transformed_image {
-                        let (cx, cy, cw, ch) = self.crop_rect_for_image(image.width, image.height);
+                    if let Some((image_width, image_height)) =
+                        self.transformed_image.as_ref().map(|image| (image.width, image.height))
+                    {
+                        let (cx, cy, cw, ch) = self.crop_rect_for_image(image_width, image_height);
                         let crop_min = egui::pos2(
                             img_rect.min.x + cx as f32 * effective_zoom,
                             img_rect.min.y + cy as f32 * effective_zoom,
@@ -198,26 +200,34 @@ impl BmpViewerApp {
                         // Start interactive crop manipulation.
                         if response.drag_started()
                             && let Some(pointer) = response.interact_pointer_pos()
-                            && img_rect.contains(pointer)
-                            && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0)
+                            && start_crop_drag(
+                                self,
+                                pointer,
+                                img_rect,
+                                crop_rect,
+                                hs + 4.0,
+                                effective_zoom,
+                                (cx, cy, cw, ch),
+                            )
                         {
-                            self.crop_drag_mode = Some(mode);
-                            self.crop_drag_start_rect = Some((cx, cy, cw, ch));
-                            self.crop_drag_start_image = Some(screen_to_image(pointer, img_rect, effective_zoom));
                             crop_drag_captured = true;
                         }
 
-                        // Fallback capture: if drag_started wasn't latched this frame,
+                        // Fallback capture: if drag_started was not latched this frame,
                         // attempt to start crop interaction while already dragging.
                         if response.dragged()
                             && self.crop_drag_mode.is_none()
                             && let Some(pointer) = response.interact_pointer_pos()
-                            && img_rect.contains(pointer)
-                            && let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, hs + 4.0)
+                            && start_crop_drag(
+                                self,
+                                pointer,
+                                img_rect,
+                                crop_rect,
+                                hs + 4.0,
+                                effective_zoom,
+                                (cx, cy, cw, ch),
+                            )
                         {
-                            self.crop_drag_mode = Some(mode);
-                            self.crop_drag_start_rect = Some((cx, cy, cw, ch));
-                            self.crop_drag_start_image = Some(screen_to_image(pointer, img_rect, effective_zoom));
                             crop_drag_captured = true;
                         }
 
@@ -235,8 +245,8 @@ impl BmpViewerApp {
                             let dx = (cur.x - start_pos.x).round() as i32;
                             let dy = (cur.y - start_pos.y).round() as i32;
                             let (nx, ny, nw, nh) =
-                                dragged_crop_rect(mode, start_rect, dx, dy, image.width, image.height);
-                            self.set_crop_from_rect(nx, ny, nw, nh, image.width, image.height);
+                                dragged_crop_rect(mode, start_rect, dx, dy, image_width, image_height);
+                            self.set_crop_from_rect(nx, ny, nw, nh, image_width, image_height);
                         }
 
                         // Finish drag.
@@ -328,7 +338,7 @@ impl BmpViewerApp {
             let warn_color = egui::Color32::from_rgb(200, 170, 60);
             if on_wayland {
                 ui.add_space(12.0);
-                ui.colored_label(warn_color, "⚠ Drag & drop is not available under Wayland.");
+                ui.colored_label(warn_color, "Warning: Drag and drop is not available under Wayland.");
                 let exe = std::env::current_exe()
                     .ok()
                     .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -349,6 +359,28 @@ impl BmpViewerApp {
 
 fn screen_to_image(pointer: egui::Pos2, img_rect: egui::Rect, zoom: f32) -> egui::Pos2 {
     egui::pos2((pointer.x - img_rect.min.x) / zoom, (pointer.y - img_rect.min.y) / zoom)
+}
+
+fn start_crop_drag(
+    app: &mut BmpViewerApp,
+    pointer: egui::Pos2,
+    img_rect: egui::Rect,
+    crop_rect: egui::Rect,
+    pick_radius: f32,
+    zoom: f32,
+    start_rect: (u32, u32, u32, u32),
+) -> bool {
+    if !img_rect.contains(pointer) {
+        return false;
+    }
+    let Some(mode) = pick_crop_drag_mode(pointer, crop_rect, pick_radius) else {
+        return false;
+    };
+
+    app.crop_drag_mode = Some(mode);
+    app.crop_drag_start_rect = Some(start_rect);
+    app.crop_drag_start_image = Some(screen_to_image(pointer, img_rect, zoom));
+    true
 }
 
 fn crop_handle_rects(crop_rect: egui::Rect, half_size: f32) -> [(CropDragMode, egui::Rect); 8] {

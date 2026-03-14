@@ -3,10 +3,10 @@ use std::{fs::File, io::Cursor};
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{decode_to_rgba, DecodedImage},
+        decode::{DecodedImage, decode_to_rgba},
         encode::{
-            encode_rgba_to_bmp, encode_rgba_to_bmp_ext, encode_rgba_to_bmp_with_format, SaveFormat, SaveHeaderVersion,
-            SourceMetadata,
+            SaveFormat, SaveHeaderVersion, SourceMetadata, encode_rgba_to_bmp, encode_rgba_to_bmp_ext,
+            encode_rgba_to_bmp_with_format,
         },
     },
 };
