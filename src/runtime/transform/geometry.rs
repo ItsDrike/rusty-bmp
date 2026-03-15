@@ -12,6 +12,8 @@ use rayon::prelude::*;
 
 use crate::runtime::decode::DecodedImage;
 
+use super::model::{ImageTransform, TransformError, TransformOp};
+
 /// Interpolation methods used when sampling pixels at non-integer coordinates.
 ///
 /// These are primarily used during geometric transformations such as
@@ -89,562 +91,659 @@ impl fmt::Display for TranslateMode {
     }
 }
 
-/// Applies a shear (skew) transformation to the image.
-///
-/// The skew transformation is defined by the matrix:
-///
-/// ```text
-/// [ 1  kx ]
-/// [ ky 1  ]
-/// ```
-///
-/// which maps source coordinates `(x, y)` to:
-///
-/// ```text
-/// x' = x + kx * y
-/// y' = ky * x + y
-/// ```
-///
-/// The implementation performs **inverse mapping** from destination pixels
-/// back into the source image to avoid holes in the output.
-///
-/// # Parameters
-///
-/// - `kx` - horizontal shear factor.
-/// - `ky` - vertical shear factor.
-/// - `interpolation` - sampling method used when source coordinates are
-///   non-integer.
-/// - `expand` - if `true`, the output image is enlarged so the entire
-///   transformed image fits; otherwise the original dimensions are preserved.
-///
-/// # Behavior
-///
-/// * The transformation is centered around the image center.
-/// * Pixels sampled outside the source image return transparent black.
-/// * If the shear matrix is not invertible (`1 - kx * ky ~= 0`), the
-///   original image is returned unchanged.
-#[must_use]
-pub fn skew_image(
-    image: &DecodedImage,
-    kx: f32,
-    ky: f32,
-    interpolation: RotationInterpolation,
-    expand: bool,
-) -> DecodedImage {
-    let src_w = image.width;
-    let src_h = image.height;
-    if src_w == 0 || src_h == 0 {
-        return image.clone();
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RotateLeft;
 
-    let kx = f64::from(kx);
-    let ky = f64::from(ky);
-
-    let det = 1.0_f64 - kx * ky;
-    if det.abs() < 1e-6 {
-        return image.clone();
-    }
-
-    let src_cx = (f64::from(image.width) - 1.0) * 0.5;
-    let src_cy = (f64::from(image.height) - 1.0) * 0.5;
-
-    let (dst_w, dst_h) = if expand {
-        let corners = [
-            (-src_cx, -src_cy),
-            (src_cx, -src_cy),
-            (src_cx, src_cy),
-            (-src_cx, src_cy),
-        ];
-
-        let mut min_x = f64::INFINITY;
-        let mut max_x = f64::NEG_INFINITY;
-        let mut min_y = f64::INFINITY;
-        let mut max_y = f64::NEG_INFINITY;
-
-        for (x, y) in corners {
-            let dx = x + kx * y;
-            let dy = ky * x + y;
-            min_x = min_x.min(dx);
-            max_x = max_x.max(dx);
-            min_y = min_y.min(dy);
-            max_y = max_y.max(dy);
-        }
-
-        let w_f = (max_x - min_x).ceil().max(0.0);
-        let h_f = (max_y - min_y).ceil().max(0.0);
-
-        if !w_f.is_finite() || !h_f.is_finite() {
-            return image.clone();
-        }
-        if w_f > f64::from(u32::MAX - 1) || h_f > f64::from(u32::MAX - 1) {
-            return image.clone();
-        }
-
-        let w_u32 = w_f as u32 + 1;
-        let h_u32 = h_f as u32 + 1;
-
-        (w_u32.max(1), h_u32.max(1))
-    } else {
-        (src_w, src_h)
-    };
-
-    let dst_cx = (f64::from(dst_w) - 1.0) * 0.5;
-    let dst_cy = (f64::from(dst_h) - 1.0) * 0.5;
-
-    let row_bytes = (dst_w * 4) as usize;
-    let len = row_bytes * dst_h as usize;
-    if row_bytes == 0 || len == 0 {
-        return image.clone();
-    }
-    let mut out = vec![0_u8; len];
-    let inv = 1.0 / det;
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy_i, row)| {
-        let dy_i = dy_i as u32;
-        let y = f64::from(dy_i) - dst_cy;
-        for dx_i in 0..dst_w {
-            let x = f64::from(dx_i) - dst_cx;
-            let sx_rel = (x - kx * y) * inv;
-            let sy_rel = (-ky * x + y) * inv;
-
-            let sx = sx_rel + src_cx;
-            let sy = sy_rel + src_cy;
-            let dst = dx_i as usize * 4;
-            let sample = sample_rgba(image, sx as f32, sy as f32, interpolation);
-            row[dst..dst + 4].copy_from_slice(&sample);
-        }
-    });
-
-    DecodedImage {
-        width: dst_w,
-        height: dst_h,
-        rgba: out,
+impl fmt::Display for RotateLeft {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Rotate Left")
     }
 }
 
-/// Translates (shifts) the image by the specified offset.
-///
-/// Each pixel `(x, y)` moves to `(x + dx, y + dy)`.
-///
-/// # Parameters
-///
-/// - `dx` - horizontal shift in pixels (positive moves right).
-/// - `dy` - vertical shift in pixels (positive moves down).
-/// - `mode` - determines how the output image bounds are handled.
-/// - `fill` - RGBA color used for newly exposed pixels.
-///
-/// # Modes
-///
-/// * `TranslateMode::Crop`
-///   - Output dimensions remain unchanged.
-///   - Pixels shifted outside the image are discarded.
-///
-/// * `TranslateMode::Expand`
-///   - The output canvas grows to fit the translated image.
-///   - Newly created areas are filled with `fill`.
-///
-/// # Behavior
-///
-/// Pixels outside the source image are filled with `fill`.
-#[must_use]
-pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMode, fill: [u8; 4]) -> DecodedImage {
-    let src_w = image.width as usize;
-    let src_h = image.height as usize;
-    if src_w == 0 || src_h == 0 {
-        return image.clone();
-    }
+impl TransformOp for RotateLeft {
+    /// Rotates the image 90 deg counterclockwise.
+    ///
+    /// The output image dimensions become:
+    ///
+    /// ```text
+    /// width'  = height
+    /// height' = width
+    /// ```
+    ///
+    /// Pixel mapping:
+    ///
+    /// ```text
+    /// (x, y) -> (y, width - 1 - x)
+    /// ```
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let src_w = image.width as usize;
+        let src_h = image.height as usize;
+        let dst_w = src_h;
+        let dst_h = src_w;
+        let row_bytes = dst_w * 4;
+        let mut out = vec![0_u8; dst_w * dst_h * 4];
 
-    let (dst_w, dst_h, x_base, y_base) = match mode {
-        TranslateMode::Crop => (src_w, src_h, 0_i32, 0_i32),
-        TranslateMode::Expand => (
-            src_w + dx.unsigned_abs() as usize,
-            src_h + dy.unsigned_abs() as usize,
-            (-dx).max(0),
-            (-dy).max(0),
-        ),
-    };
-
-    let row_bytes = dst_w * 4;
-    let mut out = vec![0_u8; row_bytes * dst_h];
-    out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&fill));
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
-        for dst_x in 0..dst_w {
-            let src_x = dst_x as i32 - dx - x_base;
-            let src_y = dst_y as i32 - dy - y_base;
-
-            if src_x >= 0 && src_x < src_w as i32 && src_y >= 0 && src_y < src_h as i32 {
-                let src = (src_y as usize * src_w + src_x as usize) * 4;
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
+            let x = src_w - 1 - dst_y;
+            for dst_x in 0..dst_w {
+                let y = dst_x;
+                let src = (y * src_w + x) * 4;
                 let dst = dst_x * 4;
                 row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
             }
+        });
+
+        Ok(DecodedImage {
+            width: dst_w as u32,
+            height: dst_h as u32,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        Some(RotateRight.into())
+    }
+
+    fn replay_cost(&self) -> u32 {
+        0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RotateRight;
+
+impl fmt::Display for RotateRight {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Rotate Right")
+    }
+}
+
+impl TransformOp for RotateRight {
+    /// Rotates the image 90 deg clockwise.
+    ///
+    /// The output image dimensions become:
+    ///
+    /// ```text
+    /// width'  = height
+    /// height' = width
+    /// ```
+    ///
+    /// Pixel mapping:
+    ///
+    /// ```text
+    /// (x, y) -> (height - 1 - y, x)
+    /// ```
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let src_w = image.width as usize;
+        let src_h = image.height as usize;
+        let dst_w = src_h;
+        let dst_h = src_w;
+        let row_bytes = dst_w * 4;
+        let mut out = vec![0_u8; dst_w * dst_h * 4];
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
+            let x = dst_y;
+            for dst_x in 0..dst_w {
+                let y = src_h - 1 - dst_x;
+                let src = (y * src_w + x) * 4;
+                let dst = dst_x * 4;
+                row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+            }
+        });
+
+        Ok(DecodedImage {
+            width: dst_w as u32,
+            height: dst_h as u32,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        Some(RotateLeft.into())
+    }
+
+    fn replay_cost(&self) -> u32 {
+        0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RotateAny {
+    pub angle_tenths: i16,
+    pub interpolation: RotationInterpolation,
+    pub expand: bool,
+}
+
+impl fmt::Display for RotateAny {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let angle = f32::from(self.angle_tenths) / 10.0;
+        let mode = if self.expand { "Expand" } else { "Crop" };
+        write!(f, "Rotate {angle:+.1} deg ({}, {mode})", self.interpolation)
+    }
+}
+
+impl TransformOp for RotateAny {
+    /// Rotates the image by an arbitrary angle.
+    ///
+    /// The rotation is performed around the image center using inverse
+    /// coordinate mapping.
+    ///
+    /// If the angle is approximately a multiple of 90 deg, this operation
+    /// dispatches to the specialized fast rotations.
+    ///
+    /// Pixels outside the source image are filled with transparent black.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let angle_degrees = f32::from(self.angle_tenths) / 10.0;
+        let src_w = image.width as usize;
+        let src_h = image.height as usize;
+        if src_w == 0 || src_h == 0 {
+            return Ok(image.clone());
         }
-    });
 
-    DecodedImage {
-        width: dst_w as u32,
-        height: dst_h as u32,
-        rgba: out,
-    }
-}
-
-/// Extracts a rectangular region from the image.
-///
-/// The rectangle begins at `(x, y)` with the specified `width` and `height`.
-///
-/// # Behavior
-///
-/// * The crop region is clamped to the source image bounds.
-/// * The output dimensions are guaranteed to be at least `1x1`.
-/// * If the crop region covers the entire image, the original image
-///   is returned unchanged.
-///
-/// # Coordinates
-///
-/// `(x, y)` refers to the **top-left corner** of the crop region.
-#[must_use]
-pub fn crop_image(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32) -> DecodedImage {
-    let src_w = image.width;
-    let src_h = image.height;
-    if src_w == 0 || src_h == 0 {
-        return image.clone();
-    }
-
-    let x0 = x.min(src_w.saturating_sub(1));
-    let y0 = y.min(src_h.saturating_sub(1));
-    let max_w = src_w - x0;
-    let max_h = src_h - y0;
-    let out_w = width.max(1).min(max_w);
-    let out_h = height.max(1).min(max_h);
-
-    if x0 == 0 && y0 == 0 && out_w == src_w && out_h == src_h {
-        return image.clone();
-    }
-
-    let dst_width = out_w as usize;
-    let dst_height = out_h as usize;
-    let src_w_usize = src_w as usize;
-    let row_bytes = dst_width * 4;
-    let mut out = vec![0_u8; row_bytes * dst_height];
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
-        let sy = y0 as usize + dy;
-        let src = (sy * src_w_usize + x0 as usize) * 4;
-        row.copy_from_slice(&image.rgba[src..src + row_bytes]);
-    });
-
-    DecodedImage {
-        width: out_w,
-        height: out_h,
-        rgba: out,
-    }
-}
-
-/// Resizes the image to the specified dimensions.
-///
-/// Pixel values are sampled from the source image using the chosen
-/// interpolation method.
-///
-/// # Parameters
-///
-/// - `out_width`, `out_height` - desired output dimensions.
-/// - `interpolation` - sampling method used to compute pixel values.
-///
-/// # Interpolation methods
-///
-/// * `Nearest` - fastest but produces blocky artifacts.
-/// * `Bilinear` - smooth interpolation using a 2x2 neighborhood.
-/// * `Bicubic` - higher-quality interpolation using a 4x4 neighborhood.
-///
-/// # Behavior
-///
-/// * Resampling uses **center-based coordinate mapping** to minimize
-///   scaling artifacts.
-/// * If the requested size matches the source size, the original image
-///   is returned unchanged.
-#[must_use]
-pub fn resize_image(
-    image: &DecodedImage,
-    out_width: u32,
-    out_height: u32,
-    interpolation: RotationInterpolation,
-) -> DecodedImage {
-    let src_w = image.width;
-    let src_h = image.height;
-    let dst_w = out_width.max(1);
-    let dst_h = out_height.max(1);
-
-    if src_w == 0 || src_h == 0 {
-        let row_bytes = (dst_w as usize) * 4;
-        let len = row_bytes * dst_h as usize;
-        return DecodedImage {
-            width: dst_w,
-            height: dst_h,
-            rgba: vec![0; len],
-        };
-    }
-
-    if src_w == dst_w && src_h == dst_h {
-        return image.clone();
-    }
-
-    let row_bytes = (dst_w as usize) * 4;
-    let len = row_bytes * dst_h as usize;
-    let mut out = vec![0_u8; len];
-
-    let sx_scale = src_w as f32 / dst_w as f32;
-    let sy_scale = src_h as f32 / dst_h as f32;
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
-        let sy = (dy as f32 + 0.5) * sy_scale - 0.5;
-        for dx in 0..dst_w {
-            let sx = (dx as f32 + 0.5) * sx_scale - 0.5;
-            let dst = dx as usize * 4;
-            let px = sample_rgba(image, sx, sy, interpolation);
-            row[dst..dst + 4].copy_from_slice(&px);
-        }
-    });
-
-    DecodedImage {
-        width: dst_w,
-        height: dst_h,
-        rgba: out,
-    }
-}
-
-/// Rotates the image 90 deg counterclockwise.
-///
-/// The output image dimensions become:
-///
-/// ```text
-/// width'  = height
-/// height' = width
-/// ```
-///
-/// Pixel mapping:
-///
-/// ```text
-/// (x, y) -> (y, width - 1 - x)
-/// ```
-#[must_use]
-pub fn rotate_left(image: &DecodedImage) -> DecodedImage {
-    let src_w = image.width as usize;
-    let src_h = image.height as usize;
-    let dst_w = src_h;
-    let dst_h = src_w;
-    let row_bytes = dst_w * 4;
-    let mut out = vec![0_u8; dst_w * dst_h * 4];
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
-        let x = src_w - 1 - dst_y;
-        for dst_x in 0..dst_w {
-            let y = dst_x;
-            let src = (y * src_w + x) * 4;
-            let dst = dst_x * 4;
-            row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
-        }
-    });
-
-    DecodedImage {
-        width: dst_w as u32,
-        height: dst_h as u32,
-        rgba: out,
-    }
-}
-
-/// Rotates the image 90 deg clockwise.
-///
-/// The output image dimensions become:
-///
-/// ```text
-/// width'  = height
-/// height' = width
-/// ```
-///
-/// Pixel mapping:
-///
-/// ```text
-/// (x, y) -> (height - 1 - y, x)
-/// ```
-#[must_use]
-pub fn rotate_right(image: &DecodedImage) -> DecodedImage {
-    let src_w = image.width as usize;
-    let src_h = image.height as usize;
-    let dst_w = src_h;
-    let dst_h = src_w;
-    let row_bytes = dst_w * 4;
-    let mut out = vec![0_u8; dst_w * dst_h * 4];
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
-        let x = dst_y;
-        for dst_x in 0..dst_w {
-            let y = src_h - 1 - dst_x;
-            let src = (y * src_w + x) * 4;
-            let dst = dst_x * 4;
-            row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
-        }
-    });
-
-    DecodedImage {
-        width: dst_w as u32,
-        height: dst_h as u32,
-        rgba: out,
-    }
-}
-
-/// Mirrors the image horizontally (left <-> right).
-///
-/// Each row of pixels is reversed so that the pixel at `(x, y)` moves to
-/// `(width - 1 - x, y)`.
-///
-/// The image dimensions remain unchanged and the alpha channel is preserved.
-#[must_use]
-pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
-    let w = image.width as usize;
-    let h = image.height as usize;
-    let row_bytes = w * 4;
-    let mut out = vec![0_u8; w * h * 4];
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
-        for x in 0..w {
-            let src = (y * w + x) * 4;
-            let dst_x = w - 1 - x;
-            let dst = dst_x * 4;
-            row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
-        }
-    });
-
-    DecodedImage {
-        width: image.width,
-        height: image.height,
-        rgba: out,
-    }
-}
-
-/// Mirrors the image vertically (top <-> bottom).
-///
-/// Entire rows are swapped so that the row at `y` moves to
-/// `height - 1 - y`.
-///
-/// This operation does not modify pixel values and preserves the alpha channel.
-#[must_use]
-pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
-    let w = image.width as usize;
-    let h = image.height as usize;
-    let row_bytes = w * 4;
-    let mut out = vec![0_u8; w * h * 4];
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
-        let src_y = h - 1 - y;
-        let src = src_y * row_bytes;
-        row.copy_from_slice(&image.rgba[src..src + row_bytes]);
-    });
-
-    DecodedImage {
-        width: image.width,
-        height: image.height,
-        rgba: out,
-    }
-}
-
-/// Rotates the image by an arbitrary angle.
-///
-/// The rotation is performed around the image center using inverse
-/// coordinate mapping.
-///
-/// # Parameters
-///
-/// - `angle_degrees` - rotation angle in degrees (counterclockwise).
-/// - `interpolation` - sampling method used when sampling fractional
-///   coordinates.
-/// - `expand` - if `true`, the output image grows to fully contain the
-///   rotated image.
-///
-/// # Optimization
-///
-/// If the angle is approximately a multiple of 90 deg, the function
-/// automatically dispatches to the specialized fast rotations
-/// (`rotate_left` / `rotate_right`).
-///
-/// # Behavior
-///
-/// Pixels outside the source image are filled with transparent black.
-#[must_use]
-pub fn rotate_any(
-    image: &DecodedImage,
-    angle_degrees: f32,
-    interpolation: RotationInterpolation,
-    expand: bool,
-) -> DecodedImage {
-    let src_w = image.width as usize;
-    let src_h = image.height as usize;
-    if src_w == 0 || src_h == 0 {
-        return image.clone();
-    }
-
-    if expand || src_w == src_h {
-        let turns = (angle_degrees / 90.0).round() as i32;
-        let snapped = turns as f32 * 90.0;
-        if (angle_degrees - snapped).abs() < 1e-4 {
-            match turns.rem_euclid(4) {
-                0 => return image.clone(),
-                1 => return rotate_left(image),
-                2 => return rotate_left(&rotate_left(image)),
-                3 => return rotate_right(image),
-                _ => unreachable!(),
+        if self.expand || src_w == src_h {
+            let turns = (angle_degrees / 90.0).round() as i32;
+            let snapped = turns as f32 * 90.0;
+            if (angle_degrees - snapped).abs() < 1e-4 {
+                return match turns.rem_euclid(4) {
+                    0 => Ok(image.clone()),
+                    1 => RotateLeft.apply(image),
+                    2 => {
+                        let once = RotateLeft.apply(image)?;
+                        RotateLeft.apply(&once)
+                    }
+                    3 => RotateRight.apply(image),
+                    _ => unreachable!(),
+                };
             }
         }
+
+        let angle = angle_degrees.to_radians();
+        let cos = angle.cos();
+        let sin = angle.sin();
+
+        let src_cx = (src_w as f32 - 1.0) * 0.5;
+        let src_cy = (src_h as f32 - 1.0) * 0.5;
+
+        let (dst_w, dst_h) = if self.expand {
+            let abs_cos = cos.abs();
+            let abs_sin = sin.abs();
+            let w_f = src_w as f32 * abs_cos + src_h as f32 * abs_sin;
+            let h_f = src_w as f32 * abs_sin + src_h as f32 * abs_cos;
+            let w = if (w_f - w_f.round()).abs() < 1e-4 {
+                w_f.round() as usize
+            } else {
+                w_f.ceil() as usize
+            };
+            let h = if (h_f - h_f.round()).abs() < 1e-4 {
+                h_f.round() as usize
+            } else {
+                h_f.ceil() as usize
+            };
+            (w.max(1), h.max(1))
+        } else {
+            (src_w, src_h)
+        };
+
+        let dst_cx = (dst_w as f32 - 1.0) * 0.5;
+        let dst_cy = (dst_h as f32 - 1.0) * 0.5;
+        let row_bytes = dst_w * 4;
+        let mut out = vec![0_u8; dst_w * dst_h * 4];
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
+            let y = dy as f32 - dst_cy;
+            for dx in 0..dst_w {
+                let x = dx as f32 - dst_cx;
+                let sx = x * cos + y * sin + src_cx;
+                let sy = -x * sin + y * cos + src_cy;
+
+                let dst = dx * 4;
+                let sample = sample_rgba(image, sx, sy, self.interpolation);
+                row[dst..dst + 4].copy_from_slice(&sample);
+            }
+        });
+
+        Ok(DecodedImage {
+            width: dst_w as u32,
+            height: dst_h as u32,
+            rgba: out,
+        })
     }
 
-    let angle = angle_degrees.to_radians();
-    let cos = angle.cos();
-    let sin = angle.sin();
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
 
-    let src_cx = (src_w as f32 - 1.0) * 0.5;
-    let src_cy = (src_h as f32 - 1.0) * 0.5;
-
-    let (dst_w, dst_h) = if expand {
-        let abs_cos = cos.abs();
-        let abs_sin = sin.abs();
-        let w_f = src_w as f32 * abs_cos + src_h as f32 * abs_sin;
-        let h_f = src_w as f32 * abs_sin + src_h as f32 * abs_cos;
-        let w = if (w_f - w_f.round()).abs() < 1e-4 {
-            w_f.round() as usize
-        } else {
-            w_f.ceil() as usize
-        };
-        let h = if (h_f - h_f.round()).abs() < 1e-4 {
-            h_f.round() as usize
-        } else {
-            h_f.ceil() as usize
-        };
-        (w.max(1), h.max(1))
-    } else {
-        (src_w, src_h)
-    };
-
-    let dst_cx = (dst_w as f32 - 1.0) * 0.5;
-    let dst_cy = (dst_h as f32 - 1.0) * 0.5;
-    let row_bytes = dst_w * 4;
-    let mut out = vec![0_u8; dst_w * dst_h * 4];
-
-    out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
-        let y = dy as f32 - dst_cy;
-        for dx in 0..dst_w {
-            let x = dx as f32 - dst_cx;
-            let sx = x * cos + y * sin + src_cx;
-            let sy = -x * sin + y * cos + src_cy;
-
-            let dst = dx * 4;
-            let sample = sample_rgba(image, sx, sy, interpolation);
-            row[dst..dst + 4].copy_from_slice(&sample);
+    fn replay_cost(&self) -> u32 {
+        match self.interpolation {
+            RotationInterpolation::Nearest => 3,
+            RotationInterpolation::Bilinear => 5,
+            RotationInterpolation::Bicubic => 8,
         }
-    });
+    }
+}
 
-    DecodedImage {
-        width: dst_w as u32,
-        height: dst_h as u32,
-        rgba: out,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Resize {
+    pub width: u32,
+    pub height: u32,
+    pub interpolation: RotationInterpolation,
+}
+
+impl fmt::Display for Resize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Resize to {}x{} ({})", self.width, self.height, self.interpolation)
+    }
+}
+
+impl TransformOp for Resize {
+    /// Resizes the image to the configured dimensions.
+    ///
+    /// Resampling uses center-based coordinate mapping and the selected
+    /// interpolation method.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let src_w = image.width;
+        let src_h = image.height;
+        let dst_w = self.width.max(1);
+        let dst_h = self.height.max(1);
+
+        if src_w == 0 || src_h == 0 {
+            let row_bytes = (dst_w as usize) * 4;
+            let len = row_bytes * dst_h as usize;
+            return Ok(DecodedImage {
+                width: dst_w,
+                height: dst_h,
+                rgba: vec![0; len],
+            });
+        }
+
+        if src_w == dst_w && src_h == dst_h {
+            return Ok(image.clone());
+        }
+
+        let row_bytes = (dst_w as usize) * 4;
+        let len = row_bytes * dst_h as usize;
+        let mut out = vec![0_u8; len];
+
+        let sx_scale = src_w as f32 / dst_w as f32;
+        let sy_scale = src_h as f32 / dst_h as f32;
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
+            let sy = (dy as f32 + 0.5) * sy_scale - 0.5;
+            for dx in 0..dst_w {
+                let sx = (dx as f32 + 0.5) * sx_scale - 0.5;
+                let dst = dx as usize * 4;
+                let px = sample_rgba(image, sx, sy, self.interpolation);
+                row[dst..dst + 4].copy_from_slice(&px);
+            }
+        });
+
+        Ok(DecodedImage {
+            width: dst_w,
+            height: dst_h,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        match self.interpolation {
+            RotationInterpolation::Nearest => 2,
+            RotationInterpolation::Bilinear => 4,
+            RotationInterpolation::Bicubic => 7,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Skew {
+    pub x_milli: i16,
+    pub y_milli: i16,
+    pub interpolation: RotationInterpolation,
+    pub expand: bool,
+}
+
+impl fmt::Display for Skew {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kx = f32::from(self.x_milli) / 1000.0;
+        let ky = f32::from(self.y_milli) / 1000.0;
+        let mode = if self.expand { "Expand" } else { "Crop" };
+        write!(f, "Skew x={kx:+.3}, y={ky:+.3} ({}, {mode})", self.interpolation)
+    }
+}
+
+impl TransformOp for Skew {
+    /// Applies a shear (skew) transformation to the image.
+    ///
+    /// The transformation is centered around the image center and uses inverse
+    /// mapping, with optional canvas expansion.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let src_w = image.width;
+        let src_h = image.height;
+        if src_w == 0 || src_h == 0 {
+            return Ok(image.clone());
+        }
+
+        let kx = f64::from(self.x_milli) / 1000.0;
+        let ky = f64::from(self.y_milli) / 1000.0;
+
+        let det = 1.0_f64 - kx * ky;
+        if det.abs() < 1e-6 {
+            return Ok(image.clone());
+        }
+
+        let src_cx = (f64::from(image.width) - 1.0) * 0.5;
+        let src_cy = (f64::from(image.height) - 1.0) * 0.5;
+
+        let (dst_w, dst_h) = if self.expand {
+            let corners = [
+                (-src_cx, -src_cy),
+                (src_cx, -src_cy),
+                (src_cx, src_cy),
+                (-src_cx, src_cy),
+            ];
+
+            let mut min_x = f64::INFINITY;
+            let mut max_x = f64::NEG_INFINITY;
+            let mut min_y = f64::INFINITY;
+            let mut max_y = f64::NEG_INFINITY;
+
+            for (x, y) in corners {
+                let dx = x + kx * y;
+                let dy = ky * x + y;
+                min_x = min_x.min(dx);
+                max_x = max_x.max(dx);
+                min_y = min_y.min(dy);
+                max_y = max_y.max(dy);
+            }
+
+            let w_f = (max_x - min_x).ceil().max(0.0);
+            let h_f = (max_y - min_y).ceil().max(0.0);
+
+            if !w_f.is_finite() || !h_f.is_finite() {
+                return Ok(image.clone());
+            }
+            if w_f > f64::from(u32::MAX - 1) || h_f > f64::from(u32::MAX - 1) {
+                return Ok(image.clone());
+            }
+
+            let w_u32 = w_f as u32 + 1;
+            let h_u32 = h_f as u32 + 1;
+
+            (w_u32.max(1), h_u32.max(1))
+        } else {
+            (src_w, src_h)
+        };
+
+        let dst_cx = (f64::from(dst_w) - 1.0) * 0.5;
+        let dst_cy = (f64::from(dst_h) - 1.0) * 0.5;
+
+        let row_bytes = (dst_w * 4) as usize;
+        let len = row_bytes * dst_h as usize;
+        if row_bytes == 0 || len == 0 {
+            return Ok(image.clone());
+        }
+        let mut out = vec![0_u8; len];
+        let inv = 1.0 / det;
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy_i, row)| {
+            let dy_i = dy_i as u32;
+            let y = f64::from(dy_i) - dst_cy;
+            for dx_i in 0..dst_w {
+                let x = f64::from(dx_i) - dst_cx;
+                let sx_rel = (x - kx * y) * inv;
+                let sy_rel = (-ky * x + y) * inv;
+
+                let sx = sx_rel + src_cx;
+                let sy = sy_rel + src_cy;
+                let dst = dx_i as usize * 4;
+                let sample = sample_rgba(image, sx as f32, sy as f32, self.interpolation);
+                row[dst..dst + 4].copy_from_slice(&sample);
+            }
+        });
+
+        Ok(DecodedImage {
+            width: dst_w,
+            height: dst_h,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        match self.interpolation {
+            RotationInterpolation::Nearest => 3,
+            RotationInterpolation::Bilinear => 5,
+            RotationInterpolation::Bicubic => 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Translate {
+    pub dx: i32,
+    pub dy: i32,
+    pub mode: TranslateMode,
+    pub fill: [u8; 4],
+}
+
+impl fmt::Display for Translate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Translate dx={:+}, dy={:+} ({}, fill #{:02X}{:02X}{:02X}{:02X})",
+            self.dx, self.dy, self.mode, self.fill[0], self.fill[1], self.fill[2], self.fill[3]
+        )
+    }
+}
+
+impl TransformOp for Translate {
+    /// Translates (shifts) the image by the configured offset.
+    ///
+    /// Output bounds are handled according to `mode`; newly exposed pixels are
+    /// filled with `fill`.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let src_w = image.width as usize;
+        let src_h = image.height as usize;
+        if src_w == 0 || src_h == 0 {
+            return Ok(image.clone());
+        }
+
+        let (dst_w, dst_h, x_base, y_base) = match self.mode {
+            TranslateMode::Crop => (src_w, src_h, 0_i32, 0_i32),
+            TranslateMode::Expand => (
+                src_w + self.dx.unsigned_abs() as usize,
+                src_h + self.dy.unsigned_abs() as usize,
+                (-self.dx).max(0),
+                (-self.dy).max(0),
+            ),
+        };
+
+        let row_bytes = dst_w * 4;
+        let mut out = vec![0_u8; row_bytes * dst_h];
+        out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&self.fill));
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
+            for dst_x in 0..dst_w {
+                let src_x = dst_x as i32 - self.dx - x_base;
+                let src_y = dst_y as i32 - self.dy - y_base;
+
+                if src_x >= 0 && src_x < src_w as i32 && src_y >= 0 && src_y < src_h as i32 {
+                    let src = (src_y as usize * src_w + src_x as usize) * 4;
+                    let dst = dst_x * 4;
+                    row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+                }
+            }
+        });
+
+        Ok(DecodedImage {
+            width: dst_w as u32,
+            height: dst_h as u32,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        2
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Crop {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl fmt::Display for Crop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Crop x={}, y={}, {}x{}", self.x, self.y, self.width, self.height)
+    }
+}
+
+impl TransformOp for Crop {
+    /// Extracts a rectangular region from the image.
+    ///
+    /// The crop rectangle is clamped to source bounds and output size is at
+    /// least `1x1`.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let src_w = image.width;
+        let src_h = image.height;
+        if src_w == 0 || src_h == 0 {
+            return Ok(image.clone());
+        }
+
+        let x0 = self.x.min(src_w.saturating_sub(1));
+        let y0 = self.y.min(src_h.saturating_sub(1));
+        let max_w = src_w - x0;
+        let max_h = src_h - y0;
+        let out_w = self.width.max(1).min(max_w);
+        let out_h = self.height.max(1).min(max_h);
+
+        if x0 == 0 && y0 == 0 && out_w == src_w && out_h == src_h {
+            return Ok(image.clone());
+        }
+
+        let dst_width = out_w as usize;
+        let dst_height = out_h as usize;
+        let src_w_usize = src_w as usize;
+        let row_bytes = dst_width * 4;
+        let mut out = vec![0_u8; row_bytes * dst_height];
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
+            let sy = y0 as usize + dy;
+            let src = (sy * src_w_usize + x0 as usize) * 4;
+            row.copy_from_slice(&image.rgba[src..src + row_bytes]);
+        });
+
+        Ok(DecodedImage {
+            width: out_w,
+            height: out_h,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MirrorHorizontal;
+
+impl fmt::Display for MirrorHorizontal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Mirror Horizontal")
+    }
+}
+
+impl TransformOp for MirrorHorizontal {
+    /// Mirrors the image horizontally (left <-> right).
+    ///
+    /// Each row is reversed while keeping image dimensions unchanged.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let w = image.width as usize;
+        let h = image.height as usize;
+        let row_bytes = w * 4;
+        let mut out = vec![0_u8; w * h * 4];
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
+            for x in 0..w {
+                let src = (y * w + x) * 4;
+                let dst_x = w - 1 - x;
+                let dst = dst_x * 4;
+                row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+            }
+        });
+
+        Ok(DecodedImage {
+            width: image.width,
+            height: image.height,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        Some((*self).into())
+    }
+
+    fn replay_cost(&self) -> u32 {
+        0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MirrorVertical;
+
+impl fmt::Display for MirrorVertical {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Mirror Vertical")
+    }
+}
+
+impl TransformOp for MirrorVertical {
+    /// Mirrors the image vertically (top <-> bottom).
+    ///
+    /// Rows are swapped while keeping image dimensions unchanged.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let w = image.width as usize;
+        let h = image.height as usize;
+        let row_bytes = w * 4;
+        let mut out = vec![0_u8; w * h * 4];
+
+        out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
+            let src_y = h - 1 - y;
+            let src = src_y * row_bytes;
+            row.copy_from_slice(&image.rgba[src..src + row_bytes]);
+        });
+
+        Ok(DecodedImage {
+            width: image.width,
+            height: image.height,
+            rgba: out,
+        })
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        Some((*self).into())
+    }
+
+    fn replay_cost(&self) -> u32 {
+        0
     }
 }
 
@@ -768,8 +867,8 @@ fn pixel_at(image: &DecodedImage, x: i32, y: i32) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::{
-        RotationInterpolation, TranslateMode, crop_image, resize_image, rotate_any, rotate_left, skew_image,
-        translate_image,
+        Crop, ImageTransform, MirrorHorizontal, MirrorVertical, Resize, RotateAny, RotateLeft, RotateRight,
+        RotationInterpolation, Skew, TransformOp, Translate, TranslateMode,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -783,7 +882,13 @@ mod tests {
                 180, 255,
             ],
         };
-        let out = rotate_any(&image, 0.0, RotationInterpolation::Bilinear, true);
+        let out = RotateAny {
+            angle_tenths: 0,
+            interpolation: RotationInterpolation::Bilinear,
+            expand: true,
+        }
+        .apply(&image)
+        .expect("rotate any should always succeed");
         assert_eq!(out.rgba, image.rgba);
     }
 
@@ -796,8 +901,14 @@ mod tests {
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
         };
-        let expected = rotate_left(&image);
-        let got = rotate_any(&image, 90.0, RotationInterpolation::Nearest, true);
+        let expected = RotateLeft.apply(&image).expect("rotate left should always succeed");
+        let got = RotateAny {
+            angle_tenths: 900,
+            interpolation: RotationInterpolation::Nearest,
+            expand: true,
+        }
+        .apply(&image)
+        .expect("rotate any should always succeed");
         assert_eq!(got.rgba, expected.rgba);
     }
 
@@ -810,7 +921,13 @@ mod tests {
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
         };
-        let out = resize_image(&image, 3, 2, RotationInterpolation::Bicubic);
+        let out = Resize {
+            width: 3,
+            height: 2,
+            interpolation: RotationInterpolation::Bicubic,
+        }
+        .apply(&image)
+        .expect("resize should always succeed");
         assert_eq!(out.rgba, image.rgba);
     }
 
@@ -823,7 +940,14 @@ mod tests {
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
         };
-        let out = skew_image(&image, 0.0, 0.0, RotationInterpolation::Nearest, false);
+        let out = Skew {
+            x_milli: 0,
+            y_milli: 0,
+            interpolation: RotationInterpolation::Nearest,
+            expand: false,
+        }
+        .apply(&image)
+        .expect("skew should always succeed");
         assert_eq!(out.rgba, image.rgba);
     }
 
@@ -836,7 +960,14 @@ mod tests {
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
         };
-        let out = translate_image(&image, 0, 0, TranslateMode::Crop, [0, 0, 0, 0]);
+        let out = Translate {
+            dx: 0,
+            dy: 0,
+            mode: TranslateMode::Crop,
+            fill: [0, 0, 0, 0],
+        }
+        .apply(&image)
+        .expect("translate should always succeed");
         assert_eq!(out.rgba, image.rgba);
     }
 
@@ -847,7 +978,129 @@ mod tests {
             height: 2,
             rgba: vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
         };
-        let out = crop_image(&image, 0, 0, 2, 2);
+        let out = Crop {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        }
+        .apply(&image)
+        .expect("crop should always succeed");
         assert_eq!(out.rgba, image.rgba);
+    }
+
+    #[test]
+    fn inverse_of_rotate_left_is_rotate_right() {
+        let inv = RotateLeft.inverse().expect("rotate left should have inverse");
+        assert!(matches!(inv, ImageTransform::RotateRight(_)));
+    }
+
+    #[test]
+    fn self_inverse_geometry_transforms() {
+        let inv = MirrorHorizontal
+            .inverse()
+            .expect("mirror horizontal should self-invert");
+        assert!(matches!(inv, ImageTransform::MirrorHorizontal(_)));
+
+        let inv = MirrorVertical.inverse().expect("mirror vertical should self-invert");
+        assert!(matches!(inv, ImageTransform::MirrorVertical(_)));
+    }
+
+    #[test]
+    fn rotate_any_display_format() {
+        let op = RotateAny {
+            angle_tenths: -125,
+            interpolation: RotationInterpolation::Bicubic,
+            expand: false,
+        };
+        assert_eq!(op.to_string(), "Rotate -12.5 deg (Bicubic, Crop)");
+    }
+
+    #[test]
+    fn translate_display_format() {
+        let op = Translate {
+            dx: -12,
+            dy: 7,
+            mode: TranslateMode::Expand,
+            fill: [0x10, 0x20, 0x30, 0x40],
+        };
+        assert_eq!(op.to_string(), "Translate dx=-12, dy=+7 (Expand, fill #10203040)");
+    }
+
+    #[test]
+    fn replay_cost_rotate_any_depends_on_interpolation() {
+        let nearest = RotateAny {
+            angle_tenths: 123,
+            interpolation: RotationInterpolation::Nearest,
+            expand: true,
+        }
+        .replay_cost();
+        let bilinear = RotateAny {
+            angle_tenths: 123,
+            interpolation: RotationInterpolation::Bilinear,
+            expand: true,
+        }
+        .replay_cost();
+        assert!(bilinear > nearest);
+    }
+
+    #[test]
+    fn apply_then_inverse_is_identity_for_invertible_ops() {
+        let image = DecodedImage {
+            width: 3,
+            height: 2,
+            rgba: vec![
+                10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
+                180, 255,
+            ],
+        };
+
+        let ops: Vec<ImageTransform> = vec![
+            RotateLeft.into(),
+            RotateRight.into(),
+            MirrorHorizontal.into(),
+            MirrorVertical.into(),
+        ];
+
+        for op in ops {
+            let inv = op.inverse().expect("reversible transform should have inverse");
+            let transformed = op.apply(&image).expect("apply should succeed");
+            let restored = inv.apply(&transformed).expect("inverse apply should succeed");
+            assert_eq!(restored.rgba, image.rgba);
+        }
+    }
+
+    #[test]
+    fn smoke_construct_geometry_ops() {
+        let _ = RotateLeft;
+        let _ = RotateRight;
+        let _ = RotateAny {
+            angle_tenths: 15,
+            interpolation: RotationInterpolation::Nearest,
+            expand: false,
+        };
+        let _ = Resize {
+            width: 10,
+            height: 10,
+            interpolation: RotationInterpolation::Bilinear,
+        };
+        let _ = Skew {
+            x_milli: 10,
+            y_milli: 20,
+            interpolation: RotationInterpolation::Bicubic,
+            expand: true,
+        };
+        let _ = Translate {
+            dx: 1,
+            dy: 2,
+            mode: TranslateMode::Crop,
+            fill: [0, 0, 0, 0],
+        };
+        let _ = Crop {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
     }
 }

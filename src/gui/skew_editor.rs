@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use bmp::runtime::transform::{ImageTransform, RotationInterpolation};
+use bmp::runtime::transform::{ImageTransform, RotationInterpolation, Skew};
 
 use crate::BmpViewerApp;
 
@@ -104,11 +104,14 @@ impl BmpViewerApp {
 
         let x_milli = (self.transforms.skew.x_percent * 10.0).round().clamp(-1000.0, 1000.0) as i16;
         let y_milli = (self.transforms.skew.y_percent * 10.0).round().clamp(-1000.0, 1000.0) as i16;
-        Some(ImageTransform::Skew {
-            x_milli,
-            y_milli,
-            interpolation: self.transforms.skew.interpolation,
-            expand: self.transforms.skew.expand,
-        })
+        Some(
+            Skew {
+                x_milli,
+                y_milli,
+                interpolation: self.transforms.skew.interpolation,
+                expand: self.transforms.skew.expand,
+            }
+            .into(),
+        )
     }
 }

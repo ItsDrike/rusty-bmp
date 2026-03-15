@@ -18,10 +18,10 @@ use std::{
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{DecodedImage, decode_to_rgba},
-        encode::{SaveFormat, SaveHeaderVersion, SourceMetadata, encode_rgba_to_bmp_ext, save_bmp_ext},
+        decode::{decode_to_rgba, DecodedImage},
+        encode::{encode_rgba_to_bmp_ext, save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
         steganography::{self, StegInfo},
-        transform::{ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode, apply_transform},
+        transform::{ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode},
     },
 };
 use eframe::egui;
@@ -354,10 +354,10 @@ impl BmpViewerApp {
         current: &DecodedImage,
         op: &ImageTransform,
     ) -> Result<(), steganography::StegError> {
-        let ImageTransform::EmbedSteganography { config, payload } = op else {
+        let ImageTransform::EmbedSteganography(embed) = op else {
             return Ok(());
         };
-        steganography::embed(current, *config, payload).map(|_| ())
+        steganography::embed(current, embed.config, &embed.payload).map(|_| ())
     }
 
     fn update_transformed_image(&mut self, ctx: &egui::Context, image: DecodedImage) {
@@ -463,7 +463,7 @@ impl BmpViewerApp {
 
     fn apply_transform_now(&mut self, ctx: &egui::Context, op: ImageTransform) {
         if let Some(current) = self.document.transformed_image.as_ref() {
-            if matches!(op, ImageTransform::EmbedSteganography { .. }) {
+            if matches!(op, ImageTransform::EmbedSteganography(_)) {
                 self.steganography.overwrite_warned = false;
             }
 
@@ -475,7 +475,13 @@ impl BmpViewerApp {
                 return;
             }
 
-            let next = apply_transform(current, &op);
+            let next = match op.apply(current) {
+                Ok(next) => next,
+                Err(err) => {
+                    self.status = format!("Failed to apply transform {op}: {err}");
+                    return;
+                }
+            };
             self.document.pipeline.push(op, Some(current));
             self.document.redo_stack.clear();
             self.update_transformed_image(ctx, next);
@@ -484,13 +490,11 @@ impl BmpViewerApp {
 
     pub(crate) fn apply_and_refresh(&mut self, ctx: &egui::Context, op: ImageTransform) {
         let should_confirm_overwrite = !self.steganography.overwrite_warned
-            && !matches!(
-                op,
-                ImageTransform::EmbedSteganography { .. } | ImageTransform::RemoveSteganography { .. }
-            )
+            && !matches!(op, ImageTransform::EmbedSteganography(_))
+            && !matches!(op, ImageTransform::RemoveSteganography(_))
             && matches!(
                 self.document.pipeline.ops().last(),
-                Some(ImageTransform::EmbedSteganography { .. })
+                Some(last) if matches!(last, ImageTransform::EmbedSteganography(_))
             );
 
         if should_confirm_overwrite {
@@ -508,7 +512,13 @@ impl BmpViewerApp {
                 self.document.redo_stack.push(op);
                 // O(1) path: apply the inverse transform.
                 if let Some(current) = self.document.transformed_image.as_ref() {
-                    let result = apply_transform(current, &inv);
+                    let result = match inv.apply(current) {
+                        Ok(result) => result,
+                        Err(err) => {
+                            self.status = format!("Undo failed while applying inverse: {err}");
+                            return;
+                        }
+                    };
                     self.update_transformed_image(ctx, result);
                 }
             } else {
@@ -539,7 +549,13 @@ impl BmpViewerApp {
                 return;
             }
 
-            let next = apply_transform(current, &op);
+            let next = match op.apply(current) {
+                Ok(next) => next,
+                Err(err) => {
+                    self.status = format!("Redo failed while applying {}: {err}", op);
+                    return;
+                }
+            };
             self.document.pipeline.push(op, Some(current));
             self.update_transformed_image(ctx, next);
         }

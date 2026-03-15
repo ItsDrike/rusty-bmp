@@ -16,9 +16,13 @@
 //! The header itself is stored using the same channel/bit-depth configuration
 //! it describes.  Detection therefore requires trying all 6561 valid configs.
 
+use std::fmt;
+
 use thiserror::Error;
 
 use crate::runtime::decode::DecodedImage;
+
+use super::model::{ImageTransform, TransformError, TransformOp};
 
 // -----------------------------------------------------------------------------
 // Public types
@@ -69,6 +73,69 @@ pub enum StegError {
 
     #[error("arithmetic overflow while processing steganography data: {0}")]
     ArithmeticOverflow(&'static str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EmbedSteganography {
+    pub config: StegConfig,
+    pub payload: Vec<u8>,
+}
+
+impl fmt::Display for EmbedSteganography {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Embed Steganography ({} bytes, R{}G{}B{}A{})",
+            self.payload.len(),
+            self.config.r_bits,
+            self.config.g_bits,
+            self.config.b_bits,
+            self.config.a_bits
+        )
+    }
+}
+
+impl TransformOp for EmbedSteganography {
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        Ok(embed(image, self.config, &self.payload)?)
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        2
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RemoveSteganography {
+    pub config: StegConfig,
+}
+
+impl fmt::Display for RemoveSteganography {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Remove Steganography (R{}G{}B{}A{})",
+            self.config.r_bits, self.config.g_bits, self.config.b_bits, self.config.a_bits
+        )
+    }
+}
+
+impl TransformOp for RemoveSteganography {
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        Ok(remove(image, self.config))
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        1
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -602,7 +669,7 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BitCursor, StegConfig, StegError, StegInfo, detect, embed, extract, remove, write_bit};
+    use super::{detect, embed, extract, remove, write_bit, BitCursor, StegConfig, StegError, StegInfo};
     use crate::runtime::decode::DecodedImage;
 
     fn patterned_image(width: u32, height: u32) -> DecodedImage {

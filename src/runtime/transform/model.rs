@@ -1,342 +1,247 @@
 use std::fmt;
 
-use crate::runtime::steganography::StegConfig;
+use thiserror::Error;
 
-use super::convolution::{ConvolutionFilter, Kernel};
-use super::geometry::{RotationInterpolation, TranslateMode};
+use crate::runtime::decode::DecodedImage;
 
-/// A high-level image transformation operation.
-///
-/// This enum represents all transformations supported by the runtime
-/// transformation system. Each variant describes a single operation
-/// that can be applied to a [`DecodedImage`] using
-/// [`apply_transform`](crate::runtime::transform::dispatch::apply_transform).
+use super::{
+    color::{Brightness, Contrast, Grayscale, InvertColors, Sepia},
+    convolution::{ConvolutionCustom, ConvolutionPreset},
+    geometry::{Crop, MirrorHorizontal, MirrorVertical, Resize, RotateAny, RotateLeft, RotateRight, Skew, Translate},
+    steganography::{self, EmbedSteganography, RemoveSteganography},
+};
+
+#[derive(Debug, Error)]
+pub enum TransformError {
+    #[error("steganography error: {0}")]
+    Steganography(#[from] steganography::StegError),
+}
+
+pub trait TransformOp: fmt::Display + fmt::Debug + Send + Sync {
+    /// Applies this transformation to `image`.
+    ///
+    /// # Errors
+    /// Returns [`TransformError`] if the operation cannot be applied.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError>;
+
+    #[must_use]
+    fn inverse(&self) -> Option<ImageTransform>;
+
+    #[must_use]
+    fn replay_cost(&self) -> u32;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageTransform {
-    RotateLeft90,
-    RotateRight90,
-    RotateAny {
-        angle_tenths: i16,
-        interpolation: RotationInterpolation,
-        expand: bool,
-    },
-    Resize {
-        width: u32,
-        height: u32,
-        interpolation: RotationInterpolation,
-    },
-    Skew {
-        x_milli: i16,
-        y_milli: i16,
-        interpolation: RotationInterpolation,
-        expand: bool,
-    },
-    Translate {
-        dx: i32,
-        dy: i32,
-        mode: TranslateMode,
-        fill: [u8; 4],
-    },
-    Crop {
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
-    },
-    MirrorHorizontal,
-    MirrorVertical,
-    InvertColors,
-    Grayscale,
-    Sepia,
-    Brightness(i16),
-    Contrast(i16),
-    Convolution(ConvolutionFilter),
-    CustomKernel(Kernel),
-    EmbedSteganography {
-        config: StegConfig,
-        payload: Vec<u8>,
-    },
-    RemoveSteganography {
-        config: StegConfig,
-    },
+    RotateLeft(RotateLeft),
+    RotateRight(RotateRight),
+    RotateAny(RotateAny),
+    Resize(Resize),
+    Skew(Skew),
+    Translate(Translate),
+    Crop(Crop),
+    MirrorHorizontal(MirrorHorizontal),
+    MirrorVertical(MirrorVertical),
+    InvertColors(InvertColors),
+    Grayscale(Grayscale),
+    Sepia(Sepia),
+    Brightness(Brightness),
+    Contrast(Contrast),
+    ConvolutionPreset(ConvolutionPreset),
+    ConvolutionCustom(ConvolutionCustom),
+    EmbedSteganography(EmbedSteganography),
+    RemoveSteganography(RemoveSteganography),
+}
+
+impl ImageTransform {
+    #[must_use]
+    pub fn inverse(&self) -> Option<Self> {
+        match self {
+            Self::RotateLeft(op) => op.inverse(),
+            Self::RotateRight(op) => op.inverse(),
+            Self::RotateAny(op) => op.inverse(),
+            Self::Resize(op) => op.inverse(),
+            Self::Skew(op) => op.inverse(),
+            Self::Translate(op) => op.inverse(),
+            Self::Crop(op) => op.inverse(),
+            Self::MirrorHorizontal(op) => op.inverse(),
+            Self::MirrorVertical(op) => op.inverse(),
+            Self::InvertColors(op) => op.inverse(),
+            Self::Grayscale(op) => op.inverse(),
+            Self::Sepia(op) => op.inverse(),
+            Self::Brightness(op) => op.inverse(),
+            Self::Contrast(op) => op.inverse(),
+            Self::ConvolutionPreset(op) => op.inverse(),
+            Self::ConvolutionCustom(op) => op.inverse(),
+            Self::EmbedSteganography(op) => op.inverse(),
+            Self::RemoveSteganography(op) => op.inverse(),
+        }
+    }
+
+    #[must_use]
+    pub fn replay_cost(&self) -> u32 {
+        match self {
+            Self::RotateLeft(op) => op.replay_cost(),
+            Self::RotateRight(op) => op.replay_cost(),
+            Self::RotateAny(op) => op.replay_cost(),
+            Self::Resize(op) => op.replay_cost(),
+            Self::Skew(op) => op.replay_cost(),
+            Self::Translate(op) => op.replay_cost(),
+            Self::Crop(op) => op.replay_cost(),
+            Self::MirrorHorizontal(op) => op.replay_cost(),
+            Self::MirrorVertical(op) => op.replay_cost(),
+            Self::InvertColors(op) => op.replay_cost(),
+            Self::Grayscale(op) => op.replay_cost(),
+            Self::Sepia(op) => op.replay_cost(),
+            Self::Brightness(op) => op.replay_cost(),
+            Self::Contrast(op) => op.replay_cost(),
+            Self::ConvolutionPreset(op) => op.replay_cost(),
+            Self::ConvolutionCustom(op) => op.replay_cost(),
+            Self::EmbedSteganography(op) => op.replay_cost(),
+            Self::RemoveSteganography(op) => op.replay_cost(),
+        }
+    }
+
+    /// Applies this transformation to `image`.
+    ///
+    /// # Errors
+    /// Returns [`TransformError`] if the operation cannot be applied.
+    pub fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        match self {
+            Self::RotateLeft(op) => op.apply(image),
+            Self::RotateRight(op) => op.apply(image),
+            Self::RotateAny(op) => op.apply(image),
+            Self::Resize(op) => op.apply(image),
+            Self::Skew(op) => op.apply(image),
+            Self::Translate(op) => op.apply(image),
+            Self::Crop(op) => op.apply(image),
+            Self::MirrorHorizontal(op) => op.apply(image),
+            Self::MirrorVertical(op) => op.apply(image),
+            Self::InvertColors(op) => op.apply(image),
+            Self::Grayscale(op) => op.apply(image),
+            Self::Sepia(op) => op.apply(image),
+            Self::Brightness(op) => op.apply(image),
+            Self::Contrast(op) => op.apply(image),
+            Self::ConvolutionPreset(op) => op.apply(image),
+            Self::ConvolutionCustom(op) => op.apply(image),
+            Self::EmbedSteganography(op) => op.apply(image),
+            Self::RemoveSteganography(op) => op.apply(image),
+        }
+    }
 }
 
 impl fmt::Display for ImageTransform {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RotateLeft90 => write!(f, "Rotate Left"),
-            Self::RotateRight90 => write!(f, "Rotate Right"),
-            Self::RotateAny {
-                angle_tenths,
-                interpolation,
-                expand,
-            } => {
-                let angle = f32::from(*angle_tenths) / 10.0;
-                let mode = if *expand { "Expand" } else { "Crop" };
-                write!(f, "Rotate {angle:+.1} deg ({interpolation}, {mode})")
-            }
-            Self::Resize {
-                width,
-                height,
-                interpolation,
-            } => write!(f, "Resize to {width}x{height} ({interpolation})"),
-            Self::Skew {
-                x_milli,
-                y_milli,
-                interpolation,
-                expand,
-            } => {
-                let kx = f32::from(*x_milli) / 1000.0;
-                let ky = f32::from(*y_milli) / 1000.0;
-                let mode = if *expand { "Expand" } else { "Crop" };
-                write!(f, "Skew x={kx:+.3}, y={ky:+.3} ({interpolation}, {mode})")
-            }
-            Self::Translate { dx, dy, mode, fill } => write!(
-                f,
-                "Translate dx={dx:+}, dy={dy:+} ({mode}, fill #{:02X}{:02X}{:02X}{:02X})",
-                fill[0], fill[1], fill[2], fill[3]
-            ),
-            Self::Crop { x, y, width, height } => write!(f, "Crop x={x}, y={y}, {width}x{height}"),
-            Self::MirrorHorizontal => write!(f, "Mirror Horizontal"),
-            Self::MirrorVertical => write!(f, "Mirror Vertical"),
-            Self::InvertColors => write!(f, "Invert Colors"),
-            Self::Grayscale => write!(f, "Grayscale"),
-            Self::Sepia => write!(f, "Sepia"),
-            Self::Brightness(delta) => {
-                if *delta >= 0 {
-                    write!(f, "Brightness +{delta}")
-                } else {
-                    write!(f, "Brightness {delta}")
-                }
-            }
-            Self::Contrast(delta) => {
-                if *delta >= 0 {
-                    write!(f, "Contrast +{delta}")
-                } else {
-                    write!(f, "Contrast {delta}")
-                }
-            }
-            Self::Convolution(filter) => write!(f, "{filter}"),
-            Self::CustomKernel(k) => write!(f, "Custom {}x{}", k.size, k.size),
-            Self::EmbedSteganography { config, payload } => write!(
-                f,
-                "Embed Steganography ({} bytes, R{}G{}B{}A{})",
-                payload.len(),
-                config.r_bits,
-                config.g_bits,
-                config.b_bits,
-                config.a_bits
-            ),
-            Self::RemoveSteganography { config } => write!(
-                f,
-                "Remove Steganography (R{}G{}B{}A{})",
-                config.r_bits, config.g_bits, config.b_bits, config.a_bits
-            ),
+            Self::RotateLeft(op) => write!(f, "{op}"),
+            Self::RotateRight(op) => write!(f, "{op}"),
+            Self::RotateAny(op) => write!(f, "{op}"),
+            Self::Resize(op) => write!(f, "{op}"),
+            Self::Skew(op) => write!(f, "{op}"),
+            Self::Translate(op) => write!(f, "{op}"),
+            Self::Crop(op) => write!(f, "{op}"),
+            Self::MirrorHorizontal(op) => write!(f, "{op}"),
+            Self::MirrorVertical(op) => write!(f, "{op}"),
+            Self::InvertColors(op) => write!(f, "{op}"),
+            Self::Grayscale(op) => write!(f, "{op}"),
+            Self::Sepia(op) => write!(f, "{op}"),
+            Self::Brightness(op) => write!(f, "{op}"),
+            Self::Contrast(op) => write!(f, "{op}"),
+            Self::ConvolutionPreset(op) => write!(f, "{op}"),
+            Self::ConvolutionCustom(op) => write!(f, "{op}"),
+            Self::EmbedSteganography(op) => write!(f, "{op}"),
+            Self::RemoveSteganography(op) => write!(f, "{op}"),
         }
     }
 }
 
-impl ImageTransform {
-    /// Returns the inverse of this transformation if one exists.
-    ///
-    /// Some transformations can be reversed exactly:
-    ///
-    /// - rotations by +/- 90 deg
-    /// - mirror operations
-    /// - color inversion
-    ///
-    /// Other transformations lose information or depend on external
-    /// parameters, so their inverse cannot be determined automatically.
-    ///
-    /// Returns `None` for non-reversible operations.
-    #[must_use]
-    pub const fn inverse(&self) -> Option<Self> {
-        #[allow(clippy::match_same_arms)]
-        match self {
-            Self::RotateLeft90 => Some(Self::RotateRight90),
-            Self::RotateRight90 => Some(Self::RotateLeft90),
-            Self::RotateAny { .. } => None,
-            Self::Resize { .. } => None,
-            Self::Skew { .. } => None,
-            Self::Translate { .. } => None,
-            Self::Crop { .. } => None,
-            Self::MirrorHorizontal => Some(Self::MirrorHorizontal),
-            Self::MirrorVertical => Some(Self::MirrorVertical),
-            Self::InvertColors => Some(Self::InvertColors),
-            Self::Grayscale => None,
-            Self::Sepia => None,
-            Self::Brightness(_) => None,
-            Self::Contrast(_) => None,
-            Self::Convolution(_) => None,
-            Self::CustomKernel(_) => None,
-            Self::EmbedSteganography { .. } => None,
-            Self::RemoveSteganography { .. } => None,
-        }
-    }
-
-    /// Returns an approximate cost of replaying this transformation.
-    ///
-    /// The cost is a heuristic used to estimate computational complexity
-    /// when applying a sequence of transformations.
-    ///
-    /// Lower values correspond to cheaper operations, while higher values
-    /// indicate more expensive processing (for example interpolation or
-    /// convolution).
-    ///
-    /// This value is used for:
-    ///
-    /// - transform pipeline optimization
-    /// - estimating recomputation cost
-    /// - ordering operations for efficiency
-    #[must_use]
-    pub fn replay_cost(&self) -> u32 {
-        #[allow(clippy::match_same_arms)]
-        match self {
-            Self::RotateLeft90
-            | Self::RotateRight90
-            | Self::MirrorHorizontal
-            | Self::MirrorVertical
-            | Self::InvertColors => 0,
-            Self::Grayscale | Self::Sepia | Self::Brightness(_) | Self::Contrast(_) => 1,
-            Self::RotateAny { interpolation, .. } => match interpolation {
-                RotationInterpolation::Nearest => 3,
-                RotationInterpolation::Bilinear => 5,
-                RotationInterpolation::Bicubic => 8,
-            },
-            Self::Resize { interpolation, .. } => match interpolation {
-                RotationInterpolation::Nearest => 2,
-                RotationInterpolation::Bilinear => 4,
-                RotationInterpolation::Bicubic => 7,
-            },
-            Self::Skew { interpolation, .. } => match interpolation {
-                RotationInterpolation::Nearest => 3,
-                RotationInterpolation::Bilinear => 5,
-                RotationInterpolation::Bicubic => 8,
-            },
-            Self::Translate { .. } => 2,
-            Self::Crop { .. } => 1,
-            Self::Convolution(filter) => filter.kernel().replay_cost(),
-            Self::CustomKernel(kernel) => kernel.replay_cost(),
-            Self::EmbedSteganography { .. } => 2,
-            Self::RemoveSteganography { .. } => 1,
-        }
+impl From<RotateLeft> for ImageTransform {
+    fn from(value: RotateLeft) -> Self {
+        Self::RotateLeft(value)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ImageTransform;
-    use crate::runtime::transform::convolution::{ConvolutionFilter, Kernel};
-    use crate::runtime::transform::geometry::{RotationInterpolation, TranslateMode};
-
-    #[test]
-    fn inverse_of_rotate_left_is_rotate_right() {
-        assert_eq!(
-            ImageTransform::RotateLeft90.inverse(),
-            Some(ImageTransform::RotateRight90)
-        );
-        assert_eq!(
-            ImageTransform::RotateRight90.inverse(),
-            Some(ImageTransform::RotateLeft90)
-        );
+impl From<RotateRight> for ImageTransform {
+    fn from(value: RotateRight) -> Self {
+        Self::RotateRight(value)
     }
-
-    #[test]
-    fn self_inverse_transforms() {
-        assert_eq!(
-            ImageTransform::MirrorHorizontal.inverse(),
-            Some(ImageTransform::MirrorHorizontal)
-        );
-        assert_eq!(
-            ImageTransform::MirrorVertical.inverse(),
-            Some(ImageTransform::MirrorVertical)
-        );
-        assert_eq!(
-            ImageTransform::InvertColors.inverse(),
-            Some(ImageTransform::InvertColors)
-        );
+}
+impl From<RotateAny> for ImageTransform {
+    fn from(value: RotateAny) -> Self {
+        Self::RotateAny(value)
     }
-
-    #[test]
-    fn rotate_any_display_format() {
-        let op = ImageTransform::RotateAny {
-            angle_tenths: -125,
-            interpolation: RotationInterpolation::Bicubic,
-            expand: false,
-        };
-        assert_eq!(op.to_string(), "Rotate -12.5 deg (Bicubic, Crop)");
+}
+impl From<Resize> for ImageTransform {
+    fn from(value: Resize) -> Self {
+        Self::Resize(value)
     }
-
-    #[test]
-    fn resize_display_format() {
-        let op = ImageTransform::Resize {
-            width: 640,
-            height: 480,
-            interpolation: RotationInterpolation::Nearest,
-        };
-        assert_eq!(op.to_string(), "Resize to 640x480 (Nearest)");
+}
+impl From<Skew> for ImageTransform {
+    fn from(value: Skew) -> Self {
+        Self::Skew(value)
     }
-
-    #[test]
-    fn skew_display_format() {
-        let op = ImageTransform::Skew {
-            x_milli: 250,
-            y_milli: -125,
-            interpolation: RotationInterpolation::Bilinear,
-            expand: false,
-        };
-        assert_eq!(op.to_string(), "Skew x=+0.250, y=-0.125 (Bilinear, Crop)");
+}
+impl From<Translate> for ImageTransform {
+    fn from(value: Translate) -> Self {
+        Self::Translate(value)
     }
-
-    #[test]
-    fn translate_display_format() {
-        let op = ImageTransform::Translate {
-            dx: -12,
-            dy: 7,
-            mode: TranslateMode::Expand,
-            fill: [0x10, 0x20, 0x30, 0x40],
-        };
-        assert_eq!(op.to_string(), "Translate dx=-12, dy=+7 (Expand, fill #10203040)");
+}
+impl From<Crop> for ImageTransform {
+    fn from(value: Crop) -> Self {
+        Self::Crop(value)
     }
-
-    #[test]
-    fn replay_cost_rotate_any_depends_on_interpolation() {
-        let nearest = ImageTransform::RotateAny {
-            angle_tenths: 123,
-            interpolation: RotationInterpolation::Nearest,
-            expand: true,
-        }
-        .replay_cost();
-        let bilinear = ImageTransform::RotateAny {
-            angle_tenths: 123,
-            interpolation: RotationInterpolation::Bilinear,
-            expand: true,
-        }
-        .replay_cost();
-        let bicubic = ImageTransform::RotateAny {
-            angle_tenths: 123,
-            interpolation: RotationInterpolation::Bicubic,
-            expand: true,
-        }
-        .replay_cost();
-        assert!(bilinear > nearest);
-        assert!(bicubic > bilinear);
+}
+impl From<MirrorHorizontal> for ImageTransform {
+    fn from(value: MirrorHorizontal) -> Self {
+        Self::MirrorHorizontal(value)
     }
-
-    #[test]
-    fn custom_kernel_display_format() {
-        let k3 = Kernel::new(vec![0; 9], 3, 1, 0);
-        assert_eq!(ImageTransform::CustomKernel(k3).to_string(), "Custom 3x3");
-        let k5 = Kernel::new(vec![0; 25], 5, 1, 0);
-        assert_eq!(ImageTransform::CustomKernel(k5).to_string(), "Custom 5x5");
+}
+impl From<MirrorVertical> for ImageTransform {
+    fn from(value: MirrorVertical) -> Self {
+        Self::MirrorVertical(value)
     }
-
-    #[test]
-    fn convolution_display_formats() {
-        assert_eq!(ImageTransform::Convolution(ConvolutionFilter::Blur).to_string(), "Blur");
-        assert_eq!(
-            ImageTransform::Convolution(ConvolutionFilter::EdgeDetect).to_string(),
-            "Edge Detect"
-        );
+}
+impl From<InvertColors> for ImageTransform {
+    fn from(value: InvertColors) -> Self {
+        Self::InvertColors(value)
+    }
+}
+impl From<Grayscale> for ImageTransform {
+    fn from(value: Grayscale) -> Self {
+        Self::Grayscale(value)
+    }
+}
+impl From<Sepia> for ImageTransform {
+    fn from(value: Sepia) -> Self {
+        Self::Sepia(value)
+    }
+}
+impl From<Brightness> for ImageTransform {
+    fn from(value: Brightness) -> Self {
+        Self::Brightness(value)
+    }
+}
+impl From<Contrast> for ImageTransform {
+    fn from(value: Contrast) -> Self {
+        Self::Contrast(value)
+    }
+}
+impl From<ConvolutionPreset> for ImageTransform {
+    fn from(value: ConvolutionPreset) -> Self {
+        Self::ConvolutionPreset(value)
+    }
+}
+impl From<ConvolutionCustom> for ImageTransform {
+    fn from(value: ConvolutionCustom) -> Self {
+        Self::ConvolutionCustom(value)
+    }
+}
+impl From<EmbedSteganography> for ImageTransform {
+    fn from(value: EmbedSteganography) -> Self {
+        Self::EmbedSteganography(value)
+    }
+}
+impl From<RemoveSteganography> for ImageTransform {
+    fn from(value: RemoveSteganography) -> Self {
+        Self::RemoveSteganography(value)
     }
 }

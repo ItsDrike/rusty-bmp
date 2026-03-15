@@ -19,7 +19,6 @@ mod color;
     clippy::cast_precision_loss
 )]
 mod convolution;
-mod dispatch;
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -29,13 +28,14 @@ mod dispatch;
 mod geometry;
 mod model;
 mod pipeline;
+pub mod steganography;
 
-pub use color::{brightness, contrast, grayscale, invert_colors, sepia};
-pub use convolution::{ConvolutionFilter, Kernel, apply_convolution};
-pub use dispatch::apply_transform;
+pub use color::{Brightness, Contrast, Grayscale, InvertColors, Sepia};
+pub use convolution::{ConvolutionCustom, ConvolutionFilter, ConvolutionPreset, Kernel};
 pub use geometry::{
-    RotationInterpolation, TranslateMode, crop_image, mirror_horizontal, mirror_vertical, resize_image, rotate_any,
-    rotate_left, rotate_right, skew_image, translate_image,
+    Crop, MirrorHorizontal, MirrorVertical, Resize, RotateAny, RotateLeft, RotateRight, RotationInterpolation, Skew,
+    Translate, TranslateMode,
 };
-pub use model::ImageTransform;
+pub use model::{ImageTransform, TransformError, TransformOp};
 pub use pipeline::TransformPipeline;
+pub use steganography::{EmbedSteganography, RemoveSteganography};

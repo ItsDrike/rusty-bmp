@@ -4,6 +4,8 @@ use rayon::prelude::*;
 
 use crate::runtime::decode::DecodedImage;
 
+use super::model::{ImageTransform, TransformError, TransformOp};
+
 /// A square convolution kernel used for spatial image filtering.
 ///
 /// A kernel defines how each output pixel is computed from a weighted
@@ -203,23 +205,80 @@ impl fmt::Display for ConvolutionFilter {
     }
 }
 
-/// Applies a convolution filter to an image.
-///
-/// The function automatically detects whether the kernel is separable.
-/// If it is, the convolution is executed in two passes (horizontal and
-/// vertical) for improved performance. Otherwise, a full 2-D convolution
-/// is performed.
-///
-/// Edge pixels are handled using **clamped border sampling**, meaning
-/// coordinates outside the image are clamped to the nearest valid pixel.
-///
-/// The alpha channel is preserved unchanged.
-#[must_use]
-pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
-    if let Some((col_vec, row_vec)) = kernel.separable() {
-        apply_convolution_separable(image, kernel, &col_vec, &row_vec)
-    } else {
-        apply_convolution_2d(image, kernel)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConvolutionPreset {
+    pub filter: ConvolutionFilter,
+}
+
+impl fmt::Display for ConvolutionPreset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.filter)
+    }
+}
+
+impl TransformOp for ConvolutionPreset {
+    /// Applies a built-in convolution filter to an image.
+    ///
+    /// The operation automatically detects whether the selected kernel is
+    /// separable. If it is, convolution runs in two passes (horizontal and
+    /// vertical) for improved performance; otherwise a full 2-D convolution
+    /// is used.
+    ///
+    /// Edge pixels are handled using clamped border sampling, and the alpha
+    /// channel is preserved unchanged.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let kernel = self.filter.kernel();
+        let out = if let Some((col_vec, row_vec)) = kernel.separable() {
+            apply_convolution_separable(image, &kernel, &col_vec, &row_vec)
+        } else {
+            apply_convolution_2d(image, &kernel)
+        };
+        Ok(out)
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        self.filter.kernel().replay_cost()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConvolutionCustom {
+    pub kernel: Kernel,
+}
+
+impl fmt::Display for ConvolutionCustom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Custom {}x{}", self.kernel.size, self.kernel.size)
+    }
+}
+
+impl TransformOp for ConvolutionCustom {
+    /// Applies a custom convolution kernel to an image.
+    ///
+    /// The operation automatically detects whether the custom kernel is
+    /// separable and selects a two-pass or full 2-D path accordingly.
+    ///
+    /// Edge pixels are handled using clamped border sampling, and the alpha
+    /// channel is preserved unchanged.
+    fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let out = if let Some((col_vec, row_vec)) = self.kernel.separable() {
+            apply_convolution_separable(image, &self.kernel, &col_vec, &row_vec)
+        } else {
+            apply_convolution_2d(image, &self.kernel)
+        };
+        Ok(out)
+    }
+
+    fn inverse(&self) -> Option<ImageTransform> {
+        None
+    }
+
+    fn replay_cost(&self) -> u32 {
+        self.kernel.replay_cost()
     }
 }
 
@@ -351,7 +410,7 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConvolutionFilter, Kernel, apply_convolution, apply_convolution_2d};
+    use super::{ConvolutionCustom, ConvolutionFilter, ConvolutionPreset, Kernel, TransformOp, apply_convolution_2d};
     use crate::runtime::decode::DecodedImage;
 
     #[test]
@@ -379,7 +438,9 @@ mod tests {
             ],
         };
         let kernel = Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0);
-        let result = apply_convolution(&image, &kernel);
+        let result = ConvolutionCustom { kernel }
+            .apply(&image)
+            .expect("custom convolution should always succeed");
         assert_eq!(result.rgba, image.rgba);
     }
 
@@ -396,8 +457,40 @@ mod tests {
                 .collect(),
         };
         let kernel = ConvolutionFilter::Blur.kernel();
-        let result_separable = apply_convolution(&image, &kernel);
+        let result_separable = ConvolutionCustom { kernel: kernel.clone() }
+            .apply(&image)
+            .expect("custom convolution should always succeed");
         let result_2d = apply_convolution_2d(&image, &kernel);
         assert_eq!(result_separable.rgba, result_2d.rgba);
+    }
+
+    #[test]
+    fn convolution_display_formats() {
+        assert_eq!(
+            ConvolutionPreset {
+                filter: ConvolutionFilter::Blur
+            }
+            .to_string(),
+            "Blur"
+        );
+        assert_eq!(
+            ConvolutionCustom {
+                kernel: Kernel::new(vec![0; 9], 3, 1, 0)
+            }
+            .to_string(),
+            "Custom 3x3"
+        );
+    }
+
+    #[test]
+    fn replay_cost_matches_kernel_cost() {
+        let preset = ConvolutionPreset {
+            filter: ConvolutionFilter::Sharpen,
+        };
+        let custom = ConvolutionCustom {
+            kernel: Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0),
+        };
+        assert_eq!(preset.replay_cost(), ConvolutionFilter::Sharpen.kernel().replay_cost());
+        assert_eq!(custom.replay_cost(), 6);
     }
 }

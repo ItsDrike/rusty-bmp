@@ -1,6 +1,9 @@
 use eframe::egui;
 
-use bmp::runtime::{steganography::StegConfig, transform::ImageTransform};
+use bmp::runtime::{
+    steganography::StegConfig,
+    transform::{EmbedSteganography, ImageTransform},
+};
 
 use crate::BmpViewerApp;
 
@@ -147,6 +150,6 @@ impl BmpViewerApp {
         };
         let payload = self.steganography.text_input.as_bytes().to_vec();
 
-        Some(ImageTransform::EmbedSteganography { config, payload })
+        Some(EmbedSteganography { config, payload }.into())
     }
 }

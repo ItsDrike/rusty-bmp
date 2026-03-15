@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use bmp::runtime::transform::{ImageTransform, Kernel};
+use bmp::runtime::transform::{ConvolutionCustom, ImageTransform, Kernel};
 
 use crate::BmpViewerApp;
 
@@ -150,7 +150,9 @@ impl BmpViewerApp {
         self.transforms.kernel.open = open && !close_requested;
 
         if apply {
-            self.validate_custom_kernel().ok().map(ImageTransform::CustomKernel)
+            self.validate_custom_kernel()
+                .ok()
+                .map(|kernel| ConvolutionCustom { kernel }.into())
         } else {
             None
         }

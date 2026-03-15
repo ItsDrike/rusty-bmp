@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use bmp::runtime::transform::{ImageTransform, RotationInterpolation};
+use bmp::runtime::transform::{ImageTransform, Resize, RotationInterpolation};
 
 use crate::BmpViewerApp;
 
@@ -165,11 +165,14 @@ impl BmpViewerApp {
             return None;
         };
 
-        Some(ImageTransform::Resize {
-            width,
-            height,
-            interpolation: self.transforms.resize.interpolation,
-        })
+        Some(
+            Resize {
+                width,
+                height,
+                interpolation: self.transforms.resize.interpolation,
+            }
+            .into(),
+        )
     }
 }
 

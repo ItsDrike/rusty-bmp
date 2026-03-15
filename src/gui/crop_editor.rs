@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use bmp::runtime::transform::ImageTransform;
+use bmp::runtime::transform::{Crop, ImageTransform};
 
 use crate::BmpViewerApp;
 
@@ -165,7 +165,7 @@ impl BmpViewerApp {
             img_h,
         );
 
-        Some(ImageTransform::Crop { x, y, width, height })
+        Some(Crop { x, y, width, height }.into())
     }
 
     fn clamp_crop_inputs(&mut self, img_w: u32, img_h: u32) {

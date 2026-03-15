@@ -1,6 +1,9 @@
 use eframe::egui;
 
-use bmp::runtime::transform::{ConvolutionFilter, ImageTransform};
+use bmp::runtime::transform::{
+    Brightness, Contrast, ConvolutionFilter, ConvolutionPreset, Grayscale, ImageTransform, InvertColors,
+    MirrorHorizontal, MirrorVertical, RotateLeft, RotateRight, Sepia,
+};
 
 use crate::BmpViewerApp;
 
@@ -70,10 +73,10 @@ impl BmpViewerApp {
                         ui.horizontal(|ui| {
                             ui.small("Rotate:");
                             if ui.small_button("Left").clicked() {
-                                apply_op = Some(ImageTransform::RotateLeft90);
+                                apply_op = Some(RotateLeft.into());
                             }
                             if ui.small_button("Right").clicked() {
-                                apply_op = Some(ImageTransform::RotateRight90);
+                                apply_op = Some(RotateRight.into());
                             }
                             if ui.small_button("Arbitrary...").clicked() {
                                 open_rotate_any = true;
@@ -82,10 +85,10 @@ impl BmpViewerApp {
                         ui.horizontal(|ui| {
                             ui.small("Mirror:");
                             if ui.small_button("Horizontal").clicked() {
-                                apply_op = Some(ImageTransform::MirrorHorizontal);
+                                apply_op = Some(MirrorHorizontal.into());
                             }
                             if ui.small_button("Vertical").clicked() {
-                                apply_op = Some(ImageTransform::MirrorVertical);
+                                apply_op = Some(MirrorVertical.into());
                             }
                         });
                         ui.add_space(8.0);
@@ -108,13 +111,13 @@ impl BmpViewerApp {
                         ui.label("Color");
                         ui.horizontal_wrapped(|ui| {
                             if ui.small_button("Invert").clicked() {
-                                apply_op = Some(ImageTransform::InvertColors);
+                                apply_op = Some(InvertColors.into());
                             }
                             if ui.small_button("Grayscale").clicked() {
-                                apply_op = Some(ImageTransform::Grayscale);
+                                apply_op = Some(Grayscale.into());
                             }
                             if ui.small_button("Sepia").clicked() {
-                                apply_op = Some(ImageTransform::Sepia);
+                                apply_op = Some(Sepia.into());
                             }
                         });
 
@@ -131,7 +134,12 @@ impl BmpViewerApp {
                                 )
                                 .clicked()
                             {
-                                apply_op = Some(ImageTransform::Brightness(self.transforms.tonal.brightness_input));
+                                apply_op = Some(
+                                    Brightness {
+                                        delta: self.transforms.tonal.brightness_input,
+                                    }
+                                    .into(),
+                                );
                                 self.transforms.tonal.brightness_input = 0;
                             }
                         });
@@ -145,7 +153,12 @@ impl BmpViewerApp {
                                 )
                                 .clicked()
                             {
-                                apply_op = Some(ImageTransform::Contrast(self.transforms.tonal.contrast_input));
+                                apply_op = Some(
+                                    Contrast {
+                                        delta: self.transforms.tonal.contrast_input,
+                                    }
+                                    .into(),
+                                );
                                 self.transforms.tonal.contrast_input = 0;
                             }
                         });
@@ -154,16 +167,36 @@ impl BmpViewerApp {
                         ui.label("Convolution");
                         ui.horizontal_wrapped(|ui| {
                             if ui.small_button("Blur").clicked() {
-                                apply_op = Some(ImageTransform::Convolution(ConvolutionFilter::Blur));
+                                apply_op = Some(
+                                    ConvolutionPreset {
+                                        filter: ConvolutionFilter::Blur,
+                                    }
+                                    .into(),
+                                );
                             }
                             if ui.small_button("Sharpen").clicked() {
-                                apply_op = Some(ImageTransform::Convolution(ConvolutionFilter::Sharpen));
+                                apply_op = Some(
+                                    ConvolutionPreset {
+                                        filter: ConvolutionFilter::Sharpen,
+                                    }
+                                    .into(),
+                                );
                             }
                             if ui.small_button("Edge").clicked() {
-                                apply_op = Some(ImageTransform::Convolution(ConvolutionFilter::EdgeDetect));
+                                apply_op = Some(
+                                    ConvolutionPreset {
+                                        filter: ConvolutionFilter::EdgeDetect,
+                                    }
+                                    .into(),
+                                );
                             }
                             if ui.small_button("Emboss").clicked() {
-                                apply_op = Some(ImageTransform::Convolution(ConvolutionFilter::Emboss));
+                                apply_op = Some(
+                                    ConvolutionPreset {
+                                        filter: ConvolutionFilter::Emboss,
+                                    }
+                                    .into(),
+                                );
                             }
                             if ui.small_button("Custom...").clicked() {
                                 open_custom_kernel = true;

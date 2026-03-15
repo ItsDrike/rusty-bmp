@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use bmp::runtime::transform::{ImageTransform, RotationInterpolation};
+use bmp::runtime::transform::{ImageTransform, RotateAny, RotationInterpolation};
 
 use crate::BmpViewerApp;
 
@@ -89,10 +89,13 @@ impl BmpViewerApp {
         }
 
         let angle_tenths = (self.transforms.rotate.angle * 10.0).round().clamp(-36000.0, 36000.0) as i16;
-        Some(ImageTransform::RotateAny {
-            angle_tenths,
-            interpolation: self.transforms.rotate.interpolation,
-            expand: self.transforms.rotate.expand,
-        })
+        Some(
+            RotateAny {
+                angle_tenths,
+                interpolation: self.transforms.rotate.interpolation,
+                expand: self.transforms.rotate.expand,
+            }
+            .into(),
+        )
     }
 }

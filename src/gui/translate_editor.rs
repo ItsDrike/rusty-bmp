@@ -1,7 +1,7 @@
 use eframe::egui;
 use eframe::egui::color_picker;
 
-use bmp::runtime::transform::{ImageTransform, TranslateMode};
+use bmp::runtime::transform::{ImageTransform, Translate, TranslateMode};
 
 use crate::BmpViewerApp;
 
@@ -117,11 +117,14 @@ impl BmpViewerApp {
             return None;
         }
 
-        Some(ImageTransform::Translate {
-            dx: self.transforms.translate.dx,
-            dy: self.transforms.translate.dy,
-            mode: self.transforms.translate.mode,
-            fill: self.transforms.translate.fill,
-        })
+        Some(
+            Translate {
+                dx: self.transforms.translate.dx,
+                dy: self.transforms.translate.dy,
+                mode: self.transforms.translate.mode,
+                fill: self.transforms.translate.fill,
+            }
+            .into(),
+        )
     }
 }
