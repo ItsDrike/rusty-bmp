@@ -48,7 +48,7 @@ impl CieXyz {
 /// This specifies the CIE X, Y, and Z coordinates for the red, green, and
 /// blue endpoints for the logical color space associated with the bitmap.
 ///
-/// This is only meaningful when the color space type is CalibratedRgb.
+/// This is only meaningful when the color space type is `CalibratedRgb`.
 ///
 /// In the Microsoft documentation (wingdi.h), this is referred to as the
 /// `CIEXYZTRIPLE` structure.

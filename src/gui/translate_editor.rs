@@ -97,7 +97,7 @@ impl BmpViewerApp {
                 if matches!(self.transforms.translate.mode, TranslateMode::Expand) {
                     let new_w = current.width + self.transforms.translate.dx.unsigned_abs();
                     let new_h = current.height + self.transforms.translate.dy.unsigned_abs();
-                    ui.small(format!("Output size: {}x{}", new_w, new_h));
+                    ui.small(format!("Output size: {new_w}x{new_h}"));
                 }
 
                 ui.add_space(8.0);

@@ -1,3 +1,10 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -25,6 +32,11 @@ pub struct Kernel {
 impl Kernel {
     /// Create a new kernel. Panics if `size` is even or zero, if `weights`
     /// length does not equal `size * size`, or if `divisor` is zero.
+    ///
+    /// # Panics
+    /// Panics when `size` is not a positive odd number, when `weights.len()`
+    /// is not `size * size`, or when `divisor == 0`.
+    #[must_use]
     pub fn new(weights: Vec<i32>, size: usize, divisor: i32, bias: i32) -> Self {
         assert!(
             size > 0 && size % 2 == 1,
@@ -56,6 +68,7 @@ impl Kernel {
     ///
     /// A kernel is separable if every row is a scalar multiple of a single
     /// reference row. The column vector holds those scalar factors.
+    #[must_use]
     pub fn separable(&self) -> Option<(Vec<i32>, Vec<i32>)> {
         let n = self.size;
         if n == 1 {
@@ -110,8 +123,9 @@ impl Kernel {
     /// - 3x3 non-separable kernel -> `N^2 = 9`
     /// - 5x5 separable kernel -> `2N = 10`
     /// - 5x5 non-separable kernel -> `N^2 = 25`
+    #[must_use]
     pub fn replay_cost(&self) -> u32 {
-        let n = self.size as u32;
+        let n = u32::try_from(self.size).unwrap_or(u32::MAX);
         if self.separable().is_some() { 2 * n } else { n * n }
     }
 }
@@ -131,6 +145,7 @@ pub enum ConvolutionFilter {
 
 impl ConvolutionFilter {
     /// Returns the convolution kernel for this filter preset.
+    #[must_use]
     pub fn kernel(&self) -> Kernel {
         match self {
             // Gaussian blur 3x3 - weighted average, softens image.
@@ -206,9 +221,9 @@ pub enum ImageTransform {
     },
     /// Shear image along X/Y axes by affine skew factors.
     Skew {
-        /// X shear factor in thousandths (kx = x_milli / 1000).
+        /// X shear factor in thousandths (kx = `x_milli` / 1000).
         x_milli: i16,
-        /// Y shear factor in thousandths (ky = y_milli / 1000).
+        /// Y shear factor in thousandths (ky = `y_milli` / 1000).
         y_milli: i16,
         interpolation: RotationInterpolation,
         expand: bool,
@@ -267,7 +282,7 @@ impl fmt::Display for ImageTransform {
                 interpolation,
                 expand,
             } => {
-                let angle = *angle_tenths as f32 / 10.0;
+                let angle = f32::from(*angle_tenths) / 10.0;
                 let mode = if *expand { "Expand" } else { "Crop" };
                 write!(f, "Rotate {angle:+.1} deg ({interpolation}, {mode})")
             }
@@ -282,8 +297,8 @@ impl fmt::Display for ImageTransform {
                 interpolation,
                 expand,
             } => {
-                let kx = *x_milli as f32 / 1000.0;
-                let ky = *y_milli as f32 / 1000.0;
+                let kx = f32::from(*x_milli) / 1000.0;
+                let ky = f32::from(*y_milli) / 1000.0;
                 let mode = if *expand { "Expand" } else { "Crop" };
                 write!(f, "Skew x={kx:+.3}, y={ky:+.3} ({interpolation}, {mode})")
             }
@@ -335,7 +350,9 @@ impl fmt::Display for ImageTransform {
 impl ImageTransform {
     /// Returns the transform that reverses the effect of `self`, or `None`
     /// if the transform is lossy and requires a full pipeline replay to undo.
-    pub fn inverse(&self) -> Option<Self> {
+    #[must_use]
+    pub const fn inverse(&self) -> Option<Self> {
+        #[allow(clippy::match_same_arms)]
         match self {
             Self::RotateLeft90 => Some(Self::RotateRight90),
             Self::RotateRight90 => Some(Self::RotateLeft90),
@@ -368,7 +385,9 @@ impl ImageTransform {
     /// pipeline replay (undo applies the inverse directly). Cheap per-pixel
     /// transforms return 1. Convolutions are significantly more expensive
     /// and return a higher value.
+    #[must_use]
     pub fn replay_cost(&self) -> u32 {
+        #[allow(clippy::match_same_arms)]
         match self {
             // Invertible - never replayed on undo, so checkpoint cost is 0.
             Self::RotateLeft90
@@ -434,6 +453,8 @@ impl TransformPipeline {
     /// If a checkpoint is warranted, `current_image` is cloned into the cache
     /// (representing the state after the *previous* op, i.e. one index before
     /// the new op).
+    /// # Panics
+    /// Panics only if internal checkpoint bookkeeping is inconsistent.
     pub fn push(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
         let cost = op.replay_cost();
         self.cost_since_checkpoint += cost;
@@ -448,8 +469,9 @@ impl TransformPipeline {
 
                 // Evict oldest if we exceed the cap.
                 while self.checkpoints.len() > MAX_CHECKPOINTS {
-                    let oldest = *self.checkpoints.keys().next().unwrap();
-                    self.checkpoints.remove(&oldest);
+                    if let Some(oldest) = self.checkpoints.keys().next().copied() {
+                        self.checkpoints.remove(&oldest);
+                    }
                 }
             }
             self.cost_since_checkpoint = 0;
@@ -464,15 +486,18 @@ impl TransformPipeline {
         self.cost_since_checkpoint = 0;
     }
 
+    #[must_use]
     pub fn ops(&self) -> &[ImageTransform] {
         &self.ops
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
 
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.ops.len()
     }
 
@@ -498,6 +523,7 @@ impl TransformPipeline {
 
     /// Replays the full pipeline starting from `original`, using the nearest
     /// checkpoint to skip already-computed work.
+    #[must_use]
     pub fn apply(&self, original: &DecodedImage) -> DecodedImage {
         self.apply_range(original, self.ops.len())
     }
@@ -507,6 +533,7 @@ impl TransformPipeline {
     /// Currently this reports steganography embed steps that could not be
     /// applied (typically because the image dimensions changed and capacity
     /// is no longer sufficient).
+    #[must_use]
     pub fn apply_with_warnings(&self, original: &DecodedImage) -> (DecodedImage, Vec<String>) {
         self.apply_range_with_warnings(original, self.ops.len())
     }
@@ -523,8 +550,7 @@ impl TransformPipeline {
             .checkpoints
             .range(..count)
             .next_back()
-            .map(|(&idx, img)| (idx + 1, img.clone()))
-            .unwrap_or_else(|| (0, original.clone()));
+            .map_or_else(|| (0, original.clone()), |(&idx, img)| (idx + 1, img.clone()));
 
         let mut warnings = Vec::new();
 
@@ -551,10 +577,11 @@ impl TransformPipeline {
     fn recompute_cost_since_checkpoint(&mut self) {
         let last_cp = self.checkpoints.keys().next_back().copied();
         let start = last_cp.map_or(0, |i| i + 1);
-        self.cost_since_checkpoint = self.ops[start..].iter().map(|op| op.replay_cost()).sum();
+        self.cost_since_checkpoint = self.ops[start..].iter().map(ImageTransform::replay_cost).sum();
     }
 }
 
+#[must_use]
 pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImage {
     match op {
         ImageTransform::RotateLeft90 => rotate_left(image),
@@ -563,7 +590,7 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
             angle_tenths,
             interpolation,
             expand,
-        } => rotate_any(image, *angle_tenths as f32 / 10.0, *interpolation, *expand),
+        } => rotate_any(image, f32::from(*angle_tenths) / 10.0, *interpolation, *expand),
         ImageTransform::Resize {
             width,
             height,
@@ -576,8 +603,8 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
             expand,
         } => skew_image(
             image,
-            *x_milli as f32 / 1000.0,
-            *y_milli as f32 / 1000.0,
+            f32::from(*x_milli) / 1000.0,
+            f32::from(*y_milli) / 1000.0,
             *interpolation,
             *expand,
         ),
@@ -603,6 +630,7 @@ pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImag
     }
 }
 
+#[must_use]
 pub fn skew_image(
     image: &DecodedImage,
     kx: f32,
@@ -610,20 +638,23 @@ pub fn skew_image(
     interpolation: RotationInterpolation,
     expand: bool,
 ) -> DecodedImage {
-    let src_w = image.width as usize;
-    let src_h = image.height as usize;
+    let src_w = image.width;
+    let src_h = image.height;
     if src_w == 0 || src_h == 0 {
         return image.clone();
     }
 
-    let det = 1.0 - kx * ky;
+    let kx = f64::from(kx);
+    let ky = f64::from(ky);
+
+    let det = 1.0_f64 - kx * ky;
     if det.abs() < 1e-6 {
         // Nearly singular affine transform: avoid unstable inversion.
         return image.clone();
     }
 
-    let src_cx = (src_w as f32 - 1.0) * 0.5;
-    let src_cy = (src_h as f32 - 1.0) * 0.5;
+    let src_cx = (f64::from(image.width) - 1.0) * 0.5;
+    let src_cy = (f64::from(image.height) - 1.0) * 0.5;
 
     let (dst_w, dst_h) = if expand {
         let corners = [
@@ -633,10 +664,10 @@ pub fn skew_image(
             (-src_cx, src_cy),
         ];
 
-        let mut min_x = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
 
         for (x, y) in corners {
             let dx = x + kx * y;
@@ -647,24 +678,42 @@ pub fn skew_image(
             max_y = max_y.max(dy);
         }
 
-        let w = (max_x - min_x).ceil() as usize + 1;
-        let h = (max_y - min_y).ceil() as usize + 1;
-        (w.max(1), h.max(1))
+        let w_f = (max_x - min_x).ceil().max(0.0);
+        let h_f = (max_y - min_y).ceil().max(0.0);
+
+        if !w_f.is_finite() || !h_f.is_finite() {
+            return image.clone();
+        }
+        if w_f > f64::from(u32::MAX - 1) || h_f > f64::from(u32::MAX - 1) {
+            return image.clone();
+        }
+
+        let w_u32 = w_f as u32 + 1;
+        let h_u32 = h_f as u32 + 1;
+
+        (w_u32.max(1), h_u32.max(1))
     } else {
         (src_w, src_h)
     };
 
-    let dst_cx = (dst_w as f32 - 1.0) * 0.5;
-    let dst_cy = (dst_h as f32 - 1.0) * 0.5;
+    let dst_cx = (f64::from(dst_w) - 1.0) * 0.5;
+    let dst_cy = (f64::from(dst_h) - 1.0) * 0.5;
 
-    let row_bytes = dst_w * 4;
-    let mut out = vec![0_u8; dst_w * dst_h * 4];
+    let row_bytes = (dst_w * 4) as usize;
+    let len = row_bytes * dst_h as usize;
+    if row_bytes == 0 || len == 0 {
+        return image.clone();
+    }
+    let mut out = vec![0_u8; len];
     let inv = 1.0 / det;
 
     out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy_i, row)| {
-        let y = dy_i as f32 - dst_cy;
+        // Safe: dy_i is an index into dst_h rows, and dst_h fits in u32
+        let dy_i = dy_i as u32;
+
+        let y = f64::from(dy_i) - dst_cy;
         for dx_i in 0..dst_w {
-            let x = dx_i as f32 - dst_cx;
+            let x = f64::from(dx_i) - dst_cx;
 
             // Inverse map: src_rel = A^-1 * dst_rel where
             // A = [[1, kx], [ky, 1]], det = 1 - kx*ky.
@@ -673,19 +722,21 @@ pub fn skew_image(
 
             let sx = sx_rel + src_cx;
             let sy = sy_rel + src_cy;
-            let dst = dx_i * 4;
-            let sample = sample_rgba(image, sx, sy, interpolation);
+            let dst = dx_i as usize * 4;
+            let sample = sample_rgba(image, sx as f32, sy as f32, interpolation);
+
             row[dst..dst + 4].copy_from_slice(&sample);
         }
     });
 
     DecodedImage {
-        width: dst_w as u32,
-        height: dst_h as u32,
+        width: dst_w,
+        height: dst_h,
         rgba: out,
     }
 }
 
+#[must_use]
 pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMode, fill: [u8; 4]) -> DecodedImage {
     let src_w = image.width as usize;
     let src_h = image.height as usize;
@@ -703,9 +754,9 @@ pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMo
         ),
     };
 
-    let mut out = vec![0_u8; dst_w * dst_h * 4];
-    out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&fill));
     let row_bytes = dst_w * 4;
+    let mut out = vec![0_u8; row_bytes * dst_h];
+    out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&fill));
 
     out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
         for dst_x in 0..dst_w {
@@ -727,6 +778,7 @@ pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMo
     }
 }
 
+#[must_use]
 pub fn crop_image(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32) -> DecodedImage {
     let src_w = image.width;
     let src_h = image.height;
@@ -745,11 +797,11 @@ pub fn crop_image(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32)
         return image.clone();
     }
 
-    let out_w_usize = out_w as usize;
-    let out_h_usize = out_h as usize;
+    let dst_width = out_w as usize;
+    let dst_height = out_h as usize;
     let src_w_usize = src_w as usize;
-    let row_bytes = out_w_usize * 4;
-    let mut out = vec![0_u8; out_w_usize * out_h_usize * 4];
+    let row_bytes = dst_width * 4;
+    let mut out = vec![0_u8; row_bytes * dst_height];
 
     out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
         let sy = y0 as usize + dy;
@@ -764,22 +816,25 @@ pub fn crop_image(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32)
     }
 }
 
+#[must_use]
 pub fn resize_image(
     image: &DecodedImage,
     out_width: u32,
     out_height: u32,
     interpolation: RotationInterpolation,
 ) -> DecodedImage {
-    let src_w = image.width as usize;
-    let src_h = image.height as usize;
-    let dst_w = out_width.max(1) as usize;
-    let dst_h = out_height.max(1) as usize;
+    let src_w = image.width;
+    let src_h = image.height;
+    let dst_w = out_width.max(1);
+    let dst_h = out_height.max(1);
 
     if src_w == 0 || src_h == 0 {
+        let row_bytes = (dst_w as usize) * 4;
+        let len = row_bytes * dst_h as usize;
         return DecodedImage {
-            width: dst_w as u32,
-            height: dst_h as u32,
-            rgba: vec![0; dst_w * dst_h * 4],
+            width: dst_w,
+            height: dst_h,
+            rgba: vec![0; len],
         };
     }
 
@@ -787,8 +842,9 @@ pub fn resize_image(
         return image.clone();
     }
 
-    let mut out = vec![0_u8; dst_w * dst_h * 4];
-    let row_bytes = dst_w * 4;
+    let row_bytes = (dst_w as usize) * 4;
+    let len = row_bytes * dst_h as usize;
+    let mut out = vec![0_u8; len];
 
     // Pixel-center aligned mapping from destination to source coordinates.
     let sx_scale = src_w as f32 / dst_w as f32;
@@ -798,19 +854,20 @@ pub fn resize_image(
         let sy = (dy as f32 + 0.5) * sy_scale - 0.5;
         for dx in 0..dst_w {
             let sx = (dx as f32 + 0.5) * sx_scale - 0.5;
-            let dst = dx * 4;
+            let dst = dx as usize * 4;
             let px = sample_rgba(image, sx, sy, interpolation);
             row[dst..dst + 4].copy_from_slice(&px);
         }
     });
 
     DecodedImage {
-        width: dst_w as u32,
-        height: dst_h as u32,
+        width: dst_w,
+        height: dst_h,
         rgba: out,
     }
 }
 
+#[must_use]
 pub fn rotate_any(
     image: &DecodedImage,
     angle_degrees: f32,
@@ -927,8 +984,8 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
 
             let mut out = [0_u8; 4];
             for c in 0..4 {
-                let a = p00[c] as f32 * (1.0 - tx) + p10[c] as f32 * tx;
-                let b = p01[c] as f32 * (1.0 - tx) + p11[c] as f32 * tx;
+                let a = f32::from(p00[c]) * (1.0 - tx) + f32::from(p10[c]) * tx;
+                let b = f32::from(p01[c]) * (1.0 - tx) + f32::from(p11[c]) * tx;
                 out[c] = (a * (1.0 - ty) + b * ty).round().clamp(0.0, 255.0) as u8;
             }
             out
@@ -959,7 +1016,7 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
                     let sy = (y0 + j as i32 - 1).clamp(0, h - 1);
                     for (i, &w_x) in wx.iter().enumerate() {
                         let sx = (x0 + i as i32 - 1).clamp(0, w - 1);
-                        sum += pixel_at(image, sx, sy)[c] as f32 * w_x * w_y;
+                        sum += f32::from(pixel_at(image, sx, sy)[c]) * w_x * w_y;
                     }
                 }
                 *out_chan = sum.round().clamp(0.0, 255.0) as u8;
@@ -993,6 +1050,7 @@ fn pixel_at(image: &DecodedImage, x: i32, y: i32) -> [u8; 4] {
     ]
 }
 
+#[must_use]
 pub fn rotate_left(image: &DecodedImage) -> DecodedImage {
     let src_w = image.width as usize;
     let src_h = image.height as usize;
@@ -1020,6 +1078,7 @@ pub fn rotate_left(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn rotate_right(image: &DecodedImage) -> DecodedImage {
     let src_w = image.width as usize;
     let src_h = image.height as usize;
@@ -1047,6 +1106,7 @@ pub fn rotate_right(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
     let w = image.width as usize;
     let h = image.height as usize;
@@ -1069,6 +1129,7 @@ pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
     let w = image.width as usize;
     let h = image.height as usize;
@@ -1088,6 +1149,7 @@ pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
     out.par_chunks_exact_mut(4).for_each(|px| {
@@ -1103,11 +1165,12 @@ pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn grayscale(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
     out.par_chunks_exact_mut(4).for_each(|px| {
         // ITU-R BT.601 luma coefficients (standard perceptual weights).
-        let luma = (0.299 * px[0] as f32 + 0.587 * px[1] as f32 + 0.114 * px[2] as f32).round() as u8;
+        let luma = (0.299 * f32::from(px[0]) + 0.587 * f32::from(px[1]) + 0.114 * f32::from(px[2])).round() as u8;
         px[0] = luma;
         px[1] = luma;
         px[2] = luma;
@@ -1121,12 +1184,13 @@ pub fn grayscale(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn sepia(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
     out.par_chunks_exact_mut(4).for_each(|px| {
-        let r = px[0] as f32;
-        let g = px[1] as f32;
-        let b = px[2] as f32;
+        let r = f32::from(px[0]);
+        let g = f32::from(px[1]);
+        let b = f32::from(px[2]);
         // Standard sepia tone matrix (Microsoft-recommended coefficients).
         let sr = (0.393 * r + 0.769 * g + 0.189 * b).round().min(255.0) as u8;
         let sg = (0.349 * r + 0.686 * g + 0.168 * b).round().min(255.0) as u8;
@@ -1144,12 +1208,13 @@ pub fn sepia(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn brightness(image: &DecodedImage, delta: i16) -> DecodedImage {
     let mut out = image.rgba.clone();
     out.par_chunks_exact_mut(4).for_each(|px| {
-        px[0] = (px[0] as i16 + delta).clamp(0, 255) as u8;
-        px[1] = (px[1] as i16 + delta).clamp(0, 255) as u8;
-        px[2] = (px[2] as i16 + delta).clamp(0, 255) as u8;
+        px[0] = (i16::from(px[0]) + delta).clamp(0, 255) as u8;
+        px[1] = (i16::from(px[1]) + delta).clamp(0, 255) as u8;
+        px[2] = (i16::from(px[2]) + delta).clamp(0, 255) as u8;
         // Alpha unchanged.
     });
 
@@ -1160,19 +1225,20 @@ pub fn brightness(image: &DecodedImage, delta: i16) -> DecodedImage {
     }
 }
 
+#[must_use]
 pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
     // Standard contrast formula:
     //   factor = 259 * (delta + 255) / (255 * (259 - delta))
     //   new = clamp(factor * (old - 128) + 128, 0, 255)
     // The delta range is clamped to -255..=255 to avoid division by zero.
-    let delta_clamped = (delta as f32).clamp(-255.0, 255.0);
+    let delta_clamped = f32::from(delta).clamp(-255.0, 255.0);
     let factor = 259.0 * (delta_clamped + 255.0) / (255.0 * (259.0 - delta_clamped));
 
     let mut out = image.rgba.clone();
     out.par_chunks_exact_mut(4).for_each(|px| {
-        px[0] = (factor * (px[0] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
-        px[1] = (factor * (px[1] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
-        px[2] = (factor * (px[2] as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
+        px[0] = (factor * (f32::from(px[0]) - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
+        px[1] = (factor * (f32::from(px[1]) - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
+        px[2] = (factor * (f32::from(px[2]) - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
         // Alpha unchanged.
     });
 
@@ -1183,7 +1249,7 @@ pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
     }
 }
 
-/// Apply an arbitrary NxN convolution kernel to an image.
+/// Apply an arbitrary `NxN` convolution kernel to an image.
 ///
 /// If the kernel is separable (rank-1), a faster two-pass approach is used
 /// (horizontal then vertical), reducing the per-pixel work from N^2 to 2N
@@ -1191,6 +1257,7 @@ pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
 ///
 /// Out-of-bounds neighbor coordinates are clamped to the nearest edge pixel.
 /// Alpha is passed through unchanged. Both paths are parallelized with rayon.
+#[must_use]
 pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
     if let Some((col_vec, row_vec)) = kernel.separable() {
         apply_convolution_separable(image, kernel, &col_vec, &row_vec)
@@ -1231,9 +1298,9 @@ fn apply_convolution_separable(
                 let sx = (x as isize + k as isize - half).clamp(0, w as isize - 1) as usize;
                 let src = (y * w + sx) * 4;
 
-                sum_r += image.rgba[src] as i32 * weight;
-                sum_g += image.rgba[src + 1] as i32 * weight;
-                sum_b += image.rgba[src + 2] as i32 * weight;
+                sum_r += i32::from(image.rgba[src]) * weight;
+                sum_g += i32::from(image.rgba[src + 1]) * weight;
+                sum_b += i32::from(image.rgba[src + 2]) * weight;
             }
 
             let dst = x * 3;
@@ -1298,9 +1365,9 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
                     let src = (sy * w + sx) * 4;
                     let weight = kernel.weights[ky * kernel.size + kx];
 
-                    sum_r += image.rgba[src] as i32 * weight;
-                    sum_g += image.rgba[src + 1] as i32 * weight;
-                    sum_b += image.rgba[src + 2] as i32 * weight;
+                    sum_r += i32::from(image.rgba[src]) * weight;
+                    sum_g += i32::from(image.rgba[src + 1]) * weight;
+                    sum_b += i32::from(image.rgba[src + 2]) * weight;
                 }
             }
 
@@ -1667,25 +1734,25 @@ mod tests {
     #[test]
     #[should_panic(expected = "kernel size must be odd and positive")]
     fn kernel_rejects_even_size() {
-        Kernel::new(vec![1; 4], 2, 1, 0);
+        let _ = Kernel::new(vec![1; 4], 2, 1, 0);
     }
 
     #[test]
     #[should_panic(expected = "kernel size must be odd and positive")]
     fn kernel_rejects_zero_size() {
-        Kernel::new(vec![], 0, 1, 0);
+        let _ = Kernel::new(vec![], 0, 1, 0);
     }
 
     #[test]
     #[should_panic(expected = "expected 9 weights")]
     fn kernel_rejects_wrong_weight_count() {
-        Kernel::new(vec![1, 2, 3, 4], 3, 1, 0);
+        let _ = Kernel::new(vec![1, 2, 3, 4], 3, 1, 0);
     }
 
     #[test]
     #[should_panic(expected = "kernel divisor must not be zero")]
     fn kernel_rejects_zero_divisor() {
-        Kernel::new(vec![1; 9], 3, 0, 0);
+        let _ = Kernel::new(vec![1; 9], 3, 0, 0);
     }
 
     // --- Convolution engine ---
@@ -2366,7 +2433,7 @@ mod tests {
     fn checkpoint_created_at_threshold() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let mut cur = img.clone();
+        let mut cur = img;
         // Accumulate cost to reach the threshold. Each brightness op costs 1,
         // so we need CHECKPOINT_COST_THRESHOLD + 1 ops (the first op has no
         // predecessor to checkpoint from, then we need threshold cost).
@@ -2384,7 +2451,7 @@ mod tests {
     fn checkpoint_created_faster_with_convolutions() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let mut cur = img.clone();
+        let mut cur = img;
         // 2 convolutions cost 10, plus one more op should trigger checkpoint.
         let conv = ImageTransform::Convolution(ConvolutionFilter::Blur);
         for _ in 0..3 {
@@ -2438,7 +2505,7 @@ mod tests {
     fn pop_removes_checkpoint_at_popped_index() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let mut cur = img.clone();
+        let mut cur = img;
 
         // Create enough ops to get a checkpoint.
         for _ in 0..(CHECKPOINT_COST_THRESHOLD + 2) as usize {
@@ -2462,7 +2529,7 @@ mod tests {
     fn clear_removes_all_checkpoints() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let mut cur = img.clone();
+        let mut cur = img;
 
         for _ in 0..(CHECKPOINT_COST_THRESHOLD + 2) as usize {
             pipeline.push(ImageTransform::Brightness(1), Some(&cur));
@@ -2507,7 +2574,7 @@ mod tests {
     fn remove_invalidates_checkpoints_at_and_after_index() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let mut cur = img.clone();
+        let mut cur = img;
 
         for _ in 0..(CHECKPOINT_COST_THRESHOLD + 2) as usize {
             pipeline.push(ImageTransform::Brightness(1), Some(&cur));

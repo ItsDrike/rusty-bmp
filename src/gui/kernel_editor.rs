@@ -176,18 +176,17 @@ impl BmpViewerApp {
             if trimmed.is_empty() {
                 return Err(format!("Weight cell {} is empty", i + 1));
             }
-            match trimmed.parse::<i32>() {
-                Ok(v) => weights.push(v),
-                Err(_) => {
-                    let row = i / n;
-                    let col = i % n;
-                    return Err(format!(
-                        "Invalid integer at row {}, col {}: \"{}\"",
-                        row + 1,
-                        col + 1,
-                        trimmed
-                    ));
-                }
+            if let Ok(v) = trimmed.parse::<i32>() {
+                weights.push(v);
+            } else {
+                let row = i / n;
+                let col = i % n;
+                return Err(format!(
+                    "Invalid integer at row {}, col {}: \"{}\"",
+                    row + 1,
+                    col + 1,
+                    trimmed
+                ));
             }
         }
 
@@ -217,7 +216,7 @@ impl BmpViewerApp {
     /// Loads a preset kernel into the editor fields.
     fn load_kernel_preset(&mut self, weights: &[i32], size: usize, divisor: i32, bias: i32) {
         self.transforms.kernel.size = size;
-        self.transforms.kernel.weights = weights.iter().map(|w| w.to_string()).collect();
+        self.transforms.kernel.weights = weights.iter().map(std::string::ToString::to_string).collect();
         self.transforms.kernel.divisor = divisor.to_string();
         self.transforms.kernel.bias = bias.to_string();
     }

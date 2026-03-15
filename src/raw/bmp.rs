@@ -7,9 +7,9 @@ use crate::raw::{
     types::{ColorSpaceType, Compression, RgbQuad, RgbTriple},
 };
 
-pub(crate) const MAX_COLOR_TABLE_ENTRIES: usize = 1 << 16;
-pub(crate) const MAX_PIXEL_BYTES: usize = 512 * 1024 * 1024; // 512 MB
-pub(crate) const MAX_ICC_PROFILE_BYTES: usize = 16 * 1024 * 1024; // 16 MB
+const MAX_COLOR_TABLE_ENTRIES: usize = 1 << 16;
+const MAX_PIXEL_BYTES: usize = 512 * 1024 * 1024; // 512 MB
+const MAX_ICC_PROFILE_BYTES: usize = 16 * 1024 * 1024; // 16 MB
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DibVariant {
@@ -39,45 +39,33 @@ impl ColorTable {
     }
 
     pub(crate) fn read_unchecked<R: Read>(reader: &mut R, header: &BitmapHeader) -> Result<Self, StructuralError> {
-        let entry_count = header.color_table_size()?;
-        let entry_count = usize::try_from(entry_count).map_err(|_| {
-            StructuralError::ArithmeticOverflow(format!(
-                "Color table contains {0} entries, which overflows usize",
-                entry_count
-            ))
-        })?;
-
+        let entry_count = header.color_table_size()? as usize;
         if entry_count > MAX_COLOR_TABLE_ENTRIES {
             return Err(StructuralError::StructureUnsafe(format!(
-                "Color table contains {0} entries, which is higher than the allowed safe maximum: {MAX_COLOR_TABLE_ENTRIES}",
-                entry_count
+                "Color table contains {entry_count} entries, which is higher than the allowed safe maximum: {MAX_COLOR_TABLE_ENTRIES}"
             )));
         }
 
-        match header {
-            BitmapHeader::Core(_) => {
-                let mut color_table: Vec<RgbTriple> = Vec::with_capacity(entry_count);
+        if let BitmapHeader::Core(_) = header {
+            let mut color_table: Vec<RgbTriple> = Vec::with_capacity(entry_count);
 
-                for _ in 0..entry_count {
-                    color_table.push(
-                        RgbTriple::read(reader)
-                            .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?,
-                    );
-                }
-
-                Ok(Self::Core(color_table))
+            for _ in 0..entry_count {
+                color_table.push(
+                    RgbTriple::read(reader).map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?,
+                );
             }
-            _ => {
-                let mut color_table: Vec<RgbQuad> = Vec::with_capacity(entry_count);
 
-                for _ in 0..entry_count {
-                    let rgb_quad = RgbQuad::read_unchecked(reader)
-                        .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?;
-                    color_table.push(rgb_quad);
-                }
+            Ok(Self::Core(color_table))
+        } else {
+            let mut color_table: Vec<RgbQuad> = Vec::with_capacity(entry_count);
 
-                Ok(Self::InfoOrLater(color_table))
+            for _ in 0..entry_count {
+                let rgb_quad = RgbQuad::read_unchecked(reader)
+                    .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?;
+                color_table.push(rgb_quad);
             }
+
+            Ok(Self::InfoOrLater(color_table))
         }
     }
 }
@@ -141,17 +129,14 @@ pub enum Bmp {
 
 impl Bmp {
     fn header_color_table_size(header: &BitmapHeader) -> Result<usize, StructuralError> {
-        usize::try_from(header.color_table_size()?).map_err(|_| {
-            StructuralError::ArithmeticOverflow("Color table size from header overflows usize".to_owned())
-        })
+        Ok(header.color_table_size()? as usize)
     }
 
     fn header_pixel_data_size(header: &BitmapHeader) -> Result<usize, StructuralError> {
-        usize::try_from(header.pixel_data_size()?)
-            .map_err(|_| StructuralError::ArithmeticOverflow("Pixel data size overflows usize".to_owned()))
+        Ok(header.pixel_data_size()? as usize)
     }
 
-    fn validate_color_table_size(stored_size: usize, header_size: usize) -> Result<(), ValidationError> {
+    const fn validate_color_table_size(stored_size: usize, header_size: usize) -> Result<(), ValidationError> {
         if stored_size != header_size {
             return Err(ValidationError::ColorTableSizeMismatch {
                 stored_size,
@@ -195,10 +180,11 @@ impl Bmp {
             .checked_add(4)
             .and_then(|x| x.checked_add(dib_header_size))
             .and_then(|x| x.checked_add(extra_size))
-            .and_then(|x| x.checked_add((color_table_entries as u32).checked_mul(color_entry_size)?))
-            .ok_or(StructuralError::ArithmeticOverflow(
-                "Min pixel offset calculation".to_owned(),
-            ))
+            .and_then(|x| {
+                let color_table_entries_u32 = u32::try_from(color_table_entries).ok()?;
+                x.checked_add(color_table_entries_u32.checked_mul(color_entry_size)?)
+            })
+            .ok_or_else(|| StructuralError::ArithmeticOverflow("Min pixel offset calculation".to_owned()))
     }
 
     fn pixel_end_with_overlap_check(
@@ -215,13 +201,13 @@ impl Bmp {
                 .into(),
             );
         }
-        (file_header.pixel_data_offset as u64)
+        u64::from(file_header.pixel_data_offset)
             .checked_add(pixel_data_size as u64)
             .ok_or_else(|| StructuralError::ArithmeticOverflow("Pixel data end calculation".to_owned()).into())
     }
 
     fn validate_file_end(file_size: u32, required_end: u64) -> Result<(), ValidationError> {
-        if required_end > file_size as u64 {
+        if required_end > u64::from(file_size) {
             return Err(ValidationError::PixelDataLayout(
                 PixelDataLayoutError::ExceedsFileSize {
                     pixel_end: required_end,
@@ -229,7 +215,7 @@ impl Bmp {
                 },
             ));
         }
-        if required_end != file_size as u64 {
+        if required_end != u64::from(file_size) {
             return Err(ValidationError::PixelDataLayout(
                 PixelDataLayoutError::DoesNotEndAtFileEnd {
                     pixel_end: required_end,
@@ -240,7 +226,7 @@ impl Bmp {
         Ok(())
     }
 
-    fn validate_info_masks(header: &BitmapHeader, masks: &Option<RgbMasks>) -> Result<(), BmpError> {
+    fn validate_info_masks(header: &BitmapHeader, masks: Option<&RgbMasks>) -> Result<(), BmpError> {
         match (header.compression(), masks) {
             (Compression::BitFields, Some(masks)) => {
                 masks
@@ -266,6 +252,11 @@ impl Bmp {
         Ok(())
     }
 
+    /// Validates BMP structural and semantic consistency for the current variant.
+    ///
+    /// # Errors
+    /// Returns [`BmpError`] when any header, mask, table, pixel layout, or ICC profile
+    /// invariant is violated.
     pub fn validate(&self) -> Result<(), BmpError> {
         match self {
             Self::Core(data) => {
@@ -289,7 +280,7 @@ impl Bmp {
                 data.file_header.validate()?;
                 let header = BitmapHeader::Info(data.bmp_header);
                 header.validate()?;
-                Self::validate_info_masks(&header, &data.color_masks)?;
+                Self::validate_info_masks(&header, data.color_masks.as_ref())?;
 
                 let color_table_size_header = Self::header_color_table_size(&header)?;
                 Self::validate_color_table_size(data.color_table.len(), color_table_size_header)?;
@@ -355,11 +346,7 @@ impl Bmp {
                             )))?;
                         }
 
-                        let profile_size_header = usize::try_from(data.bmp_header.profile_size).map_err(|_| {
-                            StructuralError::ArithmeticOverflow(
-                                "ICC profile size from header overflows usize".to_owned(),
-                            )
-                        })?;
+                        let profile_size_header = data.bmp_header.profile_size as usize;
                         if profile.len() != profile_size_header {
                             Err(ValidationError::IccProfile(IccProfileError::SizeMismatch {
                                 stored_size: profile.len(),
@@ -367,19 +354,21 @@ impl Bmp {
                             }))?;
                         }
 
-                        let profile_offset_absolute = (FileHeader::SIZE as u64)
-                            .checked_add(data.bmp_header.profile_data as u64)
-                            .ok_or(StructuralError::ArithmeticOverflow(
-                                "ICC profile absolute offset calculation".to_owned(),
-                            ))?;
+                        let profile_offset_absolute = u64::from(FileHeader::SIZE)
+                            .checked_add(u64::from(data.bmp_header.profile_data))
+                            .ok_or_else(|| {
+                                StructuralError::ArithmeticOverflow(
+                                    "ICC profile absolute offset calculation".to_owned(),
+                                )
+                            })?;
 
-                        let min_profile_offset = (FileHeader::SIZE as u64)
+                        let min_profile_offset = u64::from(FileHeader::SIZE)
                             .checked_add(4)
-                            .and_then(|x| x.checked_add(BitmapV5Header::HEADER_SIZE as u64))
+                            .and_then(|x| x.checked_add(u64::from(BitmapV5Header::HEADER_SIZE)))
                             .and_then(|x| x.checked_add((data.color_table.len() as u64).checked_mul(4)?))
-                            .ok_or(StructuralError::ArithmeticOverflow(
-                                "ICC profile min offset calculation".to_owned(),
-                            ))?;
+                            .ok_or_else(|| {
+                                StructuralError::ArithmeticOverflow("ICC profile min offset calculation".to_owned())
+                            })?;
 
                         if profile_offset_absolute < min_profile_offset {
                             Err(ValidationError::IccProfile(IccProfileError::OverlapsMetadata {
@@ -388,10 +377,13 @@ impl Bmp {
                             }))?;
                         }
 
-                        let profile_end = profile_offset_absolute.checked_add(profile.len() as u64).ok_or(
-                            StructuralError::ArithmeticOverflow("ICC profile end calculation".to_owned()),
-                        )?;
-                        if profile_end > data.file_header.file_size as u64 {
+                        let profile_end =
+                            profile_offset_absolute
+                                .checked_add(profile.len() as u64)
+                                .ok_or_else(|| {
+                                    StructuralError::ArithmeticOverflow("ICC profile end calculation".to_owned())
+                                })?;
+                        if profile_end > u64::from(data.file_header.file_size) {
                             Err(ValidationError::IccProfile(IccProfileError::ExceedsFileSize {
                                 profile_end,
                                 file_size: data.file_header.file_size,
@@ -425,6 +417,11 @@ impl Bmp {
         Ok(())
     }
 
+    /// Reads a BMP payload and performs validation before returning the parsed structure.
+    ///
+    /// # Errors
+    /// Returns [`BmpError`] for malformed structures, invalid field combinations, out-of-bounds
+    /// offsets/sizes, or I/O failures while reading.
     pub fn read_checked<R: Read + Seek>(reader: &mut R) -> Result<Self, BmpError> {
         let file_header =
             FileHeader::read_unchecked(reader).map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
@@ -438,17 +435,17 @@ impl Bmp {
         // accidentally seeking somewhere outside of the file, e.g. if the BMP encodes
         // invalid offsets.
         reader
-            .seek_relative(-(FileHeader::SIZE as i64))
+            .seek_relative(-i64::from(FileHeader::SIZE))
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
         let mut reader = BoundedStream::new(reader)
             .shrink_start(SeekFrom::Current(0))
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?
             .cap_to_stream_end()
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?
-            .shrink_end(SeekFrom::Current(file_header.file_size as i64))
+            .shrink_end(SeekFrom::Current(i64::from(file_header.file_size)))
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
         reader
-            .seek_relative(FileHeader::SIZE as i64)
+            .seek_relative(i64::from(FileHeader::SIZE))
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
         let bmp_header = BitmapHeader::read_unchecked(&mut reader)?;
@@ -474,7 +471,7 @@ impl Bmp {
         let color_table = ColorTable::read_unchecked(&mut reader, &bmp_header)?;
         color_table.validate()?;
 
-        let pixel_data_pos = file_header.pixel_data_offset as u64;
+        let pixel_data_pos = u64::from(file_header.pixel_data_offset);
 
         // Check if there are some further data embedded in the BMP before the pixel
         // data. If yes, it could be the ICC color profiles (though these usually come
@@ -490,7 +487,7 @@ impl Bmp {
         // let gap_pos = reader.stream_position()?;
         // let metadata_size = pixel_data_pos - gap_pos;
 
-        let min_pixel_offset = FileHeader::SIZE as u64;
+        let min_pixel_offset = u64::from(FileHeader::SIZE);
         if pixel_data_pos < min_pixel_offset {
             return Err(
                 ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
@@ -500,7 +497,7 @@ impl Bmp {
                 .into(),
             );
         }
-        if pixel_data_pos > file_header.file_size as u64 {
+        if pixel_data_pos > u64::from(file_header.file_size) {
             return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
                 pixel_end: pixel_data_pos,
                 file_size: file_header.file_size,
@@ -512,11 +509,7 @@ impl Bmp {
             .seek(SeekFrom::Start(pixel_data_pos))
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingPixelData))?;
 
-        let pixel_data_size = bmp_header.pixel_data_size()?;
-        let pixel_data_size = usize::try_from(pixel_data_size).map_err(|_| {
-            StructuralError::ArithmeticOverflow("Pixel data size from header overflows usize".to_owned())
-        })?;
-
+        let pixel_data_size = bmp_header.pixel_data_size()? as usize;
         if pixel_data_size > MAX_PIXEL_BYTES {
             return Err(StructuralError::StructureUnsafe(format!(
                 "Pixel data contains {pixel_data_size} entries, which is higher than the allowed safe maximum: {MAX_PIXEL_BYTES}"
@@ -578,15 +571,13 @@ impl Bmp {
                     header.v4.cs_type,
                     ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked
                 ) {
-                    let offset = (header.profile_data as u64)
-                        .checked_add(FileHeader::SIZE as u64)
-                        .ok_or(StructuralError::ArithmeticOverflow(
-                            "ICC profile absolute offset calculation".to_owned(),
-                        ))?;
-                    let size = usize::try_from(header.profile_size).map_err(|_| {
-                        StructuralError::ArithmeticOverflow("ICC profile size overflows usize".to_owned())
-                    })?;
+                    let offset = u64::from(header.profile_data)
+                        .checked_add(u64::from(FileHeader::SIZE))
+                        .ok_or_else(|| {
+                            StructuralError::ArithmeticOverflow("ICC profile absolute offset calculation".to_owned())
+                        })?;
 
+                    let size = header.profile_size as usize;
                     if size > MAX_ICC_PROFILE_BYTES {
                         return Err(StructuralError::StructureUnsafe(format!(
                             "ICC profile contains {size} bytes, which is higher than the allowed safe maximum: {MAX_ICC_PROFILE_BYTES}"
@@ -601,12 +592,10 @@ impl Bmp {
                     // this. In theory, if the color table bytes do resolve to a valid ICC profile
                     // too, there's not real reason to prevent that, even if it's really dumb and
                     // unlikely. Safety-wise, this isn't important.
-                    let profile_end = offset
-                        .checked_add(size as u64)
-                        .ok_or(StructuralError::ArithmeticOverflow(
-                            "ICC profile end calculation".to_owned(),
-                        ))?;
-                    if profile_end > file_header.file_size as u64 {
+                    let profile_end = offset.checked_add(size as u64).ok_or_else(|| {
+                        StructuralError::ArithmeticOverflow("ICC profile end calculation".to_owned())
+                    })?;
+                    if profile_end > u64::from(file_header.file_size) {
                         return Err(ValidationError::IccProfile(IccProfileError::ExceedsFileSize {
                             profile_end,
                             file_size: file_header.file_size,
@@ -666,12 +655,10 @@ impl Bmp {
                         .into(),
                     );
                 }
-                let pixel_end = (data.file_header.pixel_data_offset as u64)
+                let pixel_end = u64::from(data.file_header.pixel_data_offset)
                     .checked_add(pixel_data_size_header as u64)
-                    .ok_or(StructuralError::ArithmeticOverflow(
-                        "Pixel data end calculation".to_owned(),
-                    ))?;
-                if pixel_end > data.file_header.file_size as u64 {
+                    .ok_or_else(|| StructuralError::ArithmeticOverflow("Pixel data end calculation".to_owned()))?;
+                if pixel_end > u64::from(data.file_header.file_size) {
                     return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
                         pixel_end,
                         file_size: data.file_header.file_size,
@@ -693,12 +680,10 @@ impl Bmp {
                         .into(),
                     );
                 }
-                let pixel_end = (data.file_header.pixel_data_offset as u64)
+                let pixel_end = u64::from(data.file_header.pixel_data_offset)
                     .checked_add(pixel_data_size_header as u64)
-                    .ok_or(StructuralError::ArithmeticOverflow(
-                        "Pixel data end calculation".to_owned(),
-                    ))?;
-                if pixel_end > data.file_header.file_size as u64 {
+                    .ok_or_else(|| StructuralError::ArithmeticOverflow("Pixel data end calculation".to_owned()))?;
+                if pixel_end > u64::from(data.file_header.file_size) {
                     return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
                         pixel_end,
                         file_size: data.file_header.file_size,
@@ -720,12 +705,10 @@ impl Bmp {
                         .into(),
                     );
                 }
-                let pixel_end = (data.file_header.pixel_data_offset as u64)
+                let pixel_end = u64::from(data.file_header.pixel_data_offset)
                     .checked_add(pixel_data_size_header as u64)
-                    .ok_or(StructuralError::ArithmeticOverflow(
-                        "Pixel data end calculation".to_owned(),
-                    ))?;
-                if pixel_end > data.file_header.file_size as u64 {
+                    .ok_or_else(|| StructuralError::ArithmeticOverflow("Pixel data end calculation".to_owned()))?;
+                if pixel_end > u64::from(data.file_header.file_size) {
                     return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
                         pixel_end,
                         file_size: data.file_header.file_size,
@@ -747,12 +730,10 @@ impl Bmp {
                         .into(),
                     );
                 }
-                let pixel_end = (data.file_header.pixel_data_offset as u64)
+                let pixel_end = u64::from(data.file_header.pixel_data_offset)
                     .checked_add(pixel_data_size_header as u64)
-                    .ok_or(StructuralError::ArithmeticOverflow(
-                        "Pixel data end calculation".to_owned(),
-                    ))?;
-                if pixel_end > data.file_header.file_size as u64 {
+                    .ok_or_else(|| StructuralError::ArithmeticOverflow("Pixel data end calculation".to_owned()))?;
+                if pixel_end > u64::from(data.file_header.file_size) {
                     return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
                         pixel_end,
                         file_size: data.file_header.file_size,
@@ -769,16 +750,18 @@ impl Bmp {
                         .into());
                     }
 
-                    let profile_offset_absolute = (FileHeader::SIZE as u64)
-                        .checked_add(data.bmp_header.profile_data as u64)
-                        .ok_or(StructuralError::ArithmeticOverflow(
-                            "ICC profile absolute offset calculation".to_owned(),
-                        ))?;
+                    let profile_offset_absolute = u64::from(FileHeader::SIZE)
+                        .checked_add(u64::from(data.bmp_header.profile_data))
+                        .ok_or_else(|| {
+                            StructuralError::ArithmeticOverflow("ICC profile absolute offset calculation".to_owned())
+                        })?;
 
-                    let profile_end = profile_offset_absolute.checked_add(profile.len() as u64).ok_or(
-                        StructuralError::ArithmeticOverflow("ICC profile end calculation".to_owned()),
-                    )?;
-                    if profile_end > data.file_header.file_size as u64 {
+                    let profile_end = profile_offset_absolute
+                        .checked_add(profile.len() as u64)
+                        .ok_or_else(|| {
+                            StructuralError::ArithmeticOverflow("ICC profile end calculation".to_owned())
+                        })?;
+                    if profile_end > u64::from(data.file_header.file_size) {
                         return Err(ValidationError::IccProfile(IccProfileError::ExceedsFileSize {
                             profile_end,
                             file_size: data.file_header.file_size,
@@ -792,7 +775,7 @@ impl Bmp {
                 };
 
                 let required_file_end = pixel_end.max(icc_end);
-                if required_file_end > data.file_header.file_size as u64 {
+                if required_file_end > u64::from(data.file_header.file_size) {
                     return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
                         pixel_end: required_file_end,
                         file_size: data.file_header.file_size,
@@ -805,6 +788,10 @@ impl Bmp {
         Ok(())
     }
 
+    /// Writes the BMP structure as-is without re-deriving field values.
+    ///
+    /// # Errors
+    /// Returns [`BmpError`] if layout validation fails or any write/seek operation fails.
     pub fn write_unchecked<W: Write + Seek>(&self, writer: &mut W) -> Result<(), BmpError> {
         self.validate_write_layout()?;
 
@@ -828,7 +815,7 @@ impl Bmp {
                 }
 
                 writer
-                    .seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))
+                    .seek(SeekFrom::Start(u64::from(data.file_header.pixel_data_offset)))
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingPixelData))?;
                 writer
                     .write_all(&data.bitmap_array)
@@ -855,7 +842,7 @@ impl Bmp {
                 }
 
                 writer
-                    .seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))
+                    .seek(SeekFrom::Start(u64::from(data.file_header.pixel_data_offset)))
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingPixelData))?;
                 writer
                     .write_all(&data.bitmap_array)
@@ -876,7 +863,7 @@ impl Bmp {
                 }
 
                 writer
-                    .seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))
+                    .seek(SeekFrom::Start(u64::from(data.file_header.pixel_data_offset)))
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingPixelData))?;
                 writer
                     .write_all(&data.bitmap_array)
@@ -897,7 +884,7 @@ impl Bmp {
                 }
 
                 writer
-                    .seek(SeekFrom::Start(data.file_header.pixel_data_offset as u64))
+                    .seek(SeekFrom::Start(u64::from(data.file_header.pixel_data_offset)))
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingPixelData))?;
                 writer
                     .write_all(&data.bitmap_array)
@@ -906,7 +893,7 @@ impl Bmp {
                 if let Some(profile) = &data.icc_profile {
                     let profile_offset = data.bmp_header.profile_data + FileHeader::SIZE;
                     writer
-                        .seek(SeekFrom::Start(profile_offset as u64))
+                        .seek(SeekFrom::Start(u64::from(profile_offset)))
                         .map_err(|e| StructuralError::from_io(e, IoStage::ReadingIccProfile))?;
                     writer
                         .write_all(profile)
@@ -916,10 +903,10 @@ impl Bmp {
         }
 
         let file_end = match self {
-            Self::Core(data) => data.file_header.file_size as u64,
-            Self::Info(data) => data.file_header.file_size as u64,
-            Self::V4(data) => data.file_header.file_size as u64,
-            Self::V5(data) => data.file_header.file_size as u64,
+            Self::Core(data) => u64::from(data.file_header.file_size),
+            Self::Info(data) => u64::from(data.file_header.file_size),
+            Self::V4(data) => u64::from(data.file_header.file_size),
+            Self::V5(data) => u64::from(data.file_header.file_size),
         };
 
         // Leave the writer at the declared end of this BMP payload.

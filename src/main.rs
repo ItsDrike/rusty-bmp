@@ -1,3 +1,12 @@
+#![allow(
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::suboptimal_flops
+)]
+
 use std::{
     collections::HashSet,
     fs::File,
@@ -882,9 +891,9 @@ fn unique_rgb_colors_exceed(image: &DecodedImage, limit: usize) -> bool {
 
 fn all_pixels_exact_in_5bit_grid(image: &DecodedImage) -> bool {
     image.rgba.chunks_exact(4).all(|px| {
-        let r5 = (px[0] as u16 * 31 + 127) / 255;
-        let g5 = (px[1] as u16 * 31 + 127) / 255;
-        let b5 = (px[2] as u16 * 31 + 127) / 255;
+        let r5 = (u16::from(px[0]) * 31 + 127) / 255;
+        let g5 = (u16::from(px[1]) * 31 + 127) / 255;
+        let b5 = (u16::from(px[2]) * 31 + 127) / 255;
 
         let r8 = ((r5 * 255 + 15) / 31) as u8;
         let g8 = ((g5 * 255 + 15) / 31) as u8;
@@ -896,9 +905,9 @@ fn all_pixels_exact_in_5bit_grid(image: &DecodedImage) -> bool {
 
 fn all_pixels_exact_in_565_grid(image: &DecodedImage) -> bool {
     image.rgba.chunks_exact(4).all(|px| {
-        let r5 = (px[0] as u16 * 31 + 127) / 255;
-        let g6 = (px[1] as u16 * 63 + 127) / 255;
-        let b5 = (px[2] as u16 * 31 + 127) / 255;
+        let r5 = (u16::from(px[0]) * 31 + 127) / 255;
+        let g6 = (u16::from(px[1]) * 63 + 127) / 255;
+        let b5 = (u16::from(px[2]) * 31 + 127) / 255;
 
         let r8 = ((r5 * 255 + 15) / 31) as u8;
         let g8 = ((g6 * 255 + 31) / 63) as u8;

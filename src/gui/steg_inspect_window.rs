@@ -82,8 +82,8 @@ impl BmpViewerApp {
                                 Err(msg) => {
                                     ui.colored_label(egui::Color32::RED, format!("Error: {msg}"));
                                 }
-                                Ok(bytes) => match std::str::from_utf8(bytes) {
-                                    Ok(text) => {
+                                Ok(bytes) => {
+                                    if let Ok(text) = std::str::from_utf8(bytes) {
                                         ui.label("Payload (UTF-8 text):");
                                         egui::ScrollArea::vertical()
                                             .id_salt("steg_inspect_text")
@@ -102,8 +102,7 @@ impl BmpViewerApp {
                                         if ui.button("Copy to Clipboard").clicked() {
                                             ctx.copy_text(text.to_owned());
                                         }
-                                    }
-                                    Err(_) => {
+                                    } else {
                                         // Not valid UTF-8: show a hex dump of the
                                         // first 256 bytes.
                                         ui.label(format!(
@@ -131,7 +130,7 @@ impl BmpViewerApp {
                                                 ui.monospace(&hex);
                                             });
                                     }
-                                },
+                                }
                             }
                         }
                     }

@@ -172,7 +172,7 @@ fn max_channel_diff(a: &DecodedImage, b: &DecodedImage) -> u8 {
     a.rgba
         .iter()
         .zip(b.rgba.iter())
-        .map(|(&x, &y)| (x as i16 - y as i16).unsigned_abs() as u8)
+        .map(|(&x, &y)| (i16::from(x) - i16::from(y)).unsigned_abs() as u8)
         .max()
         .unwrap_or(0)
 }

@@ -4,7 +4,7 @@ use crate::raw::FixedPoint16Dot16;
 
 /// Gamma correction values for the RGB channels.
 ///
-/// This is only meaningful when the color space type is CalibratedRgb.
+/// This is only meaningful when the color space type is `CalibratedRgb`.
 ///
 /// Values are in fixed-point 16.16 format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

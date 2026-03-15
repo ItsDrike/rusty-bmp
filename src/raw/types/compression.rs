@@ -11,18 +11,18 @@ use crate::raw::{BitsPerPixel, error::ValidationError, helpers::wingdi};
 /// header versions or bits-per-pixel values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Compression {
-    /// BI_RGB (0) - no compression.
+    /// `BI_RGB` (0) - no compression.
     ///
-    /// * If the bits_per_pixel amount is 1, 4 or 8, the bitmap array
+    /// * If the `bits_per_pixel` amount is 1, 4 or 8, the bitmap array
     ///   values are indices into the color table.
-    /// * If the bits_per_pixel amount is 16, 24, or 32, the bitmap array
+    /// * If the `bits_per_pixel` amount is 16, 24, or 32, the bitmap array
     ///   specifies the actual intensities of blue, green, and red rather than
     ///   using color table indexes. With bpp of 16, the format uses RGB 555
     ///
     /// This is the most common choice.
     Rgb,
 
-    /// BI_RLE8 (1) - run-length encoding for 8-bit paletted images.
+    /// `BI_RLE8` (1) - run-length encoding for 8-bit paletted images.
     ///
     /// The compression format is a two-byte format consisting of a count byte
     /// followed by a byte containing a color index.
@@ -30,7 +30,7 @@ pub enum Compression {
     /// This is only valid when used with 8-bpp bitmaps.
     Rle8,
 
-    /// BI_RLE4 (2) - run-length encoding for 4-bit paletted images.
+    /// `BI_RLE4` (2) - run-length encoding for 4-bit paletted images.
     ///
     /// The compression format is a two-byte format consisting of a count byte
     /// followed by two word-length color indexes.
@@ -38,7 +38,7 @@ pub enum Compression {
     /// This is only valid when used with 4-bpp bitmaps.
     Rle4,
 
-    /// BI_BITFIELDS (3).
+    /// `BI_BITFIELDS` (3).
     ///
     /// Specifies that the bitmap is not compressed and that the color masks for
     /// the red, green, and blue components of each pixel are specified through
@@ -51,13 +51,13 @@ pub enum Compression {
     /// specification of the BMP format.
     BitFields,
 
-    /// BI_JPEG (4).
+    /// `BI_JPEG` (4).
     ///
     /// Specifies that the image is compressed using the JPEG file Interchange
     /// Format. The bitmap array holds embedded JPEG data.
     Jpeg,
 
-    /// BI_PNG (5).
+    /// `BI_PNG` (5).
     ///
     /// Specifies that the image is compressed using the PNG file Interchange
     /// Format. The bitmap array holds embedded PNG data.
@@ -81,13 +81,13 @@ impl Compression {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub(crate) fn write<W: Write>(self, writer: &mut W) -> io::Result<()> {
         let raw = self.value();
         writer.write_u32::<LittleEndian>(raw)?;
         Ok(())
     }
 
-    pub(crate) fn value(&self) -> u32 {
+    pub(crate) const fn value(self) -> u32 {
         match self {
             Self::Rgb => wingdi::BI_RGB,
             Self::Rle4 => wingdi::BI_RLE4,
@@ -95,7 +95,7 @@ impl Compression {
             Self::BitFields => wingdi::BI_BITFIELDS,
             Self::Jpeg => wingdi::BI_JPEG,
             Self::Png => wingdi::BI_PNG,
-            Self::Other(x) => *x,
+            Self::Other(x) => x,
         }
     }
 
@@ -108,8 +108,9 @@ impl Compression {
     /// - BITFIELDS compression is only valid for 16 or 32 bits per pixel
     /// - RGB compression is only valid for 24 bits per pixel
     /// - JPEG and PNG compression require `bpp = 0`
-    pub(crate) fn validate_for_bpp(&self, bpp: BitsPerPixel) -> Result<(), ValidationError> {
-        match (*self, bpp) {
+    pub(crate) const fn validate_for_bpp(self, bpp: BitsPerPixel) -> Result<(), ValidationError> {
+        #[allow(clippy::match_same_arms)]
+        match (self, bpp) {
             (Self::Rle4, BitsPerPixel::Bpp4) => {}
             (Self::Rle8, BitsPerPixel::Bpp8) => {}
             (Self::BitFields, BitsPerPixel::Bpp16 | BitsPerPixel::Bpp32) => {}
@@ -125,10 +126,7 @@ impl Compression {
             (Self::Png | Self::Jpeg, BitsPerPixel::Bpp0) => {}
             (Self::Other(raw_bpp), _) => return Err(ValidationError::UnknownCompression(raw_bpp)),
             _ => {
-                return Err(ValidationError::InvalidCompressionForBpp {
-                    compression: *self,
-                    bpp,
-                });
+                return Err(ValidationError::InvalidCompressionForBpp { compression: self, bpp });
             }
         }
 

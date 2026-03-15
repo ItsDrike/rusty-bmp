@@ -94,11 +94,10 @@ impl BitmapCoreHeader {
                 let bits = self.bit_count.bit_count();
 
                 // compute max colors for this amount of bits
-                1u32.checked_shl(bits as u32).ok_or_else(|| {
+                1u32.checked_shl(u32::from(bits)).ok_or_else(|| {
                     // should never happen (1u32 << 1 | 4 | 8 cannot overflow)
                     StructuralError::ArithmeticOverflow(format!(
-                        "bit count of {0} is too large to safely compute max colors for the color table size",
-                        bits
+                        "bit count of {bits} is too large to safely compute max colors for the color table size"
                     ))
                 })?
             }
@@ -117,19 +116,15 @@ impl BitmapCoreHeader {
     pub(crate) fn pixel_data_size(&self) -> Result<u32, StructuralError> {
         let bits = self.bit_count.bit_count();
 
-        let row_stride = (bits as u32)
-            .checked_mul(self.width as u32)
+        let row_stride = u32::from(bits)
+            .checked_mul(u32::from(self.width))
             .and_then(|bits_per_row| bits_per_row.checked_add(31))
             .map(|x| (x / 32) * 4)
-            .ok_or(StructuralError::ArithmeticOverflow(
-                "row stride (pixel data size)".to_owned(),
-            ))?;
+            .ok_or_else(|| StructuralError::ArithmeticOverflow("row stride (pixel data size)".to_owned()))?;
 
         let image_size = row_stride
-            .checked_mul(self.height as u32)
-            .ok_or(StructuralError::ArithmeticOverflow(
-                "image size (pixel data size)".to_owned(),
-            ))?;
+            .checked_mul(u32::from(self.height))
+            .ok_or_else(|| StructuralError::ArithmeticOverflow("image size (pixel data size)".to_owned()))?;
 
         Ok(image_size)
     }

@@ -361,8 +361,8 @@ impl BmpViewerApp {
             // Drag and drop hint, with a Wayland warning.
             let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
             let warn_color = egui::Color32::from_rgb(200, 170, 60);
+            ui.add_space(12.0);
             if on_wayland {
-                ui.add_space(12.0);
                 ui.colored_label(warn_color, "Warning: Drag and drop is not available under Wayland.");
                 let exe = std::env::current_exe()
                     .ok()
@@ -375,7 +375,6 @@ impl BmpViewerApp {
                         .color(warn_color),
                 );
             } else {
-                ui.add_space(12.0);
                 ui.label("Or drag and drop a BMP file anywhere in this window.");
             }
         });
@@ -522,7 +521,7 @@ fn pick_crop_drag_mode(pointer: egui::Pos2, crop_rect: egui::Rect, handle_half_s
     }
 }
 
-fn cursor_icon_for_crop_mode(mode: CropDragMode) -> egui::CursorIcon {
+const fn cursor_icon_for_crop_mode(mode: CropDragMode) -> egui::CursorIcon {
     match mode {
         CropDragMode::Move => egui::CursorIcon::Grab,
         CropDragMode::Left | CropDragMode::Right => egui::CursorIcon::ResizeHorizontal,

@@ -38,7 +38,7 @@ pub enum BitsPerPixel {
 
     /// The bitmap has a maximum of 2^16 colors.
     ///
-    /// If the compression is set to BI_RGB, each WORD (2 bytes) in the bitmap
+    /// If the compression is set to `BI_RGB`, each WORD (2 bytes) in the bitmap
     /// array represents a single pixel. The relative intensities of red, green,
     /// and blue are represented in the RGB555 format (with five bits for each
     /// color component. The value for blue is the least significant five bits,
@@ -47,9 +47,9 @@ pub enum BitsPerPixel {
     ///
     /// In this mode, the color palette is used only for optimizing colors on
     /// palette-based devices, and must contain the number of entries specified
-    /// by the colors_used value of the DIB header.
+    /// by the `colors_used` value of the DIB header.
     ///
-    /// If the compression is set to BI_BITFIELDS, the color palette contains
+    /// If the compression is set to `BI_BITFIELDS`, the color palette contains
     /// three 2-byte color masks that specify the red, green and blue components
     /// respectively, of each pixel. Each byte in the bitmap array represents a
     /// single pixel, with the bit mask being used to extract the individual
@@ -64,22 +64,22 @@ pub enum BitsPerPixel {
     ///
     /// In this mode, the color palette is used only for optimizing colors on
     /// palette-based devices, and must contain the number of entries specified
-    /// by the colors_used value of the DIB header.
+    /// by the `colors_used` value of the DIB header.
     Bpp24,
 
     /// The bitmap has a maximum of 2^32 colors.
     ///
-    /// If the compression is set to BI_RGB, each DWORD (4-bytes) in the bitmap
-    /// array represents a single pixel. The relative intensities of blue, green,
-    /// and red for a pixel are represented in the RGB888 format (with the value
-    /// of blue in the least significant 8 bits, followed by 8 bits each for
-    /// green and red. The high byte in each DWORD is not used.)
+    /// If the compression is set to `BI_RGB`, each DWORD (4-bytes) in the
+    /// bitmap array represents a single pixel. The relative intensities of
+    /// blue, green, and red for a pixel are represented in the RGB888 format
+    /// (with the value of blue in the least significant 8 bits, followed by 8
+    /// bits each for green and red. The high byte in each DWORD is not used.)
     ///
     /// In this mode, the color palette is used only for optimizing colors on
     /// palette-based devices, and must contain the number of entries specified
-    /// by the colors_used value of the DIB header.
+    /// by the `colors_used` value of the DIB header.
     ///
-    /// If the compression is set to BI_BITFIELDS, the color palette will
+    /// If the compression is set to `BI_BITFIELDS`, the color palette will
     /// contain three DWORD color masks that specify the red, green and blue
     /// components of each pixel. Each DWORD in the bitmap array represents a
     /// single pixel.
@@ -90,21 +90,15 @@ pub enum BitsPerPixel {
 }
 
 impl BitsPerPixel {
-    pub(crate) fn validate(&self, variant: DibVariant) -> Result<(), ValidationError> {
+    pub(crate) const fn validate(self, variant: DibVariant) -> Result<(), ValidationError> {
+        #[allow(clippy::match_same_arms)]
         match (variant, self) {
-            (DibVariant::Core, BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 | BitsPerPixel::Bpp24) => {
-            }
+            (DibVariant::Core, Self::Bpp1 | Self::Bpp4 | Self::Bpp8 | Self::Bpp24) => {}
             (
                 DibVariant::Info | DibVariant::V4 | DibVariant::V5,
-                BitsPerPixel::Bpp0
-                | BitsPerPixel::Bpp1
-                | BitsPerPixel::Bpp4
-                | BitsPerPixel::Bpp8
-                | BitsPerPixel::Bpp16
-                | BitsPerPixel::Bpp24
-                | BitsPerPixel::Bpp32,
+                Self::Bpp0 | Self::Bpp1 | Self::Bpp4 | Self::Bpp8 | Self::Bpp16 | Self::Bpp24 | Self::Bpp32,
             ) => {}
-            _ => return Err(ValidationError::InvalidBitCount(*self)),
+            _ => return Err(ValidationError::InvalidBitCount(self)),
         }
 
         Ok(())
@@ -124,14 +118,14 @@ impl BitsPerPixel {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub(crate) fn write<W: Write>(self, writer: &mut W) -> io::Result<()> {
         let raw: u16 = self.bit_count();
         writer.write_u16::<LittleEndian>(raw)
     }
 
     #[inline]
     #[must_use]
-    pub fn bit_count(self) -> u16 {
+    pub const fn bit_count(self) -> u16 {
         match self {
             Self::Bpp0 => 0,
             Self::Bpp1 => 1,

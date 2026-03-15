@@ -2,6 +2,11 @@
 name = "bmp"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/ItsDrike/rusty-bmp"
+description = "BMP parsing, validation, encoding, and image transform utilities"
+keywords = ["bmp", "image", "encoding", "decoding", "steganography"]
+categories = ["multimedia::images", "encoding"]
+license = "LicenseRef-Proprietary"
 
 [dependencies]
 byteorder = "1.5.0"
@@ -12,3 +17,12 @@ thiserror = "2.0.18"
 
 [dev-dependencies]
 rstest = "0.25.0"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"

@@ -7,7 +7,7 @@ use crate::BmpViewerApp;
 impl BmpViewerApp {
     pub(crate) fn open_crop_window(&mut self) {
         let Some(image) = self.document.transformed_image.as_ref() else {
-            self.status = "Load an image first".to_owned();
+            "Load an image first".clone_into(&mut self.status);
             return;
         };
 
@@ -42,7 +42,7 @@ impl BmpViewerApp {
             .resizable(false)
             .default_width(340.0)
             .show(ctx, |ui| {
-                ui.label(format!("Image size: {}x{}", img_w, img_h));
+                ui.label(format!("Image size: {img_w}x{img_h}"));
                 ui.small("x/y are crop center coordinates.");
                 ui.add_space(6.0);
 

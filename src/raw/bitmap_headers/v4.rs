@@ -47,7 +47,7 @@ pub struct BitmapV4Header {
 
     /// Defines the CIE XYZ endpoints for red, green and blue.
     ///
-    /// This is only meaningful when cs_type is LCS_CALIBRATED_RGB.
+    /// This is only meaningful when `cs_type` is `LCS_CALIBRATED_RGB`.
     ///
     /// See the [`CieXyzTriple`] structure for more info.
     pub endpoints: CieXyzTriple,

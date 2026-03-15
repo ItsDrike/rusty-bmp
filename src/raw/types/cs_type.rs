@@ -12,7 +12,7 @@ use crate::raw::helpers::wingdi;
 /// color-managed system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorSpaceType {
-    /// LCS_CALIBRATED_RGB
+    /// `LCS_CALIBRATED_RGB`
     ///
     /// This mode implies that the RGB values of the pixels in this bitmap are
     /// defined by XYZ primaries (end points) and gammas. The values for these
@@ -22,7 +22,7 @@ pub enum ColorSpaceType {
     /// stored in the header should be ignored, and may contain garbage.
     CalibratedRgb,
 
-    /// LCS_sRGB
+    /// `LCS_sRGB`
     ///
     /// This mode implies that the bitmap is in sRGB color space.
     ///
@@ -30,7 +30,7 @@ pub enum ColorSpaceType {
     /// in the DIB header should be ignored and may hold bogus values.
     SRgb,
 
-    /// LCS_WINDOWS_COLOR_SPACE
+    /// `LCS_WINDOWS_COLOR_SPACE`
     ///
     /// It historically represented the system default profile, which in modern
     /// Windows resolves to sRGB unless the system has a different default
@@ -40,7 +40,7 @@ pub enum ColorSpaceType {
     /// in the DIB header should be ignored and may bogus values.
     WindowsColorSpace,
 
-    /// PROFILE_EMBEDDED
+    /// `PROFILE_EMBEDDED`
     ///
     /// Only valid in V5+ Bitmaps.
     ///
@@ -56,7 +56,7 @@ pub enum ColorSpaceType {
     /// and may hold bogus values.
     ProfileEmbedded,
 
-    /// PROFILE_LINKED
+    /// `PROFILE_LINKED`
     ///
     /// Only valid in V5+ Bitmaps.
     ///
@@ -103,20 +103,20 @@ impl ColorSpaceType {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub(crate) fn write<W: Write>(self, writer: &mut W) -> io::Result<()> {
         let raw = self.value();
         writer.write_u32::<LittleEndian>(raw)?;
         Ok(())
     }
 
-    pub(crate) fn value(&self) -> u32 {
+    pub(crate) const fn value(self) -> u32 {
         match self {
             Self::CalibratedRgb => wingdi::LCS_CALIBRATED_RGB,
             Self::SRgb => wingdi::LCS_sRGB,
             Self::WindowsColorSpace => wingdi::LCS_WINDOWS_COLOR_SPACE,
             Self::ProfileEmbedded => wingdi::PROFILE_EMBEDDED,
             Self::ProfileLinked => wingdi::PROFILE_LINKED,
-            Self::Other(x) => *x,
+            Self::Other(x) => x,
         }
     }
 }

@@ -5,7 +5,7 @@ use bmp::runtime::transform::{ConvolutionFilter, ImageTransform};
 use crate::BmpViewerApp;
 
 /// Deferred actions from the side panel that need `&mut self` after the closure returns.
-pub(crate) struct SidePanelActions {
+pub struct SidePanelActions {
     pub remove_transform: Option<usize>,
     pub do_undo: bool,
     pub do_redo: bool,
@@ -197,11 +197,11 @@ impl BmpViewerApp {
                         } else {
                             ui.horizontal(|ui| {
                                 let can_undo = has_history;
-                                let undo_tooltip = if let Some(op) = self.document.pipeline.ops().last() {
-                                    format!("Undo {} (Ctrl+Z)", op)
-                                } else {
-                                    "Nothing to undo".to_owned()
-                                };
+                                let undo_tooltip =
+                                    self.document.pipeline.ops().last().map_or_else(
+                                        || "Nothing to undo".to_owned(),
+                                        |op| format!("Undo {op} (Ctrl+Z)"),
+                                    );
                                 if ui
                                     .add_enabled(can_undo, egui::Button::new("Undo").small())
                                     .on_hover_text(&undo_tooltip)
@@ -211,11 +211,10 @@ impl BmpViewerApp {
                                 }
 
                                 let can_redo = has_redo;
-                                let redo_tooltip = if let Some(op) = self.document.redo_stack.last() {
-                                    format!("Redo {} (Ctrl+Shift+Z)", op)
-                                } else {
-                                    "Nothing to redo".to_owned()
-                                };
+                                let redo_tooltip = self.document.redo_stack.last().map_or_else(
+                                    || "Nothing to redo".to_owned(),
+                                    |op| format!("Redo {op} (Ctrl+Shift+Z)"),
+                                );
                                 if ui
                                     .add_enabled(can_redo, egui::Button::new("Redo").small())
                                     .on_hover_text(&redo_tooltip)

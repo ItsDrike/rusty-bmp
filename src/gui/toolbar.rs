@@ -26,7 +26,7 @@ impl BmpViewerApp {
                 } else if enter || load_clicked {
                     let path = PathBuf::from(self.path_input.trim());
                     if path.as_os_str().is_empty() {
-                        self.status = "Please enter a path".to_owned();
+                        "Please enter a path".clone_into(&mut self.status);
                     } else {
                         self.load_path(ctx, path);
                     }

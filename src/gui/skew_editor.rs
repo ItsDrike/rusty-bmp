@@ -83,10 +83,7 @@ impl BmpViewerApp {
                         "Invalid parameters: near-singular transform (1 - kx*ky ~ 0)",
                     );
                 } else {
-                    ui.colored_label(
-                        egui::Color32::GREEN,
-                        format!("kx={:+.3}, ky={:+.3}, det={:+.3}", kx, ky, det),
-                    );
+                    ui.colored_label(egui::Color32::GREEN, format!("kx={kx:+.3}, ky={ky:+.3}, det={det:+.3}"));
                 }
 
                 ui.horizontal(|ui| {

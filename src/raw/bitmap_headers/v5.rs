@@ -43,19 +43,19 @@ pub struct BitmapV5Header {
     ///
     /// The meaning of this depends on the color space type (`v4.cs_type`).
     ///
-    /// * If the color space is neither PROFILE_EMBEDDED nor PROFILE_LINKED,
+    /// * If the color space is neither `PROFILE_EMBEDDED` nor `PROFILE_LINKED`,
     ///   the value of this can be ignored.
     ///
-    /// * If the color space is PROFILE_LINKED, profile data under this offset
+    /// * If the color space is `PROFILE_LINKED`, profile data under this offset
     ///   will contain a NULL terminated string following the Windows ANSI
     ///   encoding (code page 1252), holding a path to the linked profile.
     ///   Generally, this will be a file-system path, but it can also be a
     ///   network path. E.g.:
     ///
-    ///     - C:\Windows\System32\spool\drivers\color\profile.icm
-    ///     - \\Server\Share\profile.icm
+    ///     - `C:\Windows\System32\spool\drivers\color\profile.icm`
+    ///     - `\\Server\Share\profile.icm`
     ///
-    /// * If the color space is PROFILE_EMBEDDED, the profile data is stored at
+    /// * If the color space is `PROFILE_EMBEDDED`, the profile data is stored at
     ///   this offset will be the full embedded ICC profile structure.
     pub profile_data: u32,
 

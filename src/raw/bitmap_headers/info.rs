@@ -24,8 +24,8 @@ pub struct BitmapInfoHeader {
     ///
     /// Width does not include any scan-line boundary padding.
     ///
-    /// If compression is BI_JPEG or BI_PNG, width specifies the width of the
-    /// decompressed JPEG or PNG image in pixels.
+    /// If compression is `BI_JPEG` or `BI_PNG`, width specifies the width of
+    /// the decompressed JPEG or PNG image in pixels.
     pub width: i32,
 
     /// The height of the bitmap, in pixels.
@@ -36,10 +36,11 @@ pub struct BitmapInfoHeader {
     ///   is the upper-left corner.
     ///
     /// If the height is negative, indicating a top-down DIB, the compression
-    /// must be either BI_RGB or BI_BITFIELDS. Top-down DIBs cannot be compressed.
+    /// must be either `BI_RGB` or `BI_BITFIELDS`. Top-down DIBs cannot be
+    /// compressed.
     ///
-    /// If compression is BI_JPEG or BI_PNG, width specifies the height of the
-    /// decompressed JPEG or PNG image in pixels.
+    /// If compression is `BI_JPEG` or `BI_PNG`, width specifies the height of
+    /// the decompressed JPEG or PNG image in pixels.
     pub height: i32,
 
     /// The number of planes for the target device.
@@ -62,7 +63,7 @@ pub struct BitmapInfoHeader {
     ///
     /// This may be set to zero for uncompressed bitmaps.
     ///
-    /// If compression is BI_JPEG or BI_PNG, this will be the size of the
+    /// If compression is `BI_JPEG` or `BI_PNG`, this will be the size of the
     /// JPEG or PNG image buffer.
     pub image_size: u32,
 
@@ -85,7 +86,7 @@ pub struct BitmapInfoHeader {
     /// - If the value is non-zero, it specifies the exact number of color table
     ///   palette entries that follow the header.
     /// - If the value is zero, the palette contains the maximum number of
-    ///   entries for the given bit depth (2^bit_count).
+    ///   entries for the given bit depth (`2^bit_count`).
     ///
     /// For direct-color bitmaps (16, 24 or 32 bits per pixel):
     ///
@@ -223,11 +224,10 @@ impl BitmapInfoHeader {
                     let bits = self.bit_count.bit_count();
 
                     // compute max colors for this amount of bits
-                    1u32.checked_shl(bits as u32).ok_or_else(|| {
+                    1u32.checked_shl(u32::from(bits)).ok_or_else(|| {
                         // should never happen (1u32 << 1 | 4 | 8 cannot overflow)
                         StructuralError::ArithmeticOverflow(format!(
-                            "bit count of {0} is too large to safely compute max colors for the color table size",
-                            bits
+                            "bit count of {bits} is too large to safely compute max colors for the color table size"
                         ))
                     })?
                 }
@@ -256,20 +256,15 @@ impl BitmapInfoHeader {
                 let height = self.height.unsigned_abs();
                 let bits = self.bit_count.bit_count();
 
-                let row_stride = (bits as u32)
+                let row_stride = u32::from(bits)
                     .checked_mul(width)
                     .and_then(|bits_per_row| bits_per_row.checked_add(31))
                     .map(|x| (x / 32) * 4)
-                    .ok_or(StructuralError::ArithmeticOverflow(
-                        "row stride (pixel data size)".to_owned(),
-                    ))?;
+                    .ok_or_else(|| StructuralError::ArithmeticOverflow("row stride (pixel data size)".to_owned()))?;
 
-                let image_size_computed =
-                    row_stride
-                        .checked_mul(height)
-                        .ok_or(StructuralError::ArithmeticOverflow(
-                            "image size (pixel data size)".to_owned(),
-                        ))?;
+                let image_size_computed = row_stride
+                    .checked_mul(height)
+                    .ok_or_else(|| StructuralError::ArithmeticOverflow("image size (pixel data size)".to_owned()))?;
 
                 // This intentionally ignores the image_size field from the header and uses the
                 // computed size, as that is the structurally valid size, size mismatch is checked

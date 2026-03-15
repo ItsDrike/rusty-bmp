@@ -11,7 +11,7 @@ impl BmpViewerApp {
             self.transforms.resize.height_input = img.height.to_string();
             self.transforms.resize.open = true;
         } else {
-            self.status = "Load an image first".to_owned();
+            "Load an image first".clone_into(&mut self.status);
         }
     }
 
@@ -132,10 +132,10 @@ impl BmpViewerApp {
                 ui.add_space(6.0);
                 match &validation {
                     Ok((w, h)) => {
-                        ui.colored_label(egui::Color32::GREEN, format!("Target: {}x{}", w, h));
+                        ui.colored_label(egui::Color32::GREEN, format!("Target: {w}x{h}"));
                     }
                     Err(msg) => {
-                        ui.colored_label(egui::Color32::RED, msg.to_string());
+                        ui.colored_label(egui::Color32::RED, (*msg).to_owned());
                     }
                 }
 

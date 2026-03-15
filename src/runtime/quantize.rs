@@ -124,7 +124,7 @@ impl Bucket {
     ///
     /// Returns the (possibly unchanged) left bucket and an optional right
     /// bucket when a split point exists.
-    fn split(mut self, rgba: &[u8]) -> (Bucket, Option<Bucket>) {
+    fn split(mut self, rgba: &[u8]) -> (Self, Option<Self>) {
         let axes = self.widest_axes(rgba);
 
         for axis in axes {
@@ -134,7 +134,7 @@ impl Bucket {
                 let right = self.pixel_indices.split_off(split_at);
                 return (
                     self,
-                    Some(Bucket {
+                    Some(Self {
                         pixel_indices: right,
                         terminal: false,
                     }),
@@ -150,13 +150,19 @@ impl Bucket {
         if self.pixel_indices.is_empty() {
             return [0, 0, 0, 255];
         }
+
         let (mut sum_r, mut sum_g, mut sum_b) = (0u64, 0u64, 0u64);
         for &i in &self.pixel_indices {
-            sum_r += rgba[i] as u64;
-            sum_g += rgba[i + 1] as u64;
-            sum_b += rgba[i + 2] as u64;
+            debug_assert!(i + 3 < rgba.len());
+            sum_r += u64::from(rgba[i]);
+            sum_g += u64::from(rgba[i + 1]);
+            sum_b += u64::from(rgba[i + 2]);
         }
         let n = self.pixel_indices.len() as u64;
+
+        // Safe: We have a sum of N u8 values, divided by N -> safe u8
+        // (This will floor - int division)
+        #[allow(clippy::cast_possible_truncation)]
         [(sum_r / n) as u8, (sum_g / n) as u8, (sum_b / n) as u8, 255]
     }
 }
@@ -169,6 +175,10 @@ impl Bucket {
 ///
 /// Returns `(palette, indices)` where `palette` has at most `max_colors`
 /// entries (each `[R, G, B, 255]`) and `indices` has one entry per pixel.
+///
+/// # Panics
+/// Panics if `max_colors` is not in `2..=256`.
+#[must_use]
 pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
     assert!((2..=256).contains(&max_colors));
 
@@ -210,9 +220,14 @@ pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
     let mut indices = vec![0u8; pixel_count];
 
     for (palette_idx, bucket) in buckets.iter().enumerate() {
+        // Safe: the palette index is the bucket position, and we guarantee that
+        // have at most 256 buckets (in the max_colors assert) -> fits in u8
+        #[allow(clippy::cast_possible_truncation)]
+        let palette_idx = palette_idx as u8;
+
         palette.push(bucket.average_color(rgba));
         for &off in &bucket.pixel_indices {
-            indices[off / 4] = palette_idx as u8;
+            indices[off / 4] = palette_idx;
         }
     }
 

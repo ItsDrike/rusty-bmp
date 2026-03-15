@@ -14,14 +14,13 @@ pub enum IoStage {
 
 impl std::fmt::Display for IoStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use IoStage::*;
         let s = match self {
-            ReadingFileHeader => "reading file header",
-            ReadingDibHeader => "reading DIB header",
-            ReadingColorMasks => "reading color masks",
-            ReadingColorTable => "reading color table",
-            ReadingPixelData => "reading pixel data",
-            ReadingIccProfile => "reading ICC profile",
+            Self::ReadingFileHeader => "reading file header",
+            Self::ReadingDibHeader => "reading DIB header",
+            Self::ReadingColorMasks => "reading color masks",
+            Self::ReadingColorTable => "reading color table",
+            Self::ReadingPixelData => "reading pixel data",
+            Self::ReadingIccProfile => "reading ICC profile",
         };
         f.write_str(s)
     }
@@ -73,7 +72,7 @@ pub enum StructuralError {
 }
 
 impl StructuralError {
-    pub(crate) fn from_io(source: std::io::Error, stage: IoStage) -> Self {
+    pub(crate) const fn from_io(source: std::io::Error, stage: IoStage) -> Self {
         Self::Io { source, stage }
     }
 }

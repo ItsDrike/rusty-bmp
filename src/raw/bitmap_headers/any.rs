@@ -82,7 +82,7 @@ impl BitmapHeader {
     }
 
     #[inline]
-    pub(crate) fn bit_count(&self) -> BitsPerPixel {
+    pub(crate) const fn bit_count(&self) -> BitsPerPixel {
         match self {
             Self::Core(h) => h.bit_count,
             Self::Info(h) => h.bit_count,
@@ -92,7 +92,7 @@ impl BitmapHeader {
     }
 
     #[inline]
-    pub(crate) fn compression(&self) -> Compression {
+    pub(crate) const fn compression(&self) -> Compression {
         match self {
             Self::Core(_) => Compression::Rgb,
             Self::Info(h) => h.compression,

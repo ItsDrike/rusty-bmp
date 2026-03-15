@@ -59,29 +59,32 @@ pub struct FixedPoint2Dot30 {
 impl FixedPoint2Dot30 {
     pub const FRACTIONAL_BITS: u32 = 30;
 
+    #[allow(clippy::cast_precision_loss)]
     pub const SCALE_F64: f64 = (1u64 << Self::FRACTIONAL_BITS) as f64;
+    #[allow(clippy::cast_precision_loss)]
     pub const SCALE_F32: f32 = (1u32 << Self::FRACTIONAL_BITS) as f32;
 
     /// Creates a fixed-point value from its raw 32-bit representation.
     ///
     /// The caller is responsible for ensuring that the value follows the
     /// 2.30 fixed-point interpretation.
+    #[must_use]
     pub const fn from_raw(raw: u32) -> Self {
         Self { raw }
     }
 
     /// Returns the underlying raw 32-bit representation.
+    #[must_use]
     pub const fn raw(self) -> u32 {
         self.raw
     }
 
     /// Converts the fixed-point value to `f64`.
     ///
-    /// The conversion is performed as:
-    ///
-    /// `value = raw / 2^30`
+    /// The conversion is performed as: `value = raw / 2^30`
     ///
     /// This conversion is exact for all representable 2.30 values.
+    #[must_use]
     pub const fn to_f64(self) -> f64 {
         self.raw as f64 / Self::SCALE_F64
     }
@@ -90,6 +93,8 @@ impl FixedPoint2Dot30 {
     ///
     /// Note that `f32` has fewer mantissa bits (23) than the 30 fractional
     /// bits stored in this format, so precision may be lost.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub const fn to_f32(self) -> f32 {
         self.raw as f32 / Self::SCALE_F32
     }
@@ -99,16 +104,18 @@ impl FixedPoint2Dot30 {
     /// The value is scaled by `2^30` and rounded to the nearest integer.
     /// Returns `None` if the input is not finite, or is outside the
     /// representable range (`0.0 ..= u32::MAX / 2^30` ~= 0..4).
+    #[must_use]
     pub fn try_from_f64(value: f64) -> Option<Self> {
         if !value.is_finite() {
             return None;
         }
 
         let scaled = (value * Self::SCALE_F64).round();
-        if scaled < 0.0 || scaled > u32::MAX as f64 {
+        if scaled < 0.0 || scaled > f64::from(u32::MAX) {
             return None;
         }
 
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Some(Self { raw: scaled as u32 })
     }
 
@@ -119,14 +126,16 @@ impl FixedPoint2Dot30 {
     /// representable value (`0.0 ..= u32::MAX / 2^30` ~= 0..4).
     ///
     /// Non-finite values are represented as 0.
+    #[must_use]
     pub fn from_f64_clamped(value: f64) -> Self {
         if !value.is_finite() {
             return Self { raw: 0 };
         }
 
         let scaled = (value * Self::SCALE_F64).round();
-        let clamped = scaled.clamp(0.0, u32::MAX as f64);
+        let clamped = scaled.clamp(0.0, f64::from(u32::MAX));
 
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Self { raw: clamped as u32 }
     }
 }
@@ -143,7 +152,7 @@ impl FixedPoint2Dot30 {
         Ok(Self { raw })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    pub(crate) fn write<W: Write>(self, writer: &mut W) -> std::io::Result<()> {
         writer.write_u32::<LittleEndian>(self.raw)
     }
 }
@@ -176,15 +185,19 @@ pub struct FixedPoint16Dot16 {
 impl FixedPoint16Dot16 {
     pub const FRACTIONAL_BITS: u32 = 16;
 
+    #[allow(clippy::cast_precision_loss)]
     pub const SCALE_F64: f64 = (1u64 << Self::FRACTIONAL_BITS) as f64;
+    #[allow(clippy::cast_precision_loss)]
     pub const SCALE_F32: f32 = (1u32 << Self::FRACTIONAL_BITS) as f32;
 
     /// Creates a fixed-point value from its raw 32-bit representation.
+    #[must_use]
     pub const fn from_raw(raw: u32) -> Self {
         Self { raw }
     }
 
     /// Returns the underlying raw representation.
+    #[must_use]
     pub const fn raw(self) -> u32 {
         self.raw
     }
@@ -192,6 +205,7 @@ impl FixedPoint16Dot16 {
     /// Converts the fixed-point value to `f64`.
     ///
     /// Computed as: `raw / 2^16`.
+    #[must_use]
     pub const fn to_f64(self) -> f64 {
         self.raw as f64 / Self::SCALE_F64
     }
@@ -199,6 +213,8 @@ impl FixedPoint16Dot16 {
     /// Converts the fixed-point value to `f32`.
     ///
     /// Computed as: `raw / 2^16`.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub const fn to_f32(self) -> f32 {
         self.raw as f32 / Self::SCALE_F32
     }
@@ -208,16 +224,18 @@ impl FixedPoint16Dot16 {
     /// The value is scaled by `2^16` and rounded to the nearest integer.
     /// Returns `None` if the input is not finite, or is outside the
     /// representable range (`0.0 ..= u32::MAX / 2^16` ~= 0..65536).
+    #[must_use]
     pub fn try_from_f64(value: f64) -> Option<Self> {
         if !value.is_finite() {
             return None;
         }
 
         let scaled = (value * Self::SCALE_F64).round();
-        if scaled < 0.0 || scaled > u32::MAX as f64 {
+        if scaled < 0.0 || scaled > f64::from(u32::MAX) {
             return None;
         }
 
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Some(Self { raw: scaled as u32 })
     }
 
@@ -229,14 +247,16 @@ impl FixedPoint16Dot16 {
     /// representable value (`0.0 ..= u32::MAX / 2^16` ~= 0..65536).
     ///
     /// Non-finite values are represented as 0.
+    #[must_use]
     pub fn from_f64_clamped(value: f64) -> Self {
         if !value.is_finite() {
             return Self { raw: 0 };
         }
 
         let scaled = (value * Self::SCALE_F64).round();
-        let clamped = scaled.clamp(0.0, u32::MAX as f64);
+        let clamped = scaled.clamp(0.0, f64::from(u32::MAX));
 
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         Self { raw: clamped as u32 }
     }
 }
@@ -253,7 +273,7 @@ impl FixedPoint16Dot16 {
         Ok(Self { raw })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub(crate) fn write<W: Write>(self, writer: &mut W) -> io::Result<()> {
         writer.write_u32::<LittleEndian>(self.raw)
     }
 }

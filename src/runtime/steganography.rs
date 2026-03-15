@@ -79,8 +79,8 @@ pub enum StegError {
 const HEADER_BITS: u64 = 80;
 
 fn validated_total_pixels(image: &DecodedImage) -> Result<usize, StegError> {
-    let width = usize::try_from(image.width).map_err(|_| StegError::ArithmeticOverflow("width cast"))?;
-    let height = usize::try_from(image.height).map_err(|_| StegError::ArithmeticOverflow("height cast"))?;
+    let width = image.width as usize;
+    let height = image.height as usize;
     let pixels = width
         .checked_mul(height)
         .ok_or(StegError::ArithmeticOverflow("pixel count"))?;
@@ -102,13 +102,15 @@ fn validated_total_pixels(image: &DecodedImage) -> Result<usize, StegError> {
 
 impl StegConfig {
     /// Total bits contributed by this config per pixel.
-    pub fn bits_per_pixel(self) -> u8 {
+    #[must_use]
+    pub const fn bits_per_pixel(self) -> u8 {
         self.r_bits + self.g_bits + self.b_bits + self.a_bits
     }
 
     /// Total number of bits available for steg data in an image (including the
     /// header).
-    pub fn total_bits(self, width: u32, height: u32) -> u64 {
+    #[must_use]
+    pub const fn total_bits(self, width: u32, height: u32) -> u64 {
         (width as u64)
             .saturating_mul(height as u64)
             .saturating_mul(self.bits_per_pixel() as u64)
@@ -116,21 +118,25 @@ impl StegConfig {
 
     /// Maximum payload in *bytes* that can be embedded (excluding the header).
     /// Returns 0 if the image is too small to even fit the header.
-    pub fn capacity_bytes(self, width: u32, height: u32) -> u64 {
+    #[must_use]
+    pub const fn capacity_bytes(self, width: u32, height: u32) -> u64 {
         let total = self.total_bits(width, height);
         total.saturating_sub(HEADER_BITS) / 8
     }
 
     /// Encode the four 0..=8 channel values into a 13-bit base-9 integer.
     /// The result always fits in `u16` (max value 6560 < 8192 = 2^13).
-    pub fn encode_config_bits(self) -> u16 {
+    #[must_use]
+    pub const fn encode_config_bits(self) -> u16 {
         self.r_bits as u16 + self.g_bits as u16 * 9 + self.b_bits as u16 * 81 + self.a_bits as u16 * 729
     }
 
     /// Decode a 13-bit base-9 integer back into a `StegConfig`.
     /// Returns `None` if `raw >= 6561` (out of valid base-9 range) or if any
     /// individual component decoded to > 8.
-    pub fn decode_config_bits(raw: u16) -> Option<Self> {
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub const fn decode_config_bits(raw: u16) -> Option<Self> {
         if raw >= 6561 {
             return None;
         }
@@ -190,12 +196,12 @@ impl BitCursor {
 
     /// Returns `true` if there are no more bits to emit in the given pixel
     /// count.
-    fn exhausted(&self, total_pixels: usize) -> bool {
+    const fn check_exhausted(&self, total_pixels: usize) -> bool {
         self.pixel_idx >= total_pixels
     }
 
     /// How many bits per channel the current channel contributes.
-    fn current_channel_bits(&self) -> u8 {
+    const fn current_channel_bits(&self) -> u8 {
         match self.channel {
             0 => self.config.r_bits,
             1 => self.config.g_bits,
@@ -207,7 +213,7 @@ impl BitCursor {
 
     /// Advance `channel` (and optionally `pixel_idx`) past any channels that
     /// contribute 0 bits, so the cursor always sits on an active channel.
-    fn skip_empty_channels(&mut self) {
+    const fn skip_empty_channels(&mut self) {
         loop {
             if self.channel >= 4 {
                 self.channel = 0;
@@ -221,7 +227,7 @@ impl BitCursor {
     }
 
     /// Advance to the next bit position.
-    fn advance(&mut self) {
+    const fn advance(&mut self) {
         self.bit_in_channel += 1;
         if self.bit_in_channel >= self.current_channel_bits() {
             self.bit_in_channel = 0;
@@ -232,19 +238,22 @@ impl BitCursor {
 
     /// Byte index into the RGBA flat buffer for the current channel of the
     /// current pixel.
-    fn byte_idx(&self) -> usize {
+    const fn byte_idx(&self) -> usize {
         self.pixel_idx * 4 + self.channel as usize
     }
 }
 
 /// Read a single bit from the flat RGBA buffer at the cursor position.
 /// The cursor is NOT advanced.
+#[must_use]
+#[inline]
 fn read_bit(rgba: &[u8], cursor: &BitCursor) -> u8 {
     let byte = rgba[cursor.byte_idx()];
     (byte >> cursor.bit_in_channel) & 1
 }
 
 /// Write a single bit into the flat RGBA buffer at the cursor position.
+#[inline]
 fn write_bit(rgba: &mut [u8], cursor: &BitCursor, bit: u8) {
     let idx = cursor.byte_idx();
     let mask = !(1u8 << cursor.bit_in_channel);
@@ -253,24 +262,41 @@ fn write_bit(rgba: &mut [u8], cursor: &BitCursor, bit: u8) {
 
 /// Read `n` bits (LSB first) from the buffer starting at cursor, advancing
 /// the cursor.  `n` must be <= 64.
+#[must_use]
 fn read_bits(rgba: &[u8], cursor: &mut BitCursor, n: u8, total_pixels: usize) -> Option<u64> {
+    debug_assert!(n <= 64);
     let mut value: u64 = 0;
     for i in 0..n {
-        if cursor.exhausted(total_pixels) {
+        if cursor.check_exhausted(total_pixels) {
             return None;
         }
-        let bit = read_bit(rgba, cursor) as u64;
+        let bit = u64::from(read_bit(rgba, cursor));
         value |= bit << i;
         cursor.advance();
     }
     Some(value)
 }
 
+/// Skip `n` bits from the buffer starting at `cursor`, advancing the cursor
+/// without reading any value.
+///
+/// Returns `None` if the cursor reaches the end of the image before all bits
+/// are skipped.
+fn skip_bits(cursor: &mut BitCursor, n: u64, total_pixels: usize) -> Option<()> {
+    for _ in 0..n {
+        if cursor.check_exhausted(total_pixels) {
+            return None;
+        }
+        cursor.advance();
+    }
+    Some(())
+}
+
 /// Write `n` bits (LSB first) into the buffer starting at cursor, advancing
 /// the cursor.  `n` must be <= 64.
 fn write_bits(rgba: &mut [u8], cursor: &mut BitCursor, value: u64, n: u8, total_pixels: usize) -> bool {
     for i in 0..n {
-        if cursor.exhausted(total_pixels) {
+        if cursor.check_exhausted(total_pixels) {
             return false;
         }
         let bit = ((value >> i) & 1) as u8;
@@ -298,7 +324,7 @@ fn write_header(
 ) -> bool {
     // Magic: "STEG" = 0x53 0x54 0x45 0x47, 32 bits, LSB of each byte first.
     let magic: u32 = u32::from_le_bytes(*b"STEG");
-    if !write_bits(rgba, cursor, magic as u64, 32, total_pixels) {
+    if !write_bits(rgba, cursor, u64::from(magic), 32, total_pixels) {
         return false;
     }
     // version: 3 bits, value 0.
@@ -306,12 +332,12 @@ fn write_header(
         return false;
     }
     // config: 13 bits.
-    let config_bits = config.encode_config_bits() as u64;
+    let config_bits = u64::from(config.encode_config_bits());
     if !write_bits(rgba, cursor, config_bits, 13, total_pixels) {
         return false;
     }
     // payload_len: 32 bits, LE.
-    if !write_bits(rgba, cursor, payload_len as u64, 32, total_pixels) {
+    if !write_bits(rgba, cursor, u64::from(payload_len), 32, total_pixels) {
         return false;
     }
     true
@@ -329,39 +355,40 @@ fn try_read_header(rgba: &[u8], config: StegConfig) -> Option<StegInfo> {
 
     let mut read_n = |n: u8| {
         let v = read_bits(rgba, &mut cursor, n, total_pixels)?;
-        bits_consumed += n as u64;
+        bits_consumed += u64::from(n);
         Some(v)
     };
 
+    #[allow(clippy::cast_possible_truncation)]
+    let mut read_u8 = || read_n(8).map(|v| v as u8);
+
     // Fail early: check one byte of magic at a time.
     // 'S' = 0x53
-    let byte0 = read_n(8)? as u8;
-    if byte0 != b'S' {
+    if read_u8()? != b'S' {
         return None;
     }
     // 'T' = 0x54
-    let byte1 = read_n(8)? as u8;
-    if byte1 != b'T' {
+    if read_u8()? != b'T' {
         return None;
     }
     // 'E' = 0x45
-    let byte2 = read_n(8)? as u8;
-    if byte2 != b'E' {
+    if read_u8()? != b'E' {
         return None;
     }
     // 'G' = 0x47
-    let byte3 = read_n(8)? as u8;
-    if byte3 != b'G' {
+    if read_u8()? != b'G' {
         return None;
     }
 
     // version: 3 bits.
+    #[allow(clippy::cast_possible_truncation)]
     let version = read_n(3)? as u8;
     if version != 0 {
         return None;
     }
 
     // config: 13 bits.
+    #[allow(clippy::cast_possible_truncation)]
     let config_raw = read_n(13)? as u16;
     // Validate: must decode back to a valid config AND must match the config
     // we are currently using for this brute-force attempt.
@@ -371,12 +398,13 @@ fn try_read_header(rgba: &[u8], config: StegConfig) -> Option<StegInfo> {
     }
 
     // payload_len: 32 bits.
+    #[allow(clippy::cast_possible_truncation)]
     let payload_len = read_n(32)? as u32;
 
     // Sanity: the payload must fit in the remaining capacity.
-    let total_bits = total_pixels as u64 * config.bits_per_pixel() as u64;
+    let total_bits = total_pixels as u64 * u64::from(config.bits_per_pixel());
     let remaining_bits = total_bits.saturating_sub(bits_consumed);
-    if payload_len as u64 * 8 > remaining_bits {
+    if u64::from(payload_len) * 8 > remaining_bits {
         return None;
     }
 
@@ -396,6 +424,9 @@ fn try_read_header(rgba: &[u8], config: StegConfig) -> Option<StegInfo> {
 ///
 /// Returns a new `DecodedImage` with the payload hidden in the pixel LSBs.
 /// The original image is not modified.
+/// # Errors
+/// Returns [`StegError`] if no channels are enabled, the image buffer is invalid,
+/// arithmetic overflows occur, or payload capacity is insufficient.
 pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result<DecodedImage, StegError> {
     if config.bits_per_pixel() == 0 {
         return Err(StegError::NoChannels);
@@ -404,7 +435,7 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
     let total_pixels = validated_total_pixels(image)?;
     let payload_len_u32 =
         u32::try_from(payload.len()).map_err(|_| StegError::ArithmeticOverflow("payload length cast"))?;
-    let payload_bits = (payload_len_u32 as u64)
+    let payload_bits = u64::from(payload_len_u32)
         .checked_mul(8)
         .ok_or(StegError::ArithmeticOverflow("payload bits"))?;
     let required_bits = HEADER_BITS
@@ -412,7 +443,7 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
         .ok_or(StegError::ArithmeticOverflow("required bits"))?;
     let available_bits = u64::try_from(total_pixels)
         .map_err(|_| StegError::ArithmeticOverflow("total pixel count cast"))?
-        .checked_mul(config.bits_per_pixel() as u64)
+        .checked_mul(u64::from(config.bits_per_pixel()))
         .ok_or(StegError::ArithmeticOverflow("available bits"))?;
 
     if required_bits > available_bits {
@@ -435,7 +466,7 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
 
     // Write payload bytes, each 8 bits LSB-first.
     for &byte in payload {
-        if !write_bits(rgba.as_mut_slice(), &mut cursor, byte as u64, 8, total_pixels) {
+        if !write_bits(rgba.as_mut_slice(), &mut cursor, u64::from(byte), 8, total_pixels) {
             return Err(StegError::InsufficientCapacity {
                 required: required_bits,
                 capacity: available_bits,
@@ -455,6 +486,7 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
 /// If a valid header is present for `config`, only the exact bit range used by
 /// that header plus payload is zeroed. If no valid header is found, the image
 /// is returned unchanged.
+#[must_use]
 pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
     if config.bits_per_pixel() == 0 {
         return image.clone();
@@ -467,11 +499,11 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
     let mut rgba = image.rgba.clone();
     let total_pixels = rgba.len() / 4;
 
-    let bits_to_clear = HEADER_BITS + (info.payload_len as u64) * 8;
+    let bits_to_clear = HEADER_BITS + u64::from(info.payload_len) * 8;
     let mut cursor = BitCursor::new(config);
 
     for _ in 0..bits_to_clear {
-        if cursor.exhausted(total_pixels) {
+        if cursor.check_exhausted(total_pixels) {
             break;
         }
         write_bit(rgba.as_mut_slice(), &cursor, 0);
@@ -488,6 +520,10 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
 /// Extract the payload from `image` using the config described in `info`.
 ///
 /// The caller should have obtained `info` from [`detect`] or the GUI.
+///
+/// # Errors
+/// Returns [`StegError`] if channel config is invalid, image buffer is invalid,
+/// or payload/header bounds checks fail.
 pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegError> {
     let config = info.config;
     if config.bits_per_pixel() == 0 {
@@ -497,11 +533,11 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
     let total_pixels = validated_total_pixels(image)?;
     let total_bits = u64::try_from(total_pixels)
         .map_err(|_| StegError::ArithmeticOverflow("total pixel count cast"))?
-        .checked_mul(config.bits_per_pixel() as u64)
+        .checked_mul(u64::from(config.bits_per_pixel()))
         .ok_or(StegError::ArithmeticOverflow("total bits"))?;
     let remaining_bits = total_bits.saturating_sub(HEADER_BITS);
 
-    let payload_bits = (info.payload_len as u64)
+    let payload_bits = u64::from(info.payload_len)
         .checked_mul(8)
         .ok_or(StegError::ArithmeticOverflow("payload bits"))?;
 
@@ -511,23 +547,19 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
         });
     }
 
-    // Skip past the header (80 bits) then read payload bytes.
+    // Skip past the header (80 bits) - we trust the passed info
     let mut cursor = BitCursor::new(config);
-    // Read and discard header bits (we trust info).
-    // 80 bits: read in two 40-bit chunks to avoid >64 bits.
-    read_bits(&image.rgba, &mut cursor, 40, total_pixels).ok_or(StegError::PayloadTooLarge {
-        payload_len: info.payload_len,
-    })?;
-    read_bits(&image.rgba, &mut cursor, 40, total_pixels).ok_or(StegError::PayloadTooLarge {
+    skip_bits(&mut cursor, 80, total_pixels).ok_or(StegError::PayloadTooLarge {
         payload_len: info.payload_len,
     })?;
 
     let mut payload = Vec::with_capacity(info.payload_len as usize);
     for _ in 0..info.payload_len {
+        #[allow(clippy::cast_possible_truncation)]
         let byte = read_bits(&image.rgba, &mut cursor, 8, total_pixels).ok_or(StegError::PayloadTooLarge {
             payload_len: info.payload_len,
-        })?;
-        payload.push(byte as u8);
+        })? as u8;
+        payload.push(byte);
     }
 
     Ok(payload)
@@ -538,6 +570,7 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
 ///
 /// Returns the first `StegInfo` that passes all header checks, or `None` if
 /// the image does not appear to contain steganography.
+#[must_use]
 pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
     // Need at least enough pixels to hold the header.
     // Even in the best case (all channels, 8 bits each = 32 bits/pixel), that
@@ -575,6 +608,7 @@ mod tests {
     fn patterned_image(width: u32, height: u32) -> DecodedImage {
         let mut rgba = Vec::with_capacity((width as usize) * (height as usize) * 4);
         for y in 0..height {
+            #[allow(clippy::cast_possible_truncation)]
             for x in 0..width {
                 rgba.push(((x * 31 + y * 17 + 11) % 256) as u8);
                 rgba.push(((x * 19 + y * 29 + 53) % 256) as u8);
@@ -631,7 +665,7 @@ mod tests {
         let info = detect(&embedded).expect("detect should find embedded payload");
         assert_eq!(info.config, config);
         assert_eq!(info.version, 0);
-        assert_eq!(info.payload_len, payload.len() as u32);
+        assert_eq!(info.payload_len, u32::try_from(payload.len()).unwrap());
 
         let extracted = extract(&embedded, &info).expect("extract should succeed");
         assert_eq!(extracted, payload);
@@ -673,7 +707,7 @@ mod tests {
 
         assert!(detect(&stripped).is_none());
 
-        let mut expected = embedded.rgba.clone();
+        let mut expected = embedded.rgba;
         let mut cursor = BitCursor::new(config);
         let bits_to_clear = 80_u64 + (payload.len() as u64) * 8;
         for _ in 0..bits_to_clear {

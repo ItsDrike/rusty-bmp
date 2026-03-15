@@ -35,7 +35,7 @@ impl RgbTriple {
         })
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub(crate) fn write<W: Write>(self, writer: &mut W) -> io::Result<()> {
         writer.write_u8(self.blue)?;
         writer.write_u8(self.green)?;
         writer.write_u8(self.red)?;
@@ -71,9 +71,9 @@ pub struct RgbQuad {
 }
 
 impl RgbQuad {
-    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
+    pub(crate) const fn validate(self) -> Result<(), ValidationError> {
         if self.reserved != 0 {
-            return Err(ValidationError::InvalidRgbQuad(*self));
+            return Err(ValidationError::InvalidRgbQuad(self));
         }
 
         Ok(())
@@ -88,7 +88,7 @@ impl RgbQuad {
         })
     }
 
-    pub(crate) fn write_unchecked<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub(crate) fn write_unchecked<W: Write>(self, writer: &mut W) -> io::Result<()> {
         writer.write_u8(self.blue)?;
         writer.write_u8(self.green)?;
         writer.write_u8(self.red)?;

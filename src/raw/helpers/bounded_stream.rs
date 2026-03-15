@@ -14,7 +14,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 /// - If `start == 0`, behavior matches the underlying stream.
 /// - If `start > 0`, `SeekFrom::Start(0)` seeks to the window start.
 #[derive(Debug)]
-pub(crate) struct BoundedStream<R> {
+pub struct BoundedStream<R> {
     inner: R,
     abs_start: u64,
     abs_end: u64,
@@ -25,7 +25,7 @@ impl<R: Seek> BoundedStream<R> {
     ///
     /// The current position of the underlying stream is preserved.
     /// The initial window is `[0, u64::MAX]`.
-    pub(crate) fn new(inner: R) -> Self {
+    pub const fn new(inner: R) -> Self {
         Self {
             inner,
             abs_start: 0,
@@ -39,7 +39,7 @@ impl<R: Seek> BoundedStream<R> {
     /// reduced. If it lies beyond the current upper bound, this is a no-op.
     ///
     /// This operation never expands the window.
-    pub(crate) fn cap_to_stream_end(mut self) -> io::Result<Self> {
+    pub fn cap_to_stream_end(mut self) -> io::Result<Self> {
         let cur = self.inner.stream_position()?;
         let end = self.inner.seek(SeekFrom::End(0))?;
         self.inner.seek(SeekFrom::Start(cur))?;
@@ -61,7 +61,7 @@ impl<R: Seek> BoundedStream<R> {
     /// - The current position is before the existing lower bound.
     ///
     /// This operation never expands the window.
-    pub(crate) fn shrink_start(mut self, pos: SeekFrom) -> io::Result<Self> {
+    pub fn shrink_start(mut self, pos: SeekFrom) -> io::Result<Self> {
         let absolute = self.get_absolute(pos)?;
         self.check_bounds(absolute)?;
         self.abs_start = absolute;
@@ -73,7 +73,7 @@ impl<R: Seek> BoundedStream<R> {
     /// Fails if the new bound would exceed the existing upper bound.
     ///
     /// This operation never expands the window.
-    pub(crate) fn shrink_end(mut self, pos: SeekFrom) -> io::Result<Self> {
+    pub fn shrink_end(mut self, pos: SeekFrom) -> io::Result<Self> {
         let absolute = self.get_absolute(pos)?;
         self.check_bounds(absolute)?;
         self.abs_end = absolute;
@@ -81,7 +81,7 @@ impl<R: Seek> BoundedStream<R> {
     }
 
     /// Returns the number of bytes remaining until the upper bound.
-    pub(crate) fn remaining(&mut self) -> io::Result<u64> {
+    pub fn remaining(&mut self) -> io::Result<u64> {
         let pos = self.inner.stream_position()?;
         // Invariant: inner pos is always within [start, end]
         debug_assert!(pos <= self.abs_end);
@@ -100,7 +100,7 @@ impl<R: Seek> BoundedStream<R> {
             SeekFrom::End(off) => {
                 if off >= 0 {
                     self.abs_end
-                        .checked_add(off as u64)
+                        .checked_add(off.unsigned_abs())
                         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
                 } else {
                     self.abs_end
@@ -112,7 +112,7 @@ impl<R: Seek> BoundedStream<R> {
                 let cur = self.inner.stream_position()?;
 
                 if off >= 0 {
-                    cur.checked_add(off as u64)
+                    cur.checked_add(off.unsigned_abs())
                         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "overflow"))?
                 } else {
                     cur.checked_sub(off.unsigned_abs())
@@ -163,7 +163,7 @@ impl<R: Read + Seek> Read for BoundedStream<R> {
     /// Reading at the upper bound behaves like EOF and returns `Ok(0)`.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let remaining = self.remaining()?;
-        let max_read = remaining.min(buf.len() as u64) as usize;
+        let max_read = buf.len().min(usize::try_from(remaining).unwrap_or(usize::MAX));
 
         if max_read == 0 {
             return Ok(0);
@@ -179,7 +179,7 @@ impl<R: Seek + Write> Write for BoundedStream<R> {
     /// Writing at the upper bound returns `Ok(0)`.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let remaining = self.remaining()?;
-        let max_write = remaining.min(buf.len() as u64) as usize;
+        let max_write = buf.len().min(usize::try_from(remaining).unwrap_or(usize::MAX));
 
         if max_write == 0 {
             return Ok(0);

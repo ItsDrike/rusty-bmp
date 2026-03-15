@@ -41,7 +41,7 @@ impl BmpViewerApp {
 
                     // Push buttons to the right.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let is_1to1 = self.viewport.zoom == 1.0;
+                        let is_1to1 = (self.viewport.zoom - 1.0).abs() < f32::EPSILON;
                         if ui
                             .add_enabled(!is_1to1, egui::Button::new("1:1").small())
                             .on_hover_text("Actual pixel size (1)")
@@ -51,7 +51,7 @@ impl BmpViewerApp {
                             self.viewport.pan_offset = egui::Vec2::ZERO;
                         }
 
-                        let is_fit = self.viewport.zoom == 0.0;
+                        let is_fit = self.viewport.zoom.abs() < f32::EPSILON;
                         if ui
                             .add_enabled(!is_fit, egui::Button::new("Fit").small())
                             .on_hover_text("Fit image to panel (0)")

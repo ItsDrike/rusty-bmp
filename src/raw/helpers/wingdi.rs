@@ -9,9 +9,9 @@
 //! that allows running Windows programs from Linux), which contains this file.
 //!
 //! Link:
-//! https://gitlab.winehq.org/wine/wine/-/blob/master/include/wingdi.h
+//! <https://gitlab.winehq.org/wine/wine/-/blob/master/include/wingdi.h>
 //! Or a github mirror:
-//! https://github.com/wine-mirror/wine/blob/master/include/wingdi.h
+//! <https://github.com/wine-mirror/wine/blob/master/include/wingdi.h>
 #![allow(non_upper_case_globals)] // we want to match the windows constant naming
 #![allow(dead_code)] // we keep a broader set of spec constants than currently used
 
@@ -22,15 +22,15 @@ pub const BI_BITFIELDS: u32 = 3;
 pub const BI_JPEG: u32 = 4;
 pub const BI_PNG: u32 = 5;
 
-pub const LCS_sRGB: u32 = 0x73524742; /* 'sRGB' */
-pub const LCS_WINDOWS_COLOR_SPACE: u32 = 0x57696e20; /* 'Win ' */
+pub const LCS_sRGB: u32 = 0x7352_4742; /* 'sRGB' */
+pub const LCS_WINDOWS_COLOR_SPACE: u32 = 0x5769_6e20; /* 'Win ' */
 
 pub const LCS_CALIBRATED_RGB: u32 = 0x0000_0000;
 pub const LCS_DEVICE_RGB: u32 = 0x0000_0001;
 pub const LCS_DEVICE_CMYK: u32 = 0x0000_0002;
 
-pub const PROFILE_LINKED: u32 = 0x4c494e4b; /* 'LINK' */
-pub const PROFILE_EMBEDDED: u32 = 0x4d424544; /* 'MBED' */
+pub const PROFILE_LINKED: u32 = 0x4c49_4e4b; /* 'LINK' */
+pub const PROFILE_EMBEDDED: u32 = 0x4d42_4544; /* 'MBED' */
 
 // The wine wingdi.h did have some, but not all of these defs, so these are
 // taken from:

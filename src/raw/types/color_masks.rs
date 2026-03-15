@@ -10,7 +10,7 @@ use crate::raw::{error::ColorMaskError, types::BitsPerPixel};
 /// A contiguous mask has the form `0b00..0011..1100..00` with no gaps.
 /// A mask of `0` is considered non-contiguous.
 #[inline]
-fn check_bitmask_contiguous(mask: u32) -> bool {
+const fn check_bitmask_contiguous(mask: u32) -> bool {
     if mask == 0 {
         return false;
     }
@@ -123,7 +123,7 @@ impl core::fmt::Display for ColorMaskChannel {
 /// [`RgbaMasks`].
 ///
 /// Generally, the RGB variant is used with the V3 header and is embedded into
-/// the BMP file after the header only if the compression is BI_BITFIELDS. The
+/// the BMP file after the header only if the compression is `BI_BITFIELDS`. The
 /// V4 header on the other hand directly contains the color masks, including
 /// the alpha channel.
 ///
@@ -197,7 +197,7 @@ pub struct RgbaMasks {
 }
 
 impl RgbMasks {
-    fn as_slice(&self) -> [(u32, ColorMaskChannel); 3] {
+    const fn as_slice(&self) -> [(u32, ColorMaskChannel); 3] {
         [
             (self.red_mask, ColorMaskChannel::Red),
             (self.green_mask, ColorMaskChannel::Green),
@@ -227,7 +227,7 @@ impl RgbMasks {
 }
 
 impl RgbaMasks {
-    fn as_slice(&self) -> [(u32, ColorMaskChannel); 4] {
+    const fn as_slice(&self) -> [(u32, ColorMaskChannel); 4] {
         [
             (self.red_mask, ColorMaskChannel::Red),
             (self.green_mask, ColorMaskChannel::Green),
@@ -283,7 +283,7 @@ impl From<RgbaMasks> for RgbMasks {
 }
 
 impl RgbMasks {
-    /// Returns the default RGB555 bit masks used by 16-bit BI_RGB bitmaps.
+    /// Returns the default RGB555 bit masks used by 16-bit `BI_RGB` bitmaps.
     ///
     /// Layout (LSB -> MSB):
     /// - Bits 0-4   : Blue   (5 bits)
@@ -301,7 +301,7 @@ impl RgbMasks {
         }
     }
 
-    /// Returns RGB565 bit masks commonly used with 16-bit BI_BITFIELDS bitmaps.
+    /// Returns RGB565 bit masks commonly used with 16-bit `BI_BITFIELDS` bitmaps.
     ///
     /// Layout (LSB -> MSB):
     /// - Bits 0-4   : Blue  (5 bits)
@@ -318,7 +318,7 @@ impl RgbMasks {
         }
     }
 
-    /// Returns the default RGB888 bit masks used by 32-bit BI_RGB bitmaps.
+    /// Returns the default RGB888 bit masks used by 32-bit `BI_RGB` bitmaps.
     ///
     /// Layout (LSB -> MSB):
     /// - Bits 0-7   : Blue   (8 bits)

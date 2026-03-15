@@ -87,7 +87,8 @@ fn row_stride(width: usize, bits_per_pixel: u16) -> Result<usize, DecodeError> {
     Ok((with_padding / 32) * 4)
 }
 
-fn rgb555_to_rgba(px: u16) -> [u8; 4] {
+#[allow(clippy::cast_possible_truncation)]
+const fn rgb555_to_rgba(px: u16) -> [u8; 4] {
     let r = (((px >> 10) & 0x1f) * 255 / 31) as u8;
     let g = (((px >> 5) & 0x1f) * 255 / 31) as u8;
     let b = ((px & 0x1f) * 255 / 31) as u8;
@@ -170,7 +171,7 @@ fn decode_rgb_pixels(
 
         match bpp {
             BitsPerPixel::Bpp1 | BitsPerPixel::Bpp4 | BitsPerPixel::Bpp8 => {
-                decode_indexed_row(bpp, row, y_out, width, palette, &mut out)?
+                decode_indexed_row(bpp, row, y_out, width, palette, &mut out)?;
             }
             BitsPerPixel::Bpp16 => {
                 for x in 0..width {
@@ -208,15 +209,49 @@ fn decode_rgb_pixels(
     Ok(out)
 }
 
+/// Extracts a masked color channel from `px` and scales it to an 8-bit value.
+///
+/// The function isolates the bits selected by `mask`, right-aligns them,
+/// and linearly scales the resulting value to the full `0..=255` range.
+/// This is used for decoding RGB channel values from bitfields in packed
+/// pixel formats (e.g. BMP `BI_BITFIELDS`).
+///
+/// The number of bits used by the channel is determined from `mask`, so
+/// formats like 5-6-5 or arbitrary bitfield layouts are handled correctly.
+///
+/// If `mask` is zero, the function returns `0`.
+///
+/// # Examples
+///
+/// ```text
+/// px = 0b1111100000000000, mask = 0b1111100000000000 -> 255
+/// px = 0b0000011111100000, mask = 0b0000011111100000 -> 255
+/// px = 0b0000000000011111, mask = 0b0000000000011111 -> 255
+/// ```
 fn scale_masked_channel(px: u32, mask: u32) -> u8 {
     if mask == 0 {
         return 0;
     }
+
     let shift = mask.trailing_zeros();
     let bits = mask.count_ones();
-    let raw = (px & mask) >> shift;
-    let max = (1u32 << bits) - 1;
-    ((raw * 255) / max) as u8
+
+    // This helper only explicitly supports channels that fit into 8 bits
+    // Anything larger would just waste those bits anyways, as we map the
+    // range into 0..=255 (u8) anyways.
+    debug_assert!(bits <= 8);
+
+    let raw: u32 = (px & mask) >> shift; // always <= 255
+    let max: u32 = (1u32 << bits) - 1; // always <= 255
+
+    // BMP masks should be contiguous
+    debug_assert_eq!(mask >> shift, max);
+
+    // Safe: This explicitly maps the range into 0..=255, u8 cast is safe
+    #[allow(clippy::cast_possible_truncation)]
+    let mapped = ((raw * 255) / max) as u8;
+
+    mapped
 }
 
 fn decode_bitfields_pixels(
@@ -253,7 +288,7 @@ fn decode_bitfields_pixels(
             let px = match bpp {
                 BitsPerPixel::Bpp16 => {
                     let i = x * 2;
-                    u16::from_le_bytes([row[i], row[i + 1]]) as u32
+                    u32::from(u16::from_le_bytes([row[i], row[i + 1]]))
                 }
                 BitsPerPixel::Bpp32 => {
                     let i = x * 4;
@@ -478,11 +513,16 @@ fn decode_rle4_pixels(
     Ok(out)
 }
 
+/// Decodes a parsed BMP into an RGBA pixel buffer.
+///
+/// # Errors
+/// Returns [`DecodeError`] when dimensions, compression, masks, palette usage,
+/// or encoded pixel data are invalid or inconsistent.
 pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
-    let (width_i32, height_i32, bpp, compression, pixel_data, palette, top_down, bitfields_masks) = match bmp {
+    let (width_i32, height_i32, bit_count, compression, pixel_data, palette, top_down, bitfields_masks) = match bmp {
         Bmp::Core(data) => (
-            data.bmp_header.width as i32,
-            data.bmp_header.height as i32,
+            i32::from(data.bmp_header.width),
+            i32::from(data.bmp_header.height),
             data.bmp_header.bit_count,
             Compression::Rgb,
             data.bitmap_array.as_slice(),
@@ -551,31 +591,34 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
         });
     }
 
+    // Safe: We already checked that this is >= 0
+    #[allow(clippy::cast_sign_loss)]
     let width = width_i32 as usize;
+
     let height = height_i32.unsigned_abs() as usize;
 
     let rgba = match decoder {
-        CompressionDecoder::Rgb => decode_rgb_pixels(pixel_data, width, height, top_down, bpp, &palette)?,
+        CompressionDecoder::Rgb => decode_rgb_pixels(pixel_data, width, height, top_down, bit_count, &palette)?,
         CompressionDecoder::Rle8 => decode_rle8_pixels(pixel_data, width, height, top_down, &palette)?,
         CompressionDecoder::Rle4 => decode_rle4_pixels(pixel_data, width, height, top_down, &palette)?,
         CompressionDecoder::BitFields => {
             let masks = if let Some(masks) = bitfields_masks {
                 masks
             } else {
-                match bpp {
+                match bit_count {
                     BitsPerPixel::Bpp16 => RgbMasks::rgb555().into(),
                     BitsPerPixel::Bpp32 => RgbMasks::rgb888().into(),
                     _ => return Err(DecodeError::MissingBitfieldMasks),
                 }
             };
-            decode_bitfields_pixels(pixel_data, width, height, top_down, bpp, masks)?
+            decode_bitfields_pixels(pixel_data, width, height, top_down, bit_count, masks)?
         }
         CompressionDecoder::Other(x) => return Err(DecodeError::UnsupportedCompression(CompressionDecoder::Other(x))),
     };
 
     Ok(DecodedImage {
-        width: width as u32,
-        height: height as u32,
+        width: u32::try_from(width).map_err(|_| DecodeError::ArithmeticOverflow("width output cast"))?,
+        height: u32::try_from(height).map_err(|_| DecodeError::ArithmeticOverflow("height output cast"))?,
         rgba,
     })
 }

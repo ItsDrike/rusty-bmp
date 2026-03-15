@@ -38,7 +38,7 @@ fn format_bytes(value: u64) -> String {
     }
 }
 
-fn compression_name(compression: Compression) -> &'static str {
+const fn compression_name(compression: Compression) -> &'static str {
     match compression {
         Compression::Rgb => "BI_RGB",
         Compression::Rle8 => "BI_RLE8",
@@ -61,7 +61,7 @@ fn write_decode_stats(out: &mut String, decoded: &DecodedImage, encoded_pixel_by
     }
 }
 
-fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
+const fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
     match bmp {
         Bmp::Core(data) => data.bitmap_array.len(),
         Bmp::Info(data) => data.bitmap_array.len(),
@@ -70,7 +70,7 @@ fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
     }
 }
 
-fn orientation_from_height(height: i32) -> &'static str {
+const fn orientation_from_height(height: i32) -> &'static str {
     if height < 0 { "top-down" } else { "bottom-up" }
 }
 
@@ -98,12 +98,12 @@ fn write_common_section(
     let _ = writeln!(out, "Bits per pixel: {bits_per_pixel}");
     let _ = writeln!(out, "Compression: {compression_line}");
     if let Some(image_size) = header_image_size {
-        let _ = writeln!(out, "Header image_size: {}", format_bytes(image_size as u64));
+        let _ = writeln!(out, "Header image_size: {}", format_bytes(u64::from(image_size)));
     }
     let _ = writeln!(out, "Pixel data size: {}", format_bytes(pixel_data_size as u64));
     let _ = writeln!(out, "Palette entries: {palette_entries}");
-    let _ = writeln!(out, "File size: {}", format_bytes(file_size as u64));
-    let _ = writeln!(out, "Pixel data offset: {}", format_bytes(pixel_data_offset as u64));
+    let _ = writeln!(out, "File size: {}", format_bytes(u64::from(file_size)));
+    let _ = writeln!(out, "Pixel data offset: {}", format_bytes(u64::from(pixel_data_offset)));
 }
 
 pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSections {
@@ -113,8 +113,8 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
             write_common_section(
                 &mut out,
                 "CORE (BITMAPCOREHEADER)",
-                data.bmp_header.width as u32,
-                data.bmp_header.height as u32,
+                u32::from(data.bmp_header.width),
+                u32::from(data.bmp_header.height),
                 "bottom-up",
                 data.bmp_header.bit_count.bit_count(),
                 "BI_RGB (implicit)",
@@ -203,12 +203,12 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
             let _ = writeln!(
                 &mut out,
                 "Profile offset: {}",
-                format_bytes(data.bmp_header.profile_data as u64)
+                format_bytes(u64::from(data.bmp_header.profile_data))
             );
             let _ = writeln!(
                 &mut out,
                 "Profile size: {}",
-                format_bytes(data.bmp_header.profile_size as u64)
+                format_bytes(u64::from(data.bmp_header.profile_size))
             );
             let _ = writeln!(
                 &mut out,
