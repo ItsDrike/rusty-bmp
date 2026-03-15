@@ -1,13 +1,53 @@
+//! Geometric image transformations.
+//!
+//! This module implements spatial transformations that modify the
+//! positions of pixels rather than their color values.
+//!
+//! Most operations support multiple interpolation methods and use
+//! Rayon for parallel processing across image rows.
+
 use std::fmt;
 
 use rayon::prelude::*;
 
 use crate::runtime::decode::DecodedImage;
 
+/// Interpolation methods used when sampling pixels at non-integer coordinates.
+///
+/// These are primarily used during geometric transformations such as
+/// rotation, resizing, and skewing where the source pixel location
+/// does not fall exactly on integer pixel coordinates.
+///
+/// Higher-quality interpolation methods produce smoother results but
+/// require more computation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RotationInterpolation {
+    /// Nearest-neighbor interpolation.
+    ///
+    /// The closest pixel is selected without blending.
+    ///
+    /// This is the fastest method but can produce blocky or jagged
+    /// artifacts, especially when scaling or rotating images.
+    ///
+    /// For pixel art, this method is often preferred.
     Nearest,
+
+    /// Bilinear interpolation.
+    ///
+    /// Computes a weighted average of the 4 nearest pixels.
+    ///
+    /// Produces smoother results than nearest-neighbor and is commonly
+    /// used for real-time image transformations due to its balance
+    /// between quality and performance.
     Bilinear,
+
+    /// Bicubic interpolation.
+    ///
+    /// Uses a 4x4 neighborhood of pixels and a cubic interpolation
+    /// function to produce smoother results than bilinear interpolation.
+    ///
+    /// This method is slower but provides higher-quality resampling,
+    /// particularly when enlarging images.
     Bicubic,
 }
 
@@ -21,9 +61,22 @@ impl fmt::Display for RotationInterpolation {
     }
 }
 
+/// Determines how image bounds are handled when translating (shifting)
+/// an image.
+///
+/// Translation moves every pixel by `(dx, dy)`, which may cause parts
+/// of the image to move outside the original bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TranslateMode {
+    /// Keeps the output image the same size as the input.
+    ///
+    /// Pixels shifted outside the image bounds are discarded,
+    /// effectively cropping the translated image.
     Crop,
+
+    /// Expands the output canvas so the entire translated image fits.
+    ///
+    /// Newly exposed areas are filled with a specified background color.
     Expand,
 }
 
@@ -36,6 +89,40 @@ impl fmt::Display for TranslateMode {
     }
 }
 
+/// Applies a shear (skew) transformation to the image.
+///
+/// The skew transformation is defined by the matrix:
+///
+/// ```text
+/// [ 1  kx ]
+/// [ ky 1  ]
+/// ```
+///
+/// which maps source coordinates `(x, y)` to:
+///
+/// ```text
+/// x' = x + kx * y
+/// y' = ky * x + y
+/// ```
+///
+/// The implementation performs **inverse mapping** from destination pixels
+/// back into the source image to avoid holes in the output.
+///
+/// # Parameters
+///
+/// - `kx` - horizontal shear factor.
+/// - `ky` - vertical shear factor.
+/// - `interpolation` - sampling method used when source coordinates are
+///   non-integer.
+/// - `expand` - if `true`, the output image is enlarged so the entire
+///   transformed image fits; otherwise the original dimensions are preserved.
+///
+/// # Behavior
+///
+/// * The transformation is centered around the image center.
+/// * Pixels sampled outside the source image return transparent black.
+/// * If the shear matrix is not invertible (`1 - kx * ky ~= 0`), the
+///   original image is returned unchanged.
 #[must_use]
 pub fn skew_image(
     image: &DecodedImage,
@@ -135,6 +222,30 @@ pub fn skew_image(
     }
 }
 
+/// Translates (shifts) the image by the specified offset.
+///
+/// Each pixel `(x, y)` moves to `(x + dx, y + dy)`.
+///
+/// # Parameters
+///
+/// - `dx` - horizontal shift in pixels (positive moves right).
+/// - `dy` - vertical shift in pixels (positive moves down).
+/// - `mode` - determines how the output image bounds are handled.
+/// - `fill` - RGBA color used for newly exposed pixels.
+///
+/// # Modes
+///
+/// * `TranslateMode::Crop`
+///   - Output dimensions remain unchanged.
+///   - Pixels shifted outside the image are discarded.
+///
+/// * `TranslateMode::Expand`
+///   - The output canvas grows to fit the translated image.
+///   - Newly created areas are filled with `fill`.
+///
+/// # Behavior
+///
+/// Pixels outside the source image are filled with `fill`.
 #[must_use]
 pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMode, fill: [u8; 4]) -> DecodedImage {
     let src_w = image.width as usize;
@@ -177,6 +288,20 @@ pub fn translate_image(image: &DecodedImage, dx: i32, dy: i32, mode: TranslateMo
     }
 }
 
+/// Extracts a rectangular region from the image.
+///
+/// The rectangle begins at `(x, y)` with the specified `width` and `height`.
+///
+/// # Behavior
+///
+/// * The crop region is clamped to the source image bounds.
+/// * The output dimensions are guaranteed to be at least `1x1`.
+/// * If the crop region covers the entire image, the original image
+///   is returned unchanged.
+///
+/// # Coordinates
+///
+/// `(x, y)` refers to the **top-left corner** of the crop region.
 #[must_use]
 pub fn crop_image(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32) -> DecodedImage {
     let src_w = image.width;
@@ -215,6 +340,28 @@ pub fn crop_image(image: &DecodedImage, x: u32, y: u32, width: u32, height: u32)
     }
 }
 
+/// Resizes the image to the specified dimensions.
+///
+/// Pixel values are sampled from the source image using the chosen
+/// interpolation method.
+///
+/// # Parameters
+///
+/// - `out_width`, `out_height` - desired output dimensions.
+/// - `interpolation` - sampling method used to compute pixel values.
+///
+/// # Interpolation methods
+///
+/// * `Nearest` - fastest but produces blocky artifacts.
+/// * `Bilinear` - smooth interpolation using a 2x2 neighborhood.
+/// * `Bicubic` - higher-quality interpolation using a 4x4 neighborhood.
+///
+/// # Behavior
+///
+/// * Resampling uses **center-based coordinate mapping** to minimize
+///   scaling artifacts.
+/// * If the requested size matches the source size, the original image
+///   is returned unchanged.
 #[must_use]
 pub fn resize_image(
     image: &DecodedImage,
@@ -265,6 +412,20 @@ pub fn resize_image(
     }
 }
 
+/// Rotates the image 90 deg counterclockwise.
+///
+/// The output image dimensions become:
+///
+/// ```text
+/// width'  = height
+/// height' = width
+/// ```
+///
+/// Pixel mapping:
+///
+/// ```text
+/// (x, y) -> (y, width - 1 - x)
+/// ```
 #[must_use]
 pub fn rotate_left(image: &DecodedImage) -> DecodedImage {
     let src_w = image.width as usize;
@@ -291,6 +452,20 @@ pub fn rotate_left(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+/// Rotates the image 90 deg clockwise.
+///
+/// The output image dimensions become:
+///
+/// ```text
+/// width'  = height
+/// height' = width
+/// ```
+///
+/// Pixel mapping:
+///
+/// ```text
+/// (x, y) -> (height - 1 - y, x)
+/// ```
 #[must_use]
 pub fn rotate_right(image: &DecodedImage) -> DecodedImage {
     let src_w = image.width as usize;
@@ -317,6 +492,12 @@ pub fn rotate_right(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+/// Mirrors the image horizontally (left <-> right).
+///
+/// Each row of pixels is reversed so that the pixel at `(x, y)` moves to
+/// `(width - 1 - x, y)`.
+///
+/// The image dimensions remain unchanged and the alpha channel is preserved.
 #[must_use]
 pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
     let w = image.width as usize;
@@ -340,6 +521,12 @@ pub fn mirror_horizontal(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+/// Mirrors the image vertically (top <-> bottom).
+///
+/// Entire rows are swapped so that the row at `y` moves to
+/// `height - 1 - y`.
+///
+/// This operation does not modify pixel values and preserves the alpha channel.
 #[must_use]
 pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
     let w = image.width as usize;
@@ -360,6 +547,28 @@ pub fn mirror_vertical(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+/// Rotates the image by an arbitrary angle.
+///
+/// The rotation is performed around the image center using inverse
+/// coordinate mapping.
+///
+/// # Parameters
+///
+/// - `angle_degrees` - rotation angle in degrees (counterclockwise).
+/// - `interpolation` - sampling method used when sampling fractional
+///   coordinates.
+/// - `expand` - if `true`, the output image grows to fully contain the
+///   rotated image.
+///
+/// # Optimization
+///
+/// If the angle is approximately a multiple of 90 deg, the function
+/// automatically dispatches to the specialized fast rotations
+/// (`rotate_left` / `rotate_right`).
+///
+/// # Behavior
+///
+/// Pixels outside the source image are filled with transparent black.
 #[must_use]
 pub fn rotate_any(
     image: &DecodedImage,
@@ -439,6 +648,17 @@ pub fn rotate_any(
     }
 }
 
+/// Samples a pixel from the image at fractional coordinates.
+///
+/// The sampling method depends on the chosen interpolation mode.
+///
+/// # Interpolation
+///
+/// * `Nearest` - nearest neighbor sampling.
+/// * `Bilinear` - weighted average of the 4 nearest pixels.
+/// * `Bicubic` - cubic interpolation using a 4x4 pixel neighborhood.
+///
+/// Coordinates outside the image return transparent black.
 fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInterpolation) -> [u8; 4] {
     let w = image.width as i32;
     let h = image.height as i32;
@@ -515,6 +735,10 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
     }
 }
 
+/// Cubic interpolation kernel used for bicubic sampling.
+///
+/// Implements a Catmull-Rom style cubic filter (`a = -0.5`),
+/// commonly used for smooth image resampling.
 fn cubic_weight(t: f32) -> f32 {
     let a = -0.5f32;
     let x = t.abs();
@@ -527,6 +751,9 @@ fn cubic_weight(t: f32) -> f32 {
     }
 }
 
+/// Returns the RGBA value of the pixel at `(x, y)`.
+///
+/// Coordinates must already be clamped to valid image bounds.
 fn pixel_at(image: &DecodedImage, x: i32, y: i32) -> [u8; 4] {
     let w = image.width as usize;
     let idx = (y as usize * w + x as usize) * 4;

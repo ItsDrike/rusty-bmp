@@ -4,12 +4,41 @@ use rayon::prelude::*;
 
 use crate::runtime::decode::DecodedImage;
 
-/// A convolution kernel of arbitrary odd size (3x3, 5x5, 7x7, ...).
+/// A square convolution kernel used for spatial image filtering.
+///
+/// A kernel defines how each output pixel is computed from a weighted
+/// neighborhood of surrounding pixels.
+///
+/// The kernel is stored in **row-major order** and must have an odd side
+/// length (e.g. 3x3, 5x5, 7x7). The odd size guarantees a well-defined
+/// center element that aligns with the output pixel being computed.
+///
+/// The resulting value of each color channel is computed as:
+///
+/// ```text
+/// result = (sum(pixel * weight) / divisor) + bias
+/// ```
+///
+/// where the summation iterates over all kernel weights.
+///
+/// * `divisor` is typically the sum of the kernel weights and is used
+///   to normalize the result.
+/// * `bias` is added after normalization and is commonly used by filters
+///   like emboss that shift results into a visible range.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Kernel {
+    /// Kernel weights stored in row-major order.
     pub weights: Vec<i32>,
+
+    /// Side length of the kernel.
+    ///
+    /// Must be an odd positive number.
     pub size: usize,
+
+    /// Normalization divisor applied after summing weighted pixels.
     pub divisor: i32,
+
+    /// Bias added after normalization.
     pub bias: i32,
 }
 
@@ -17,8 +46,12 @@ impl Kernel {
     /// Creates a new convolution kernel.
     ///
     /// # Panics
-    /// Panics if `size` is zero or even, if `weights.len() != size * size`,
-    /// or if `divisor == 0`.
+    ///
+    /// Panics if:
+    ///
+    /// - `size` is zero or even
+    /// - `weights.len() != size * size`
+    /// - `divisor == 0`
     #[must_use]
     pub fn new(weights: Vec<i32>, size: usize, divisor: i32, bias: i32) -> Self {
         assert!(
@@ -41,6 +74,35 @@ impl Kernel {
         }
     }
 
+    /// Attempts to factor the kernel into two 1-dimensional kernels.
+    ///
+    /// A kernel is **separable** if it can be expressed as the outer product of
+    /// a column vector and a row vector:
+    ///
+    /// ```text
+    /// K(x,y) = column[y] * row[x]
+    /// ```
+    ///
+    /// When a kernel is separable, convolution can be performed in two passes
+    /// (horizontal then vertical) instead of a full 2-D pass.
+    ///
+    /// This reduces computational complexity from:
+    ///
+    /// ```text
+    /// O(n^2) per pixel
+    /// ```
+    ///
+    /// to:
+    ///
+    /// ```text
+    /// O(2n) per pixel
+    /// ```
+    ///
+    /// which provides a significant performance improvement for larger kernels.
+    ///
+    /// Many common filters are separable, including Gaussian blur.
+    ///
+    /// Returns `(column_kernel, row_kernel)` if separable, otherwise `None`.
     #[must_use]
     pub fn separable(&self) -> Option<(Vec<i32>, Vec<i32>)> {
         let n = self.size;
@@ -73,6 +135,24 @@ impl Kernel {
         Some((col_vec, row_vec))
     }
 
+    /// Returns an estimate of the computational cost of applying this kernel.
+    ///
+    /// The value represents the approximate number of multiplications required
+    /// per pixel:
+    ///
+    /// * separable kernels -> `2 * size`
+    /// * non-separable kernels -> `size^2`
+    ///
+    /// This is used as a heuristic for comparing filter costs.
+    ///
+    /// # Examples
+    ///
+    /// | Kernel          | Cost |
+    /// |-----------------|------|
+    /// | 3x3 separable   | 6    |
+    /// | 3x3 full        | 9    |
+    /// | 5x5 separable   | 10   |
+    /// | 5x5 full        | 25   |
     #[must_use]
     pub fn replay_cost(&self) -> u32 {
         let n = u32::try_from(self.size).unwrap_or(u32::MAX);
@@ -80,15 +160,27 @@ impl Kernel {
     }
 }
 
+/// Built-in convolution filters.
+///
+/// These correspond to common image processing operations implemented
+/// using fixed convolution kernels.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConvolutionFilter {
+    /// Smooths the image using a Gaussian-like blur kernel.
     Blur,
+
+    /// Enhances edges and fine details.
     Sharpen,
+
+    /// Highlights strong intensity changes in the image.
     EdgeDetect,
+
+    /// Produces a raised or embossed appearance.
     Emboss,
 }
 
 impl ConvolutionFilter {
+    /// Returns the convolution kernel associated with the filter.
     #[must_use]
     pub fn kernel(&self) -> Kernel {
         match self {
@@ -111,6 +203,17 @@ impl fmt::Display for ConvolutionFilter {
     }
 }
 
+/// Applies a convolution filter to an image.
+///
+/// The function automatically detects whether the kernel is separable.
+/// If it is, the convolution is executed in two passes (horizontal and
+/// vertical) for improved performance. Otherwise, a full 2-D convolution
+/// is performed.
+///
+/// Edge pixels are handled using **clamped border sampling**, meaning
+/// coordinates outside the image are clamped to the nearest valid pixel.
+///
+/// The alpha channel is preserved unchanged.
 #[must_use]
 pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
     if let Some((col_vec, row_vec)) = kernel.separable() {
@@ -120,6 +223,16 @@ pub fn apply_convolution(image: &DecodedImage, kernel: &Kernel) -> DecodedImage 
     }
 }
 
+/// Applies convolution using a separable kernel.
+///
+/// The convolution is performed in two stages:
+///
+/// 1. Horizontal pass into an intermediate buffer
+/// 2. Vertical pass producing the final image
+///
+/// This reduces complexity from `O(n^2)` to `O(2n)` per pixel.
+///
+/// The intermediate buffer stores RGB channel sums before normalization.
 fn apply_convolution_separable(
     image: &DecodedImage,
     kernel: &Kernel,
@@ -188,6 +301,13 @@ fn apply_convolution_separable(
     }
 }
 
+/// Applies a full 2-D convolution.
+///
+/// Each output pixel is computed by multiplying the kernel with the
+/// corresponding neighborhood of the input image.
+///
+/// This implementation has complexity `O(n^2)` per pixel where `n` is the
+/// kernel size.
 fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
     let w = image.width as usize;
     let h = image.height as usize;

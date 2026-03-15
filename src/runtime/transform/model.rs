@@ -5,6 +5,12 @@ use crate::runtime::steganography::StegConfig;
 use super::convolution::{ConvolutionFilter, Kernel};
 use super::geometry::{RotationInterpolation, TranslateMode};
 
+/// A high-level image transformation operation.
+///
+/// This enum represents all transformations supported by the runtime
+/// transformation system. Each variant describes a single operation
+/// that can be applied to a [`DecodedImage`] using
+/// [`apply_transform`](crate::runtime::transform::dispatch::apply_transform).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImageTransform {
     RotateLeft90,
@@ -131,6 +137,18 @@ impl fmt::Display for ImageTransform {
 }
 
 impl ImageTransform {
+    /// Returns the inverse of this transformation if one exists.
+    ///
+    /// Some transformations can be reversed exactly:
+    ///
+    /// - rotations by +/- 90 deg
+    /// - mirror operations
+    /// - color inversion
+    ///
+    /// Other transformations lose information or depend on external
+    /// parameters, so their inverse cannot be determined automatically.
+    ///
+    /// Returns `None` for non-reversible operations.
     #[must_use]
     pub const fn inverse(&self) -> Option<Self> {
         #[allow(clippy::match_same_arms)]
@@ -156,6 +174,20 @@ impl ImageTransform {
         }
     }
 
+    /// Returns an approximate cost of replaying this transformation.
+    ///
+    /// The cost is a heuristic used to estimate computational complexity
+    /// when applying a sequence of transformations.
+    ///
+    /// Lower values correspond to cheaper operations, while higher values
+    /// indicate more expensive processing (for example interpolation or
+    /// convolution).
+    ///
+    /// This value is used for:
+    ///
+    /// - transform pipeline optimization
+    /// - estimating recomputation cost
+    /// - ordering operations for efficiency
     #[must_use]
     pub fn replay_cost(&self) -> u32 {
         #[allow(clippy::match_same_arms)]

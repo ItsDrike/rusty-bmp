@@ -1,7 +1,25 @@
+//! Color and pixel-wise image transformations.
+//!
+//! These operations modify pixel values independently without changing
+//! image geometry. All functions preserve image dimensions and leave
+//! the alpha channel unchanged unless otherwise stated.
+//!
+//! The implementations use Rayon to parallelize processing across rows
+//! or pixels for improved performance on multi-core systems.
+
 use rayon::prelude::*;
 
 use crate::runtime::decode::DecodedImage;
 
+/// Inverts the RGB color channels of the image.
+///
+/// Each color component is transformed as:
+///
+/// ```text
+/// c' = 255 - c
+/// ```
+///
+/// The alpha channel is left unchanged.
 #[must_use]
 pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
@@ -18,6 +36,16 @@ pub fn invert_colors(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+/// Converts the image to grayscale using perceptual luminance weights.
+///
+/// The grayscale value is computed using the standard Rec.601 luma formula:
+///
+/// ```text
+/// Y = 0.299 R + 0.587 G + 0.114 B
+/// ```
+///
+/// The resulting luminance replaces the RGB channels while the alpha
+/// channel remains unchanged.
 #[must_use]
 pub fn grayscale(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
@@ -35,6 +63,17 @@ pub fn grayscale(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+/// Applies a sepia tone effect to the image.
+///
+/// The sepia transformation is computed using the classic sepia matrix:
+///
+/// ```text
+/// R' = 0.393R + 0.769G + 0.189B
+/// G' = 0.349R + 0.686G + 0.168B
+/// B' = 0.272R + 0.534G + 0.131B
+/// ```
+///
+/// Results are clamped to `[0, 255]`. The alpha channel is preserved.
 #[must_use]
 pub fn sepia(image: &DecodedImage) -> DecodedImage {
     let mut out = image.rgba.clone();
@@ -57,6 +96,16 @@ pub fn sepia(image: &DecodedImage) -> DecodedImage {
     }
 }
 
+/// Adjusts image brightness by adding a constant offset to RGB channels.
+///
+/// Each channel is transformed as:
+///
+/// ```text
+/// c' = clamp(c + delta, 0, 255)
+/// ```
+///
+/// Positive values increase brightness, negative values darken the image.
+/// The alpha channel is not modified.
 #[must_use]
 pub fn brightness(image: &DecodedImage, delta: i16) -> DecodedImage {
     let mut out = image.rgba.clone();
@@ -73,6 +122,22 @@ pub fn brightness(image: &DecodedImage, delta: i16) -> DecodedImage {
     }
 }
 
+/// Adjusts image contrast using a standard contrast scaling formula.
+///
+/// The transformation applied to each color channel is:
+///
+/// ```text
+/// factor = 259 * (delta + 255) / (255 * (259 - delta))
+/// c' = factor * (c - 128) + 128
+/// ```
+///
+/// where `delta` controls the contrast strength:
+///
+/// * `delta = 0` -> no change
+/// * positive values -> increase contrast
+/// * negative values -> decrease contrast
+///
+/// The result is clamped to `[0, 255]`. The alpha channel is preserved.
 #[must_use]
 pub fn contrast(image: &DecodedImage, delta: i16) -> DecodedImage {
     let delta_clamped = f32::from(delta).clamp(-255.0, 255.0);

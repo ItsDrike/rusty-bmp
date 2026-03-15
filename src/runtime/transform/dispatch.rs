@@ -9,6 +9,21 @@ use super::geometry::{
 };
 use super::model::ImageTransform;
 
+/// Applies a single transformation operation to an image.
+///
+/// This function acts as the central dispatcher for the transformation
+/// system. It matches the provided [`ImageTransform`] variant and forwards
+/// execution to the corresponding implementation.
+///
+/// The transformation is applied **immutably**: the input image is never
+/// modified and a new [`DecodedImage`] is always returned.
+///
+/// # Error handling
+///
+/// Most transformations are deterministic and cannot fail.
+/// For transformations that can fail (e.g. steganography embedding because the
+/// payload does not fit the image), the original image is returned unchanged and
+/// this function silently passes anyways.
 #[must_use]
 pub fn apply_transform(image: &DecodedImage, op: &ImageTransform) -> DecodedImage {
     match op {
