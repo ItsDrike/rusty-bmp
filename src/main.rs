@@ -589,7 +589,7 @@ impl BmpViewerApp {
         let has_transparency = image.rgba.chunks_exact(4).any(|px| px[3] < u8::MAX);
         let mut reasons = Vec::new();
 
-        if has_transparency {
+        if has_transparency && !matches!(format, SaveFormat::Rgb24 | SaveFormat::Rgb32 | SaveFormat::BitFields32) {
             reasons.push("Selected format/header does not preserve alpha; transparency will be lost".to_owned());
         }
 
