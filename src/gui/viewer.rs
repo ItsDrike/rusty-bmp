@@ -46,10 +46,10 @@ impl BmpViewerApp {
                 });
 
                 if kb_zoom_in {
-                    self.viewport.zoom = (effective_zoom * 1.25).clamp(0.01, 50.0);
+                    self.viewport.zoom = (effective_zoom * 1.25).max(0.01);
                 }
                 if kb_zoom_out {
-                    self.viewport.zoom = (effective_zoom / 1.25).clamp(0.01, 50.0);
+                    self.viewport.zoom = (effective_zoom / 1.25).max(0.01);
                 }
                 if kb_zoom_fit {
                     self.viewport.zoom = 0.0;
@@ -64,7 +64,7 @@ impl BmpViewerApp {
                 let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll_delta != 0.0 && response.hovered() {
                     let zoom_factor = (scroll_delta * 0.002).exp();
-                    let new_zoom = (effective_zoom * zoom_factor).clamp(0.01, 50.0);
+                    let new_zoom = (effective_zoom * zoom_factor).max(0.01);
 
                     // Zoom towards the cursor: adjust pan so the point under
                     // the cursor stays fixed.
