@@ -228,7 +228,7 @@ impl BmpViewerApp {
                         }
 
                         // Start interactive crop manipulation.
-                        if response.drag_started()
+                        if response.drag_started_by(egui::PointerButton::Primary)
                             && let Some(pointer) = response.interact_pointer_pos()
                             && start_crop_drag(
                                 self,
@@ -245,7 +245,7 @@ impl BmpViewerApp {
 
                         // Fallback capture: if drag_started was not latched this frame,
                         // attempt to start crop interaction while already dragging.
-                        if response.dragged()
+                        if response.dragged_by(egui::PointerButton::Primary)
                             && self.transforms.crop.drag_mode.is_none()
                             && let Some(pointer) = response.interact_pointer_pos()
                             && start_crop_drag(
@@ -262,7 +262,7 @@ impl BmpViewerApp {
                         }
 
                         // Apply ongoing drag delta.
-                        if response.dragged()
+                        if response.dragged_by(egui::PointerButton::Primary)
                             && let (Some(mode), Some(start_rect), Some(start_pos), Some(pointer)) = (
                                 self.transforms.crop.drag_mode,
                                 self.transforms.crop.drag_start_rect,
@@ -282,7 +282,7 @@ impl BmpViewerApp {
                         }
 
                         // Finish drag.
-                        if response.drag_stopped() {
+                        if response.drag_stopped_by(egui::PointerButton::Primary) {
                             self.transforms.crop.drag_mode = None;
                             self.transforms.crop.drag_start_image = None;
                             self.transforms.crop.drag_start_rect = None;
@@ -295,7 +295,11 @@ impl BmpViewerApp {
                 }
 
                 // --- Drag to pan (only when crop interaction is not active) ---
-                if response.dragged() && self.transforms.crop.drag_mode.is_none() && !crop_drag_captured {
+                let pan_drag = response.dragged_by(egui::PointerButton::Middle)
+                    || (response.dragged_by(egui::PointerButton::Primary)
+                        && self.transforms.crop.drag_mode.is_none()
+                        && !crop_drag_captured);
+                if pan_drag {
                     self.viewport.pan_offset += response.drag_delta();
                 }
 
