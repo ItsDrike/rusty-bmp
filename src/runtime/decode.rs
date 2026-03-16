@@ -2,11 +2,178 @@ use thiserror::Error;
 
 use crate::raw::{BitsPerPixel, Bmp, Compression, RgbMasks, RgbaMasks};
 
+#[derive(Debug, Error)]
+pub enum DecodedImageError {
+    #[error("invalid decoded image dimensions: {width}x{height}")]
+    InvalidDimensions { width: u32, height: u32 },
+
+    #[error("decoded image dimensions exceed BMP signed 32-bit limit: {width}x{height}")]
+    DimensionOverflowI32 { width: u32, height: u32 },
+
+    #[error("arithmetic overflow while validating decoded image: {0}")]
+    ArithmeticOverflow(&'static str),
+
+    #[error("decoded image buffer mismatch for {width}x{height}: expected {expected} RGBA bytes, got {actual}")]
+    PixelBufferSizeMismatch {
+        width: u32,
+        height: u32,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+/// Decoded image in 8-bit RGBA format.
 #[derive(Debug, Clone)]
 pub struct DecodedImage {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+impl DecodedImage {
+    /// Creates a decoded RGBA image while enforcing core runtime invariants.
+    ///
+    /// # Errors
+    /// Returns [`DecodedImageError`] when dimensions are zero/out-of-range,
+    /// arithmetic overflows while computing expected buffer size, or the RGBA
+    /// buffer length does not match `width * height * 4`.
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, DecodedImageError> {
+        if width == 0 || height == 0 {
+            return Err(DecodedImageError::InvalidDimensions { width, height });
+        }
+
+        if width > i32::MAX as u32 || height > i32::MAX as u32 {
+            return Err(DecodedImageError::DimensionOverflowI32 { width, height });
+        }
+
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(DecodedImageError::ArithmeticOverflow("expected RGBA size"))?;
+
+        let actual = rgba.len();
+        if actual != expected {
+            return Err(DecodedImageError::PixelBufferSizeMismatch {
+                width,
+                height,
+                expected,
+                actual,
+            });
+        }
+
+        Ok(Self { width, height, rgba })
+    }
+
+    /// Returns image width in pixels.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns image height in pixels.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Returns image width in pixels as `i32`.
+    #[must_use]
+    pub const fn width_i32(&self) -> i32 {
+        #[allow(clippy::cast_possible_wrap)]
+        {
+            self.width as i32
+        }
+    }
+
+    /// Returns image height in pixels as `i32`.
+    #[must_use]
+    pub const fn height_i32(&self) -> i32 {
+        #[allow(clippy::cast_possible_wrap)]
+        {
+            self.height as i32
+        }
+    }
+
+    /// Returns image dimensions as `(width, height)` (in pixels).
+    #[must_use]
+    pub const fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Compute the offset to a pixel at position (x, y).
+    ///
+    /// The requested pixel will be in rgba[offset..offset+4].
+    #[inline]
+    const fn pixel_offset_unchecked(&self, x: u32, y: u32) -> usize {
+        debug_assert!(x < self.width);
+        debug_assert!(y < self.height);
+
+        (y as usize * self.width as usize + x as usize) * 4
+    }
+
+    /// Returns the number of pixels in the image.
+    #[must_use]
+    pub const fn pixel_count(&self) -> usize {
+        // Even though i32::MAX * i32::MAX overflows u32 / potentially usize,
+        // this cannot overflow, since we've already managed to fit the pixel
+        // buffer into memory.
+        self.width as usize * self.height as usize
+    }
+
+    /// Returns the raw RGBA byte buffer.
+    #[must_use]
+    pub fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+
+    /// Iterates over pixels as `[r, g, b, a]` values.
+    #[must_use]
+    pub fn pixels(&self) -> impl ExactSizeIterator<Item = [u8; 4]> + DoubleEndedIterator + '_ {
+        self.rgba.chunks_exact(4).map(|px| [px[0], px[1], px[2], px[3]])
+    }
+
+    /// Returns the pixel at `(x, y)`, or `None` if out of bounds.
+    #[must_use]
+    pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+
+        let idx = self.pixel_offset_unchecked(x, y);
+        let px = self.rgba.get(idx..idx + 4)?;
+        Some([px[0], px[1], px[2], px[3]])
+    }
+
+    /// Returns the RGBA value at `(x, y)` without bounds checks.
+    ///
+    /// # Safety
+    /// The caller must guarantee `x < self.width()` and `y < self.height()`.
+    /// Violating this precondition results in out-of-bounds access and
+    /// undefined behavior.
+    #[must_use]
+    #[inline]
+    pub unsafe fn pixel_unchecked(&self, x: u32, y: u32) -> [u8; 4] {
+        debug_assert!(x < self.width);
+        debug_assert!(y < self.height);
+
+        let idx = self.pixel_offset_unchecked(x, y);
+        [
+            // SAFETY: Caller guarantees `(x, y)` is within bounds, so `idx..idx+4` exists.
+            unsafe { *self.rgba.get_unchecked(idx) },
+            // SAFETY: See above.
+            unsafe { *self.rgba.get_unchecked(idx + 1) },
+            // SAFETY: See above.
+            unsafe { *self.rgba.get_unchecked(idx + 2) },
+            // SAFETY: See above.
+            unsafe { *self.rgba.get_unchecked(idx + 3) },
+        ]
+    }
+
+    /// Consumes the image and returns its RGBA byte buffer.
+    #[must_use]
+    pub fn into_rgba(self) -> Vec<u8> {
+        self.rgba
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,6 +224,9 @@ pub enum DecodeError {
 
     #[error("decoded RGBA output too large: {decoded_size} bytes exceeds safe max {max_allowed}")]
     DecodedImageTooLarge { decoded_size: usize, max_allowed: usize },
+
+    #[error("decoded image invariant violated: {0}")]
+    InvalidDecodedImage(#[from] DecodedImageError),
 }
 
 const MAX_DECODED_RGBA_BYTES: usize = 512 * 1024 * 1024;
@@ -616,16 +786,17 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
         CompressionDecoder::Other(x) => return Err(DecodeError::UnsupportedCompression(CompressionDecoder::Other(x))),
     };
 
-    Ok(DecodedImage {
-        width: u32::try_from(width).map_err(|_| DecodeError::ArithmeticOverflow("width output cast"))?,
-        height: u32::try_from(height).map_err(|_| DecodeError::ArithmeticOverflow("height output cast"))?,
+    DecodedImage::new(
+        u32::try_from(width).map_err(|_| DecodeError::ArithmeticOverflow("width output cast"))?,
+        u32::try_from(height).map_err(|_| DecodeError::ArithmeticOverflow("height output cast"))?,
         rgba,
-    })
+    )
+    .map_err(DecodeError::from)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DecodeError, MAX_DECODED_RGBA_BYTES, rgba_output_len};
+    use super::{DecodeError, DecodedImage, DecodedImageError, MAX_DECODED_RGBA_BYTES, rgba_output_len};
 
     #[test]
     fn rgba_output_len_rejects_multiplication_overflow() {
@@ -638,5 +809,17 @@ mod tests {
         let over_limit_pixels = (MAX_DECODED_RGBA_BYTES / 4) + 1;
         let err = rgba_output_len(over_limit_pixels, 1).expect_err("must enforce decoded size cap");
         assert!(matches!(err, DecodeError::DecodedImageTooLarge { .. }));
+    }
+
+    #[test]
+    fn decoded_image_constructor_rejects_invalid_buffer() {
+        let err = DecodedImage::new(2, 2, vec![0; 12]).expect_err("must reject mismatched RGBA buffer");
+        assert!(matches!(err, DecodedImageError::PixelBufferSizeMismatch { .. }));
+    }
+
+    #[test]
+    fn decoded_image_constructor_rejects_i32_overflow_dimensions() {
+        let err = DecodedImage::new(i32::MAX as u32 + 1, 1, vec![0; 4]).expect_err("must reject i32-overflow dims");
+        assert!(matches!(err, DecodedImageError::DimensionOverflowI32 { .. }));
     }
 }

@@ -135,9 +135,10 @@ impl BmpViewerApp {
                         .document
                         .transformed_image
                         .as_ref()
-                        .map(|image| (image.width, image.height))
+                        .map(|image| (image.width(), image.height()))
                     {
                         let (cx, cy, cw, ch) = self.crop_rect_for_image(image_width, image_height);
+
                         let crop_min = egui::pos2(
                             img_rect.min.x + cx as f32 * effective_zoom,
                             img_rect.min.y + cy as f32 * effective_zoom,
@@ -305,16 +306,8 @@ impl BmpViewerApp {
                     let py = (rel.y / effective_zoom) as u32;
 
                     if let Some(image) = &self.document.transformed_image
-                        && px < image.width
-                        && py < image.height
+                        && let Some(rgba) = image.pixel(px, py)
                     {
-                        let idx = ((py * image.width + px) * 4) as usize;
-                        let rgba = [
-                            image.rgba[idx],
-                            image.rgba[idx + 1],
-                            image.rgba[idx + 2],
-                            image.rgba[idx + 3],
-                        ];
                         self.viewport.hovered_pixel = Some((px, py, rgba));
 
                         // Draw highlight outline around the hovered pixel.

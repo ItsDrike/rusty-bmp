@@ -25,7 +25,7 @@ impl BmpViewerApp {
             .resizable(false)
             .default_width(360.0)
             .show(ctx, |ui| {
-                ui.label(format!("Current size: {}x{}", current.width, current.height));
+                ui.label(format!("Current size: {}x{}", current.width(), current.height()));
                 ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
@@ -95,8 +95,8 @@ impl BmpViewerApp {
                 });
 
                 if matches!(self.transforms.translate.mode, TranslateMode::Expand) {
-                    let new_w = current.width + self.transforms.translate.dx.unsigned_abs();
-                    let new_h = current.height + self.transforms.translate.dy.unsigned_abs();
+                    let new_w = current.width() + self.transforms.translate.dx.unsigned_abs();
+                    let new_h = current.height() + self.transforms.translate.dy.unsigned_abs();
                     ui.small(format!("Output size: {new_w}x{new_h}"));
                 }
 

@@ -35,18 +35,14 @@ impl TransformOp for InvertColors {
     ///
     /// The alpha channel is left unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let mut out = image.rgba.clone();
+        let mut out = image.rgba().to_vec();
         out.par_chunks_exact_mut(4).for_each(|px| {
             px[0] = 255 - px[0];
             px[1] = 255 - px[1];
             px[2] = 255 - px[2];
         });
 
-        Ok(DecodedImage {
-            width: image.width,
-            height: image.height,
-            rgba: out,
-        })
+        DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -79,7 +75,7 @@ impl TransformOp for Grayscale {
     /// The resulting luminance replaces the RGB channels while the alpha
     /// channel remains unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let mut out = image.rgba.clone();
+        let mut out = image.rgba().to_vec();
         out.par_chunks_exact_mut(4).for_each(|px| {
             let luma = (0.299 * f32::from(px[0]) + 0.587 * f32::from(px[1]) + 0.114 * f32::from(px[2])).round() as u8;
             px[0] = luma;
@@ -87,11 +83,7 @@ impl TransformOp for Grayscale {
             px[2] = luma;
         });
 
-        Ok(DecodedImage {
-            width: image.width,
-            height: image.height,
-            rgba: out,
-        })
+        DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -125,7 +117,7 @@ impl TransformOp for Sepia {
     ///
     /// Results are clamped to `[0, 255]`. The alpha channel is preserved.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let mut out = image.rgba.clone();
+        let mut out = image.rgba().to_vec();
         out.par_chunks_exact_mut(4).for_each(|px| {
             let r = f32::from(px[0]);
             let g = f32::from(px[1]);
@@ -138,11 +130,7 @@ impl TransformOp for Sepia {
             px[2] = sb;
         });
 
-        Ok(DecodedImage {
-            width: image.width,
-            height: image.height,
-            rgba: out,
-        })
+        DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -181,18 +169,14 @@ impl TransformOp for Brightness {
     /// Positive values increase brightness, negative values darken the image.
     /// The alpha channel is not modified.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let mut out = image.rgba.clone();
+        let mut out = image.rgba().to_vec();
         out.par_chunks_exact_mut(4).for_each(|px| {
             px[0] = (i16::from(px[0]) + self.delta).clamp(0, 255) as u8;
             px[1] = (i16::from(px[1]) + self.delta).clamp(0, 255) as u8;
             px[2] = (i16::from(px[2]) + self.delta).clamp(0, 255) as u8;
         });
 
-        Ok(DecodedImage {
-            width: image.width,
-            height: image.height,
-            rgba: out,
-        })
+        DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -240,18 +224,14 @@ impl TransformOp for Contrast {
         let delta_clamped = f32::from(self.delta).clamp(-255.0, 255.0);
         let factor = 259.0 * (delta_clamped + 255.0) / (255.0 * (259.0 - delta_clamped));
 
-        let mut out = image.rgba.clone();
+        let mut out = image.rgba().to_vec();
         out.par_chunks_exact_mut(4).for_each(|px| {
             px[0] = (factor * (f32::from(px[0]) - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
             px[1] = (factor * (f32::from(px[1]) - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
             px[2] = (factor * (f32::from(px[2]) - 128.0) + 128.0).round().clamp(0.0, 255.0) as u8;
         });
 
-        Ok(DecodedImage {
-            width: image.width,
-            height: image.height,
-            rgba: out,
-        })
+        DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -271,65 +251,45 @@ mod tests {
 
     #[test]
     fn invert_colors_flips_rgb_and_keeps_alpha() {
-        let image = DecodedImage {
-            width: 2,
-            height: 1,
-            rgba: vec![10, 20, 30, 40, 100, 150, 200, 250],
-        };
+        let image = DecodedImage::new(2, 1, vec![10, 20, 30, 40, 100, 150, 200, 250]).expect("valid image");
         let inverted = InvertColors.apply(&image).expect("invert colors should always succeed");
-        assert_eq!(inverted.rgba, vec![245, 235, 225, 40, 155, 105, 55, 250]);
+        assert_eq!(inverted.rgba(), vec![245, 235, 225, 40, 155, 105, 55, 250]);
     }
 
     #[test]
     fn grayscale_uses_perceptual_weights() {
-        let image = DecodedImage {
-            width: 1,
-            height: 1,
-            rgba: vec![100, 150, 200, 128],
-        };
+        let image = DecodedImage::new(1, 1, vec![100, 150, 200, 128]).expect("valid image");
         let gray = Grayscale.apply(&image).expect("grayscale should always succeed");
-        assert_eq!(gray.rgba[0], 141);
-        assert_eq!(gray.rgba[1], 141);
-        assert_eq!(gray.rgba[2], 141);
-        assert_eq!(gray.rgba[3], 128);
+        assert_eq!(gray.rgba()[0], 141);
+        assert_eq!(gray.rgba()[1], 141);
+        assert_eq!(gray.rgba()[2], 141);
+        assert_eq!(gray.rgba()[3], 128);
     }
 
     #[test]
     fn sepia_clamps_to_255() {
-        let image = DecodedImage {
-            width: 1,
-            height: 1,
-            rgba: vec![255, 255, 255, 255],
-        };
+        let image = DecodedImage::new(1, 1, vec![255, 255, 255, 255]).expect("valid image");
         let result = Sepia.apply(&image).expect("sepia should always succeed");
-        assert_eq!(result.rgba[0], 255);
-        assert_eq!(result.rgba[1], 255);
+        assert_eq!(result.rgba()[0], 255);
+        assert_eq!(result.rgba()[1], 255);
     }
 
     #[test]
     fn brightness_zero_is_identity() {
-        let image = DecodedImage {
-            width: 1,
-            height: 1,
-            rgba: vec![42, 128, 200, 255],
-        };
+        let image = DecodedImage::new(1, 1, vec![42, 128, 200, 255]).expect("valid image");
         let result = Brightness { delta: 0 }
             .apply(&image)
             .expect("brightness should always succeed");
-        assert_eq!(result.rgba, image.rgba);
+        assert_eq!(result.rgba(), image.rgba());
     }
 
     #[test]
     fn contrast_zero_is_identity() {
-        let image = DecodedImage {
-            width: 1,
-            height: 1,
-            rgba: vec![42, 128, 200, 255],
-        };
+        let image = DecodedImage::new(1, 1, vec![42, 128, 200, 255]).expect("valid image");
         let result = Contrast { delta: 0 }
             .apply(&image)
             .expect("contrast should always succeed");
-        assert_eq!(result.rgba, image.rgba);
+        assert_eq!(result.rgba(), image.rgba());
     }
 
     #[test]
@@ -340,17 +300,13 @@ mod tests {
 
     #[test]
     fn apply_then_inverse_is_identity_for_invert() {
-        let image = DecodedImage {
-            width: 2,
-            height: 1,
-            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
-        };
+        let image = DecodedImage::new(2, 1, vec![10, 20, 30, 255, 40, 50, 60, 255]).expect("valid image");
         let ops: Vec<ImageTransform> = vec![InvertColors.into()];
         for op in ops {
             let inv = op.inverse().expect("invert should have inverse");
             let transformed = op.apply(&image).expect("apply should succeed");
             let restored = inv.apply(&transformed).expect("inverse apply should succeed");
-            assert_eq!(restored.rgba, image.rgba);
+            assert_eq!(restored.rgba(), image.rgba());
         }
     }
 

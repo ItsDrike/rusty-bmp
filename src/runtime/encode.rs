@@ -13,12 +13,6 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum EncodeError {
-    #[error("invalid dimensions for encoding: {width}x{height}")]
-    InvalidDimensions { width: u32, height: u32 },
-
-    #[error("pixel buffer size mismatch: expected {expected} bytes, found {actual}")]
-    PixelBufferSizeMismatch { expected: usize, actual: usize },
-
     #[error("arithmetic overflow while preparing BMP")]
     ArithmeticOverflow,
 
@@ -281,32 +275,6 @@ fn row_stride(width: usize, bits_per_pixel: u16) -> Result<usize, EncodeError> {
 }
 
 // ---------------------------------------------------------------------------
-// Validate shared preconditions
-// ---------------------------------------------------------------------------
-
-fn validate_image(image: &DecodedImage) -> Result<(), EncodeError> {
-    if image.width == 0 || image.height == 0 || image.width > i32::MAX as u32 || image.height > i32::MAX as u32 {
-        return Err(EncodeError::InvalidDimensions {
-            width: image.width,
-            height: image.height,
-        });
-    }
-
-    let pixel_bytes = (image.width as usize)
-        .checked_mul(image.height as usize)
-        .and_then(|n| n.checked_mul(4))
-        .ok_or(EncodeError::ArithmeticOverflow)?;
-    if image.rgba.len() != pixel_bytes {
-        return Err(EncodeError::PixelBufferSizeMismatch {
-            expected: pixel_bytes,
-            actual: image.rgba.len(),
-        });
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Shared construction helpers
 // ---------------------------------------------------------------------------
 
@@ -373,7 +341,7 @@ const fn make_info_header(
 /// Quantize the image to at most `max_colors` and return `(palette_rgbquad_entries, indices)`.
 /// Palette entries are in BMP's BGRA ordering.
 fn quantize_image(image: &DecodedImage, max_colors: usize) -> (Vec<RgbQuad>, Vec<u8>) {
-    let (palette, indices) = quantize::quantize(&image.rgba, max_colors);
+    let (palette, indices) = quantize::quantize(image.rgba(), max_colors);
     let color_table: Vec<RgbQuad> = palette
         .iter()
         .map(|c| RgbQuad {
@@ -668,20 +636,18 @@ fn build_bmp_v5(
 // ---------------------------------------------------------------------------
 
 fn encode_32bpp(image: &DecodedImage, compression: Compression, masks: Option<RgbMasks>) -> Result<Bmp, EncodeError> {
-    let w = image.width as usize;
-    let h = image.height as usize;
-    let pixel_bytes = w * h * 4;
+    let pixel_bytes = image.rgba().len();
     let image_size = u32::try_from(pixel_bytes).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
     let mut bmp_pixels = Vec::with_capacity(pixel_bytes);
-    for px in image.rgba.chunks_exact(4) {
+    for px in image.pixels() {
         // 32bpp stores B, G, R, reserved (both BI_RGB and BI_BITFIELDS with RGB888 masks)
         bmp_pixels.extend_from_slice(&[px[2], px[1], px[0], 0]);
     }
 
     build_bmp_info(
-        image.width,
-        image.height,
+        image.width(),
+        image.height(),
         BitsPerPixel::Bpp32,
         compression,
         image_size,
@@ -696,8 +662,9 @@ fn encode_32bpp(image: &DecodedImage, compression: Compression, masks: Option<Rg
 // ---------------------------------------------------------------------------
 
 fn encode_rgb24(image: &DecodedImage) -> Result<Bmp, EncodeError> {
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
+    let rgba = image.rgba();
     let stride = row_stride(w, 24)?;
     let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
@@ -707,15 +674,15 @@ fn encode_rgb24(image: &DecodedImage) -> Result<Bmp, EncodeError> {
         for x in 0..w {
             let src = (y * w + x) * 4;
             let dst = row_start + x * 3;
-            bmp_pixels[dst] = image.rgba[src + 2]; // B
-            bmp_pixels[dst + 1] = image.rgba[src + 1]; // G
-            bmp_pixels[dst + 2] = image.rgba[src]; // R
+            bmp_pixels[dst] = rgba[src + 2]; // B
+            bmp_pixels[dst + 1] = rgba[src + 1]; // G
+            bmp_pixels[dst + 2] = rgba[src]; // R
         }
     }
 
     build_bmp_info(
-        image.width,
-        image.height,
+        image.width(),
+        image.height(),
         BitsPerPixel::Bpp24,
         Compression::Rgb,
         image_size,
@@ -730,8 +697,9 @@ fn encode_rgb24(image: &DecodedImage) -> Result<Bmp, EncodeError> {
 // ---------------------------------------------------------------------------
 
 fn encode_rgb16(image: &DecodedImage) -> Result<Bmp, EncodeError> {
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
+    let rgba = image.rgba();
     let stride = row_stride(w, 16)?;
     let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
@@ -740,9 +708,9 @@ fn encode_rgb16(image: &DecodedImage) -> Result<Bmp, EncodeError> {
         let row_start = y * stride;
         for x in 0..w {
             let src = (y * w + x) * 4;
-            let r5 = (u16::from(image.rgba[src]) * 31 + 127) / 255;
-            let g5 = (u16::from(image.rgba[src + 1]) * 31 + 127) / 255;
-            let b5 = (u16::from(image.rgba[src + 2]) * 31 + 127) / 255;
+            let r5 = (u16::from(rgba[src]) * 31 + 127) / 255;
+            let g5 = (u16::from(rgba[src + 1]) * 31 + 127) / 255;
+            let b5 = (u16::from(rgba[src + 2]) * 31 + 127) / 255;
             let px16: u16 = (r5 << 10) | (g5 << 5) | b5;
             let dst = row_start + x * 2;
             bmp_pixels[dst..dst + 2].copy_from_slice(&px16.to_le_bytes());
@@ -750,8 +718,8 @@ fn encode_rgb16(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     }
 
     build_bmp_info(
-        image.width,
-        image.height,
+        image.width(),
+        image.height(),
         BitsPerPixel::Bpp16,
         Compression::Rgb,
         image_size,
@@ -775,8 +743,8 @@ fn encode_indexed_rgb(image: &DecodedImage, bpp: BitsPerPixel) -> Result<Bmp, En
 
     let (color_table, indices) = quantize_image(image, max_colors);
 
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
     let bits = bpp.bit_count();
     let stride = row_stride(w, bits)?;
     let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
@@ -811,8 +779,8 @@ fn encode_indexed_rgb(image: &DecodedImage, bpp: BitsPerPixel) -> Result<Bmp, En
     }
 
     build_bmp_info(
-        image.width,
-        image.height,
+        image.width(),
+        image.height(),
         bpp,
         Compression::Rgb,
         image_size,
@@ -829,8 +797,8 @@ fn encode_indexed_rgb(image: &DecodedImage, bpp: BitsPerPixel) -> Result<Bmp, En
 fn encode_rle8(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     let (color_table, indices) = quantize_image(image, 256);
 
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
 
     // RLE is bottom-up, so we iterate rows bottom-to-top.
     let mut rle_data: Vec<u8> = Vec::new();
@@ -907,8 +875,8 @@ fn encode_rle8(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     let image_size = u32::try_from(rle_data.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
     build_bmp_info(
-        image.width,
-        image.height,
+        image.width(),
+        image.height(),
         BitsPerPixel::Bpp8,
         Compression::Rle8,
         image_size,
@@ -925,8 +893,8 @@ fn encode_rle8(image: &DecodedImage) -> Result<Bmp, EncodeError> {
 fn encode_rle4(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     let (color_table, indices) = quantize_image(image, 16);
 
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
 
     let mut rle_data: Vec<u8> = Vec::new();
 
@@ -1013,8 +981,8 @@ fn encode_rle4(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     let image_size = u32::try_from(rle_data.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
     build_bmp_info(
-        image.width,
-        image.height,
+        image.width(),
+        image.height(),
         BitsPerPixel::Bpp4,
         Compression::Rle4,
         image_size,
@@ -1029,8 +997,9 @@ fn encode_rle4(image: &DecodedImage) -> Result<Bmp, EncodeError> {
 // ---------------------------------------------------------------------------
 
 fn encode_bitfields16(image: &DecodedImage, masks: RgbMasks) -> Result<Bmp, EncodeError> {
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
+    let rgba = image.rgba();
     let stride = row_stride(w, 16)?;
     let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
@@ -1051,9 +1020,9 @@ fn encode_bitfields16(image: &DecodedImage, masks: RgbMasks) -> Result<Bmp, Enco
         let row_start = y * stride;
         for x in 0..w {
             let src = (y * w + x) * 4;
-            let r = u16::from(image.rgba[src]);
-            let g = u16::from(image.rgba[src + 1]);
-            let b = u16::from(image.rgba[src + 2]);
+            let r = u16::from(rgba[src]);
+            let g = u16::from(rgba[src + 1]);
+            let b = u16::from(rgba[src + 2]);
 
             let rv = (r * r_max + 127) / 255;
             let gv = (g * g_max + 127) / 255;
@@ -1066,8 +1035,8 @@ fn encode_bitfields16(image: &DecodedImage, masks: RgbMasks) -> Result<Bmp, Enco
     }
 
     build_bmp_info(
-        image.width,
-        image.height,
+        image.width(),
+        image.height(),
         BitsPerPixel::Bpp16,
         Compression::BitFields,
         image_size,
@@ -1216,8 +1185,7 @@ fn wrap_with_header(
 /// (32-bit uncompressed RGB). This preserves the original API.
 ///
 /// # Errors
-/// Returns [`EncodeError`] if image validation fails or BMP assembly/write
-/// metadata overflows occur.
+/// Returns [`EncodeError`] if BMP assembly/write metadata overflows occur.
 pub fn encode_rgba_to_bmp(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     encode_rgba_to_bmp_with_format(image, SaveFormat::Rgb32)
 }
@@ -1228,11 +1196,8 @@ pub fn encode_rgba_to_bmp(image: &DecodedImage) -> Result<Bmp, EncodeError> {
 /// use [`encode_rgba_to_bmp_ext`].
 ///
 /// # Errors
-/// Returns [`EncodeError`] if dimensions/pixel layout are invalid or the chosen
-/// format cannot be encoded safely.
+/// Returns [`EncodeError`] if the chosen format cannot be encoded safely.
 pub fn encode_rgba_to_bmp_with_format(image: &DecodedImage, format: SaveFormat) -> Result<Bmp, EncodeError> {
-    validate_image(image)?;
-
     match format {
         SaveFormat::Rgb32 => encode_32bpp(image, Compression::Rgb, None),
         SaveFormat::Rgb24 => encode_rgb24(image),

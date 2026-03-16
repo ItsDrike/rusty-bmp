@@ -392,11 +392,11 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn set_display_image(&mut self, ctx: &egui::Context, image: DecodedImage, label: String) {
-        self.viewport.has_transparency = image.rgba.chunks_exact(4).any(|px| px[3] < u8::MAX);
+        self.viewport.has_transparency = image.pixels().any(|px| px[3] < u8::MAX);
         self.viewport.checker_texture = None;
         self.viewport.checker_texture_tile_img_px = 0;
         let color =
-            egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
+            egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.rgba());
         self.viewport.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
         self.document.transformed_image = Some(image);
     }
@@ -598,7 +598,7 @@ impl BmpViewerApp {
         };
 
         let format = self.document.save_format;
-        let has_transparency = image.rgba.chunks_exact(4).any(|px| px[3] < u8::MAX);
+        let has_transparency = image.pixels().any(|px| px[3] < u8::MAX);
         let mut reasons = Vec::new();
 
         if has_transparency && !matches!(format, SaveFormat::Rgb24 | SaveFormat::Rgb32 | SaveFormat::BitFields32) {
@@ -892,7 +892,7 @@ impl BmpViewerApp {
 
 fn unique_rgb_colors_exceed(image: &DecodedImage, limit: usize) -> bool {
     let mut unique = HashSet::with_capacity(limit.saturating_add(1));
-    for px in image.rgba.chunks_exact(4) {
+    for px in image.pixels() {
         unique.insert([px[0], px[1], px[2]]);
         if unique.len() > limit {
             return true;
@@ -919,7 +919,7 @@ fn unique_rgb_colors_exceed(image: &DecodedImage, limit: usize) -> bool {
 /// colors in 5-bit channels (e.g. `RGB555`) so the application can warn
 /// the user when precision would be lost.
 fn all_pixels_exact_in_5bit_grid(image: &DecodedImage) -> bool {
-    image.rgba.chunks_exact(4).all(|px| {
+    image.pixels().all(|px| {
         // Lossy convert color bits to 0..=32 range (5-bit)
         let r5 = (u16::from(px[0]) * 31 + 127) / 255;
         let g5 = (u16::from(px[1]) * 31 + 127) / 255;
@@ -962,7 +962,7 @@ fn all_pixels_exact_in_5bit_grid(image: &DecodedImage) -> bool {
 /// Used by save-quality checks to warn the user when converting an
 /// image to RGB565 would reduce color precision.
 fn all_pixels_exact_in_565_grid(image: &DecodedImage) -> bool {
-    image.rgba.chunks_exact(4).all(|px| {
+    image.pixels().all(|px| {
         // Lossy convert color bits to 0..=32 (5-bit) / 0..=128 (6-bit) range
         let r5 = (u16::from(px[0]) * 31 + 127) / 255;
         let g6 = (u16::from(px[1]) * 63 + 127) / 255;

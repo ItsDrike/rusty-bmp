@@ -59,7 +59,7 @@ impl BmpViewerApp {
                 };
 
                 let (capacity_bytes, payload_bytes) = if let Some(img) = &self.document.transformed_image {
-                    let cap = config.capacity_bytes(img.width, img.height);
+                    let cap = config.capacity_bytes(img.width(), img.height());
                     let payload = self.steganography.text_input.len() as u64;
                     (Some(cap), payload)
                 } else {

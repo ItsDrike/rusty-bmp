@@ -116,12 +116,13 @@ impl TransformOp for RotateLeft {
     /// (x, y) -> (y, width - 1 - x)
     /// ```
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let src_w = image.width as usize;
-        let src_h = image.height as usize;
+        let src_w = image.width() as usize;
+        let src_h = image.height() as usize;
         let dst_w = src_h;
         let dst_h = src_w;
         let row_bytes = dst_w * 4;
         let mut out = vec![0_u8; dst_w * dst_h * 4];
+        let src_rgba = image.rgba();
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
             let x = src_w - 1 - dst_y;
@@ -129,15 +130,11 @@ impl TransformOp for RotateLeft {
                 let y = dst_x;
                 let src = (y * src_w + x) * 4;
                 let dst = dst_x * 4;
-                row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+                row[dst..dst + 4].copy_from_slice(&src_rgba[src..src + 4]);
             }
         });
 
-        Ok(DecodedImage {
-            width: dst_w as u32,
-            height: dst_h as u32,
-            rgba: out,
-        })
+        DecodedImage::new(dst_w as u32, dst_h as u32, out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -174,12 +171,13 @@ impl TransformOp for RotateRight {
     /// (x, y) -> (height - 1 - y, x)
     /// ```
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let src_w = image.width as usize;
-        let src_h = image.height as usize;
+        let src_w = image.width() as usize;
+        let src_h = image.height() as usize;
         let dst_w = src_h;
         let dst_h = src_w;
         let row_bytes = dst_w * 4;
         let mut out = vec![0_u8; dst_w * dst_h * 4];
+        let src_rgba = image.rgba();
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
             let x = dst_y;
@@ -187,15 +185,11 @@ impl TransformOp for RotateRight {
                 let y = src_h - 1 - dst_x;
                 let src = (y * src_w + x) * 4;
                 let dst = dst_x * 4;
-                row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+                row[dst..dst + 4].copy_from_slice(&src_rgba[src..src + 4]);
             }
         });
 
-        Ok(DecodedImage {
-            width: dst_w as u32,
-            height: dst_h as u32,
-            rgba: out,
-        })
+        DecodedImage::new(dst_w as u32, dst_h as u32, out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -250,11 +244,8 @@ impl TransformOp for RotateAny {
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
         let angle_degrees = self.angle_degrees();
 
-        let src_w = image.width as usize;
-        let src_h = image.height as usize;
-        if src_w == 0 || src_h == 0 {
-            return Ok(image.clone());
-        }
+        let src_w = image.width() as usize;
+        let src_h = image.height() as usize;
 
         if self.expand || src_w == src_h {
             let turns = (angle_degrees / 90.0).round() as i32;
@@ -318,11 +309,7 @@ impl TransformOp for RotateAny {
             }
         });
 
-        Ok(DecodedImage {
-            width: dst_w as u32,
-            height: dst_h as u32,
-            rgba: out,
-        })
+        DecodedImage::new(dst_w as u32, dst_h as u32, out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -357,20 +344,10 @@ impl TransformOp for Resize {
     /// Resampling uses center-based coordinate mapping and the selected
     /// interpolation method.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let src_w = image.width;
-        let src_h = image.height;
+        let src_w = image.width();
+        let src_h = image.height();
         let dst_w = self.width.max(1);
         let dst_h = self.height.max(1);
-
-        if src_w == 0 || src_h == 0 {
-            let row_bytes = (dst_w as usize) * 4;
-            let len = row_bytes * dst_h as usize;
-            return Ok(DecodedImage {
-                width: dst_w,
-                height: dst_h,
-                rgba: vec![0; len],
-            });
-        }
 
         if src_w == dst_w && src_h == dst_h {
             return Ok(image.clone());
@@ -393,11 +370,7 @@ impl TransformOp for Resize {
             }
         });
 
-        Ok(DecodedImage {
-            width: dst_w,
-            height: dst_h,
-            rgba: out,
-        })
+        DecodedImage::new(dst_w, dst_h, out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -436,11 +409,8 @@ impl TransformOp for Skew {
     /// The transformation is centered around the image center and uses inverse
     /// mapping, with optional canvas expansion.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let src_w = image.width;
-        let src_h = image.height;
-        if src_w == 0 || src_h == 0 {
-            return Ok(image.clone());
-        }
+        let src_w = image.width();
+        let src_h = image.height();
 
         let kx = f64::from(self.x_milli) / 1000.0;
         let ky = f64::from(self.y_milli) / 1000.0;
@@ -450,8 +420,8 @@ impl TransformOp for Skew {
             return Ok(image.clone());
         }
 
-        let src_cx = (f64::from(image.width) - 1.0) * 0.5;
-        let src_cy = (f64::from(image.height) - 1.0) * 0.5;
+        let src_cx = (f64::from(src_w) - 1.0) * 0.5;
+        let src_cy = (f64::from(src_h) - 1.0) * 0.5;
 
         let (dst_w, dst_h) = if self.expand {
             let corners = [
@@ -498,9 +468,6 @@ impl TransformOp for Skew {
 
         let row_bytes = (dst_w * 4) as usize;
         let len = row_bytes * dst_h as usize;
-        if row_bytes == 0 || len == 0 {
-            return Ok(image.clone());
-        }
         let mut out = vec![0_u8; len];
         let inv = 1.0 / det;
 
@@ -520,11 +487,7 @@ impl TransformOp for Skew {
             }
         });
 
-        Ok(DecodedImage {
-            width: dst_w,
-            height: dst_h,
-            rgba: out,
-        })
+        DecodedImage::new(dst_w, dst_h, out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -564,11 +527,10 @@ impl TransformOp for Translate {
     /// Output bounds are handled according to `mode`; newly exposed pixels are
     /// filled with `fill`.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let src_w = image.width as usize;
-        let src_h = image.height as usize;
-        if src_w == 0 || src_h == 0 {
-            return Ok(image.clone());
-        }
+        let src_w = image.width() as usize;
+        let src_h = image.height() as usize;
+        let src_w_i32 = image.width_i32();
+        let src_h_i32 = image.height_i32();
 
         let (dst_w, dst_h, x_base, y_base) = match self.mode {
             TranslateMode::Crop => (src_w, src_h, 0_i32, 0_i32),
@@ -583,25 +545,22 @@ impl TransformOp for Translate {
         let row_bytes = dst_w * 4;
         let mut out = vec![0_u8; row_bytes * dst_h];
         out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&self.fill));
+        let src_rgba = image.rgba();
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
             for dst_x in 0..dst_w {
                 let src_x = dst_x as i32 - self.dx - x_base;
                 let src_y = dst_y as i32 - self.dy - y_base;
 
-                if src_x >= 0 && src_x < src_w as i32 && src_y >= 0 && src_y < src_h as i32 {
+                if src_x >= 0 && src_x < src_w_i32 && src_y >= 0 && src_y < src_h_i32 {
                     let src = (src_y as usize * src_w + src_x as usize) * 4;
                     let dst = dst_x * 4;
-                    row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+                    row[dst..dst + 4].copy_from_slice(&src_rgba[src..src + 4]);
                 }
             }
         });
 
-        Ok(DecodedImage {
-            width: dst_w as u32,
-            height: dst_h as u32,
-            rgba: out,
-        })
+        DecodedImage::new(dst_w as u32, dst_h as u32, out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -633,11 +592,8 @@ impl TransformOp for Crop {
     /// The crop rectangle is clamped to source bounds and output size is at
     /// least `1x1`.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let src_w = image.width;
-        let src_h = image.height;
-        if src_w == 0 || src_h == 0 {
-            return Ok(image.clone());
-        }
+        let src_w = image.width();
+        let src_h = image.height();
 
         let x0 = self.x.min(src_w.saturating_sub(1));
         let y0 = self.y.min(src_h.saturating_sub(1));
@@ -655,18 +611,15 @@ impl TransformOp for Crop {
         let src_w_usize = src_w as usize;
         let row_bytes = dst_width * 4;
         let mut out = vec![0_u8; row_bytes * dst_height];
+        let src_rgba = image.rgba();
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
             let sy = y0 as usize + dy;
             let src = (sy * src_w_usize + x0 as usize) * 4;
-            row.copy_from_slice(&image.rgba[src..src + row_bytes]);
+            row.copy_from_slice(&src_rgba[src..src + row_bytes]);
         });
 
-        Ok(DecodedImage {
-            width: out_w,
-            height: out_h,
-            rgba: out,
-        })
+        DecodedImage::new(out_w, out_h, out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -692,25 +645,21 @@ impl TransformOp for MirrorHorizontal {
     ///
     /// Each row is reversed while keeping image dimensions unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let w = image.width as usize;
-        let h = image.height as usize;
+        let w = image.width() as usize;
         let row_bytes = w * 4;
-        let mut out = vec![0_u8; w * h * 4];
+        let src_rgba = image.rgba();
+        let mut out = vec![0_u8; src_rgba.len()];
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
             for x in 0..w {
                 let src = (y * w + x) * 4;
                 let dst_x = w - 1 - x;
                 let dst = dst_x * 4;
-                row[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+                row[dst..dst + 4].copy_from_slice(&src_rgba[src..src + 4]);
             }
         });
 
-        Ok(DecodedImage {
-            width: image.width,
-            height: image.height,
-            rgba: out,
-        })
+        DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -736,22 +685,19 @@ impl TransformOp for MirrorVertical {
     ///
     /// Rows are swapped while keeping image dimensions unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let w = image.width as usize;
-        let h = image.height as usize;
+        let w = image.width() as usize;
+        let h = image.height() as usize;
         let row_bytes = w * 4;
-        let mut out = vec![0_u8; w * h * 4];
+        let src_rgba = image.rgba();
+        let mut out = vec![0_u8; src_rgba.len()];
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
             let src_y = h - 1 - y;
             let src = src_y * row_bytes;
-            row.copy_from_slice(&image.rgba[src..src + row_bytes]);
+            row.copy_from_slice(&src_rgba[src..src + row_bytes]);
         });
 
-        Ok(DecodedImage {
-            width: image.width,
-            height: image.height,
-            rgba: out,
-        })
+        DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -775,8 +721,8 @@ impl TransformOp for MirrorVertical {
 ///
 /// Coordinates outside the image return transparent black.
 fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInterpolation) -> [u8; 4] {
-    let w = image.width as i32;
-    let h = image.height as i32;
+    let w = image.width_i32();
+    let h = image.height_i32();
     let max_x = (w - 1) as f32;
     let max_y = (h - 1) as f32;
     const EPS: f32 = 1e-3;
@@ -788,9 +734,12 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
 
     match interpolation {
         RotationInterpolation::Nearest => {
-            let xi = x.round() as i32;
-            let yi = y.round() as i32;
-            pixel_at(image, xi, yi)
+            #[allow(clippy::cast_sign_loss)]
+            let xi = x.round() as u32;
+            #[allow(clippy::cast_sign_loss)]
+            let yi = y.round() as u32;
+            // SAFETY: coordinates are clamped to `[0, w-1] x [0, h-1]` above.
+            unsafe { image.pixel_unchecked(xi, yi) }
         }
         RotationInterpolation::Bilinear => {
             let x0 = x.floor() as i32;
@@ -801,10 +750,16 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
             let tx = x - x0 as f32;
             let ty = y - y0 as f32;
 
-            let p00 = pixel_at(image, x0, y0);
-            let p10 = pixel_at(image, x1, y0);
-            let p01 = pixel_at(image, x0, y1);
-            let p11 = pixel_at(image, x1, y1);
+            #[allow(clippy::cast_sign_loss)]
+            let (x0u, y0u, x1u, y1u) = (x0 as u32, y0 as u32, x1 as u32, y1 as u32);
+            // SAFETY: `(x0,y0)`, `(x1,y0)`, `(x0,y1)`, `(x1,y1)` are clamped to image bounds.
+            let p00 = unsafe { image.pixel_unchecked(x0u, y0u) };
+            // SAFETY: see above.
+            let p10 = unsafe { image.pixel_unchecked(x1u, y0u) };
+            // SAFETY: see above.
+            let p01 = unsafe { image.pixel_unchecked(x0u, y1u) };
+            // SAFETY: see above.
+            let p11 = unsafe { image.pixel_unchecked(x1u, y1u) };
 
             let mut out = [0_u8; 4];
             for c in 0..4 {
@@ -840,7 +795,11 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
                     let sy = (y0 + j as i32 - 1).clamp(0, h - 1);
                     for (i, &w_x) in wx.iter().enumerate() {
                         let sx = (x0 + i as i32 - 1).clamp(0, w - 1);
-                        sum += f32::from(pixel_at(image, sx, sy)[c]) * w_x * w_y;
+                        #[allow(clippy::cast_sign_loss)]
+                        let (sx, sy) = (sx as u32, sy as u32);
+                        // SAFETY: `(sx, sy)` is clamped to image bounds.
+                        let px = unsafe { image.pixel_unchecked(sx, sy) };
+                        sum += f32::from(px[c]) * w_x * w_y;
                     }
                 }
                 *out_chan = sum.round().clamp(0.0, 255.0) as u8;
@@ -866,20 +825,6 @@ fn cubic_weight(t: f32) -> f32 {
     }
 }
 
-/// Returns the RGBA value of the pixel at `(x, y)`.
-///
-/// Coordinates must already be clamped to valid image bounds.
-fn pixel_at(image: &DecodedImage, x: i32, y: i32) -> [u8; 4] {
-    let w = image.width as usize;
-    let idx = (y as usize * w + x as usize) * 4;
-    [
-        image.rgba[idx],
-        image.rgba[idx + 1],
-        image.rgba[idx + 2],
-        image.rgba[idx + 3],
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -890,14 +835,15 @@ mod tests {
 
     #[test]
     fn rotate_any_zero_is_identity() {
-        let image = DecodedImage {
-            width: 3,
-            height: 2,
-            rgba: vec![
+        let image = DecodedImage::new(
+            3,
+            2,
+            vec![
                 10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
                 180, 255,
             ],
-        };
+        )
+        .expect("valid image");
         let out = RotateAny {
             angle_tenths: 0,
             interpolation: RotationInterpolation::Bilinear,
@@ -905,18 +851,19 @@ mod tests {
         }
         .apply(&image)
         .expect("rotate any should always succeed");
-        assert_eq!(out.rgba, image.rgba);
+        assert_eq!(out.rgba(), image.rgba());
     }
 
     #[test]
     fn rotate_any_90_matches_rotate_left() {
-        let image = DecodedImage {
-            width: 3,
-            height: 2,
-            rgba: vec![
+        let image = DecodedImage::new(
+            3,
+            2,
+            vec![
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
-        };
+        )
+        .expect("valid image");
         let expected = RotateLeft.apply(&image).expect("rotate left should always succeed");
         let got = RotateAny {
             angle_tenths: 900,
@@ -925,18 +872,19 @@ mod tests {
         }
         .apply(&image)
         .expect("rotate any should always succeed");
-        assert_eq!(got.rgba, expected.rgba);
+        assert_eq!(got.rgba(), expected.rgba());
     }
 
     #[test]
     fn resize_identity_preserves_image() {
-        let image = DecodedImage {
-            width: 3,
-            height: 2,
-            rgba: vec![
+        let image = DecodedImage::new(
+            3,
+            2,
+            vec![
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
-        };
+        )
+        .expect("valid image");
         let out = Resize {
             width: 3,
             height: 2,
@@ -944,18 +892,19 @@ mod tests {
         }
         .apply(&image)
         .expect("resize should always succeed");
-        assert_eq!(out.rgba, image.rgba);
+        assert_eq!(out.rgba(), image.rgba());
     }
 
     #[test]
     fn skew_zero_is_identity() {
-        let image = DecodedImage {
-            width: 3,
-            height: 2,
-            rgba: vec![
+        let image = DecodedImage::new(
+            3,
+            2,
+            vec![
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
-        };
+        )
+        .expect("valid image");
         let out = Skew {
             x_milli: 0,
             y_milli: 0,
@@ -964,18 +913,19 @@ mod tests {
         }
         .apply(&image)
         .expect("skew should always succeed");
-        assert_eq!(out.rgba, image.rgba);
+        assert_eq!(out.rgba(), image.rgba());
     }
 
     #[test]
     fn translate_zero_is_identity() {
-        let image = DecodedImage {
-            width: 3,
-            height: 2,
-            rgba: vec![
+        let image = DecodedImage::new(
+            3,
+            2,
+            vec![
                 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255,
             ],
-        };
+        )
+        .expect("valid image");
         let out = Translate {
             dx: 0,
             dy: 0,
@@ -984,16 +934,17 @@ mod tests {
         }
         .apply(&image)
         .expect("translate should always succeed");
-        assert_eq!(out.rgba, image.rgba);
+        assert_eq!(out.rgba(), image.rgba());
     }
 
     #[test]
     fn crop_full_image_is_identity() {
-        let image = DecodedImage {
-            width: 2,
-            height: 2,
-            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
-        };
+        let image = DecodedImage::new(
+            2,
+            2,
+            vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        )
+        .expect("valid image");
         let out = Crop {
             x: 0,
             y: 0,
@@ -1002,7 +953,7 @@ mod tests {
         }
         .apply(&image)
         .expect("crop should always succeed");
-        assert_eq!(out.rgba, image.rgba);
+        assert_eq!(out.rgba(), image.rgba());
     }
 
     #[test]
@@ -1062,14 +1013,15 @@ mod tests {
 
     #[test]
     fn apply_then_inverse_is_identity_for_invertible_ops() {
-        let image = DecodedImage {
-            width: 3,
-            height: 2,
-            rgba: vec![
+        let image = DecodedImage::new(
+            3,
+            2,
+            vec![
                 10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
                 180, 255,
             ],
-        };
+        )
+        .expect("valid image");
 
         let ops: Vec<ImageTransform> = vec![
             RotateLeft.into(),
@@ -1082,7 +1034,7 @@ mod tests {
             let inv = op.inverse().expect("reversible transform should have inverse");
             let transformed = op.apply(&image).expect("apply should succeed");
             let restored = inv.apply(&transformed).expect("inverse apply should succeed");
-            assert_eq!(restored.rgba, image.rgba);
+            assert_eq!(restored.rgba(), image.rgba());
         }
     }
 

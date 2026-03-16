@@ -131,11 +131,12 @@ mod tests {
     };
 
     fn test_image() -> DecodedImage {
-        DecodedImage {
-            width: 2,
-            height: 2,
-            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
-        }
+        DecodedImage::new(
+            2,
+            2,
+            vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        )
+        .expect("valid test image")
     }
 
     #[test]
@@ -177,7 +178,7 @@ mod tests {
 
         assert!(pipeline.checkpoints.len() <= MAX_CHECKPOINTS);
         let result = pipeline.apply(&img).expect("pipeline apply should succeed");
-        assert_eq!(result.rgba, cur.rgba);
+        assert_eq!(result.rgba(), cur.rgba());
     }
 
     #[test]

@@ -51,7 +51,7 @@ const fn compression_name(compression: Compression) -> &'static str {
 }
 
 fn write_decode_stats(out: &mut String, decoded: &DecodedImage, encoded_pixel_bytes: usize) {
-    let decoded_bytes = decoded.rgba.len() as u64;
+    let decoded_bytes = decoded.rgba().len() as u64;
     let _ = writeln!(out, "Decoded RGBA buffer: {}", format_bytes(decoded_bytes));
     let _ = writeln!(out, "Decoded bytes per pixel: 4");
 
@@ -131,8 +131,8 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
             write_common_section(
                 &mut out,
                 "INFO (BITMAPINFOHEADER)",
-                decoded.width,
-                decoded.height,
+                decoded.width(),
+                decoded.height(),
                 orientation_from_height(h.height),
                 h.bit_count.bit_count(),
                 &compression_line,
@@ -157,8 +157,8 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
             write_common_section(
                 &mut out,
                 "V4 (BITMAPV4HEADER)",
-                decoded.width,
-                decoded.height,
+                decoded.width(),
+                decoded.height(),
                 orientation_from_height(h.height),
                 h.bit_count.bit_count(),
                 &compression_line,
@@ -182,8 +182,8 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
             write_common_section(
                 &mut out,
                 "V5 (BITMAPV5HEADER)",
-                decoded.width,
-                decoded.height,
+                decoded.width(),
+                decoded.height(),
                 orientation_from_height(h.height),
                 h.bit_count.bit_count(),
                 &compression_line,
@@ -262,11 +262,7 @@ mod tests {
 
     #[test]
     fn decode_stats_report_memory_and_ratio() {
-        let decoded = DecodedImage {
-            width: 2,
-            height: 1,
-            rgba: vec![0; 8],
-        };
+        let decoded = DecodedImage::new(2, 1, vec![0; 8]).expect("valid decoded image");
         let mut out = String::new();
         write_decode_stats(&mut out, &decoded, 4);
 

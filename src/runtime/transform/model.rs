@@ -2,7 +2,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::runtime::decode::DecodedImage;
+use crate::runtime::decode::{DecodedImage, DecodedImageError};
 
 use super::{
     color::{Brightness, Contrast, Grayscale, InvertColors, Sepia},
@@ -15,6 +15,9 @@ use super::{
 pub enum TransformError {
     #[error("steganography error: {0}")]
     Steganography(#[from] steganography::StegError),
+
+    #[error("invalid decoded image: {0}")]
+    InvalidImage(#[from] DecodedImageError),
 }
 
 pub trait TransformOp: fmt::Display + fmt::Debug + Send + Sync {

@@ -228,12 +228,11 @@ impl TransformOp for ConvolutionPreset {
     /// channel is preserved unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
         let kernel = self.filter.kernel();
-        let out = if let Some((col_vec, row_vec)) = kernel.separable() {
-            apply_convolution_separable(image, &kernel, &col_vec, &row_vec)
+        if let Some((col_vec, row_vec)) = kernel.separable() {
+            Ok(apply_convolution_separable(image, &kernel, &col_vec, &row_vec))
         } else {
-            apply_convolution_2d(image, &kernel)
-        };
-        Ok(out)
+            Ok(apply_convolution_2d(image, &kernel))
+        }
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -265,12 +264,11 @@ impl TransformOp for ConvolutionCustom {
     /// Edge pixels are handled using clamped border sampling, and the alpha
     /// channel is preserved unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let out = if let Some((col_vec, row_vec)) = self.kernel.separable() {
-            apply_convolution_separable(image, &self.kernel, &col_vec, &row_vec)
+        if let Some((col_vec, row_vec)) = self.kernel.separable() {
+            Ok(apply_convolution_separable(image, &self.kernel, &col_vec, &row_vec))
         } else {
-            apply_convolution_2d(image, &self.kernel)
-        };
-        Ok(out)
+            Ok(apply_convolution_2d(image, &self.kernel))
+        }
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -298,8 +296,9 @@ fn apply_convolution_separable(
     col_vec: &[i32],
     row_vec: &[i32],
 ) -> DecodedImage {
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
+    let rgba = image.rgba();
     let half = (kernel.size / 2) as isize;
 
     let row_channels = w * 3;
@@ -315,9 +314,9 @@ fn apply_convolution_separable(
                 let sx = (x as isize + k as isize - half).clamp(0, w as isize - 1) as usize;
                 let src = (y * w + sx) * 4;
 
-                sum_r += i32::from(image.rgba[src]) * weight;
-                sum_g += i32::from(image.rgba[src + 1]) * weight;
-                sum_b += i32::from(image.rgba[src + 2]) * weight;
+                sum_r += i32::from(rgba[src]) * weight;
+                sum_g += i32::from(rgba[src + 1]) * weight;
+                sum_b += i32::from(rgba[src + 2]) * weight;
             }
 
             let dst = x * 3;
@@ -349,15 +348,12 @@ fn apply_convolution_separable(
             row[dst] = (sum_r / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
             row[dst + 1] = (sum_g / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
             row[dst + 2] = (sum_b / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
-            row[dst + 3] = image.rgba[(y * w + x) * 4 + 3];
+            row[dst + 3] = rgba[(y * w + x) * 4 + 3];
         }
     });
 
-    DecodedImage {
-        width: image.width,
-        height: image.height,
-        rgba: out,
-    }
+    DecodedImage::new(image.width(), image.height(), out)
+        .expect("convolution preserves source dimensions and RGBA buffer length")
 }
 
 /// Applies a full 2-D convolution.
@@ -368,8 +364,9 @@ fn apply_convolution_separable(
 /// This implementation has complexity `O(n^2)` per pixel where `n` is the
 /// kernel size.
 fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
-    let w = image.width as usize;
-    let h = image.height as usize;
+    let w = image.width() as usize;
+    let h = image.height() as usize;
+    let rgba = image.rgba();
     let half = (kernel.size / 2) as isize;
     let row_bytes = w * 4;
     let mut out = vec![0u8; h * row_bytes];
@@ -387,9 +384,9 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
                     let src = (sy * w + sx) * 4;
                     let weight = kernel.weights[ky * kernel.size + kx];
 
-                    sum_r += i32::from(image.rgba[src]) * weight;
-                    sum_g += i32::from(image.rgba[src + 1]) * weight;
-                    sum_b += i32::from(image.rgba[src + 2]) * weight;
+                    sum_r += i32::from(rgba[src]) * weight;
+                    sum_g += i32::from(rgba[src + 1]) * weight;
+                    sum_b += i32::from(rgba[src + 2]) * weight;
                 }
             }
 
@@ -397,15 +394,12 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
             row[dst] = (sum_r / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
             row[dst + 1] = (sum_g / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
             row[dst + 2] = (sum_b / kernel.divisor + kernel.bias).clamp(0, 255) as u8;
-            row[dst + 3] = image.rgba[(y * w + x) * 4 + 3];
+            row[dst + 3] = rgba[(y * w + x) * 4 + 3];
         }
     });
 
-    DecodedImage {
-        width: image.width,
-        height: image.height,
-        rgba: out,
-    }
+    DecodedImage::new(image.width(), image.height(), out)
+        .expect("convolution preserves source dimensions and RGBA buffer length")
 }
 
 #[cfg(test)]
@@ -429,39 +423,41 @@ mod tests {
 
     #[test]
     fn convolution_identity_kernel_preserves_image() {
-        let image = DecodedImage {
-            width: 3,
-            height: 3,
-            rgba: vec![
+        let image = DecodedImage::new(
+            3,
+            3,
+            vec![
                 10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170,
                 180, 255, 190, 200, 210, 255, 220, 230, 240, 255, 250, 240, 230, 255,
             ],
-        };
+        )
+        .expect("valid test image");
         let kernel = Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0);
         let result = ConvolutionCustom { kernel }
             .apply(&image)
             .expect("custom convolution should always succeed");
-        assert_eq!(result.rgba, image.rgba);
+        assert_eq!(result.rgba(), image.rgba());
     }
 
     #[test]
     fn separable_and_2d_paths_produce_identical_results() {
-        let image = DecodedImage {
-            width: 5,
-            height: 5,
-            rgba: (0..25)
+        let image = DecodedImage::new(
+            5,
+            5,
+            (0..25)
                 .flat_map(|i| {
                     let v = (i * 10) as u8;
                     [v, v.wrapping_add(30), v.wrapping_add(60), 255]
                 })
                 .collect(),
-        };
+        )
+        .expect("valid test image");
         let kernel = ConvolutionFilter::Blur.kernel();
         let result_separable = ConvolutionCustom { kernel: kernel.clone() }
             .apply(&image)
             .expect("custom convolution should always succeed");
         let result_2d = apply_convolution_2d(&image, &kernel);
-        assert_eq!(result_separable.rgba, result_2d.rgba);
+        assert_eq!(result_separable.rgba(), result_2d.rgba());
     }
 
     #[test]

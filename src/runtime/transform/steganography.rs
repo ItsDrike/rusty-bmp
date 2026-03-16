@@ -63,14 +63,6 @@ pub enum StegError {
     #[error("all channels have 0 bits configured; nothing to embed")]
     NoChannels,
 
-    #[error("decoded image buffer mismatch for {width}x{height}: expected {expected} RGBA bytes, got {actual}")]
-    InvalidImageBuffer {
-        width: u32,
-        height: u32,
-        expected: usize,
-        actual: usize,
-    },
-
     #[error("arithmetic overflow while processing steganography data: {0}")]
     ArithmeticOverflow(&'static str),
 }
@@ -144,28 +136,6 @@ impl TransformOp for RemoveSteganography {
 
 /// Number of bits in the header, independent of config.
 const HEADER_BITS: u64 = 80;
-
-fn validated_total_pixels(image: &DecodedImage) -> Result<usize, StegError> {
-    let width = image.width as usize;
-    let height = image.height as usize;
-    let pixels = width
-        .checked_mul(height)
-        .ok_or(StegError::ArithmeticOverflow("pixel count"))?;
-    let expected = pixels
-        .checked_mul(4)
-        .ok_or(StegError::ArithmeticOverflow("expected RGBA length"))?;
-
-    if image.rgba.len() != expected {
-        return Err(StegError::InvalidImageBuffer {
-            width: image.width,
-            height: image.height,
-            expected,
-            actual: image.rgba.len(),
-        });
-    }
-
-    Ok(pixels)
-}
 
 impl StegConfig {
     /// Total bits contributed by this config per pixel.
@@ -415,8 +385,9 @@ fn write_header(
 ///
 /// Fails early: returns `None` as soon as the first byte of the magic is
 /// wrong ('S' = 0x53).
-fn try_read_header(rgba: &[u8], config: StegConfig) -> Option<StegInfo> {
-    let total_pixels = rgba.len() / 4;
+fn try_read_header(image: &DecodedImage, config: StegConfig) -> Option<StegInfo> {
+    let rgba = image.rgba();
+    let total_pixels = image.pixel_count();
     let mut cursor = BitCursor::new(config);
     let mut bits_consumed: u64 = 0;
 
@@ -491,15 +462,17 @@ fn try_read_header(rgba: &[u8], config: StegConfig) -> Option<StegInfo> {
 ///
 /// Returns a new `DecodedImage` with the payload hidden in the pixel LSBs.
 /// The original image is not modified.
+///
 /// # Errors
-/// Returns [`StegError`] if no channels are enabled, the image buffer is invalid,
-/// arithmetic overflows occur, or payload capacity is insufficient.
+/// Returns [`StegError`] if no channels are enabled, arithmetic overflows
+/// occur, or payload capacity is insufficient.
+#[allow(clippy::missing_panics_doc)]
 pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result<DecodedImage, StegError> {
     if config.bits_per_pixel() == 0 {
         return Err(StegError::NoChannels);
     }
 
-    let total_pixels = validated_total_pixels(image)?;
+    let total_pixels = image.pixel_count();
     let payload_len_u32 =
         u32::try_from(payload.len()).map_err(|_| StegError::ArithmeticOverflow("payload length cast"))?;
     let payload_bits = u64::from(payload_len_u32)
@@ -520,7 +493,7 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
         });
     }
 
-    let mut rgba = image.rgba.clone();
+    let mut rgba = image.rgba().to_vec();
     let mut cursor = BitCursor::new(config);
 
     // Write the 80-bit header.
@@ -541,11 +514,8 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
         }
     }
 
-    Ok(DecodedImage {
-        width: image.width,
-        height: image.height,
-        rgba,
-    })
+    Ok(DecodedImage::new(image.width(), image.height(), rgba)
+        .expect("embed preserves source dimensions and RGBA buffer length"))
 }
 
 /// Remove embedded steganography from `image` for the given `config`.
@@ -554,17 +524,18 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
 /// that header plus payload is zeroed. If no valid header is found, the image
 /// is returned unchanged.
 #[must_use]
+#[allow(clippy::missing_panics_doc)]
 pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
     if config.bits_per_pixel() == 0 {
         return image.clone();
     }
 
-    let Some(info) = try_read_header(&image.rgba, config) else {
+    let Some(info) = try_read_header(image, config) else {
         return image.clone();
     };
 
-    let mut rgba = image.rgba.clone();
-    let total_pixels = rgba.len() / 4;
+    let mut rgba = image.rgba().to_vec();
+    let total_pixels = image.pixel_count();
 
     let bits_to_clear = HEADER_BITS + u64::from(info.payload_len) * 8;
     let mut cursor = BitCursor::new(config);
@@ -577,11 +548,8 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
         cursor.advance();
     }
 
-    DecodedImage {
-        width: image.width,
-        height: image.height,
-        rgba,
-    }
+    DecodedImage::new(image.width(), image.height(), rgba)
+        .expect("remove preserves source dimensions and RGBA buffer length")
 }
 
 /// Extract the payload from `image` using the config described in `info`.
@@ -589,15 +557,15 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
 /// The caller should have obtained `info` from [`detect`] or the GUI.
 ///
 /// # Errors
-/// Returns [`StegError`] if channel config is invalid, image buffer is invalid,
-/// or payload/header bounds checks fail.
+/// Returns [`StegError`] if channel config is invalid or payload/header bounds
+/// checks fail.
 pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegError> {
     let config = info.config;
     if config.bits_per_pixel() == 0 {
         return Err(StegError::NoChannels);
     }
 
-    let total_pixels = validated_total_pixels(image)?;
+    let total_pixels = image.pixel_count();
     let total_bits = u64::try_from(total_pixels)
         .map_err(|_| StegError::ArithmeticOverflow("total pixel count cast"))?
         .checked_mul(u64::from(config.bits_per_pixel()))
@@ -623,7 +591,7 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
     let mut payload = Vec::with_capacity(info.payload_len as usize);
     for _ in 0..info.payload_len {
         #[allow(clippy::cast_possible_truncation)]
-        let byte = read_bits(&image.rgba, &mut cursor, 8, total_pixels).ok_or(StegError::PayloadTooLarge {
+        let byte = read_bits(image.rgba(), &mut cursor, 8, total_pixels).ok_or(StegError::PayloadTooLarge {
             payload_len: info.payload_len,
         })? as u8;
         payload.push(byte);
@@ -657,7 +625,7 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
                     if config.bits_per_pixel() == 0 {
                         continue;
                     }
-                    if let Some(info) = try_read_header(&image.rgba, config) {
+                    if let Some(info) = try_read_header(image, config) {
                         return Some(info);
                     }
                 }
@@ -683,7 +651,7 @@ mod tests {
                 rgba.push(((x * 13 + y * 37 + 191) % 256) as u8);
             }
         }
-        DecodedImage { width, height, rgba }
+        DecodedImage::new(width, height, rgba).expect("valid patterned image")
     }
 
     #[test]
@@ -747,10 +715,10 @@ mod tests {
             b_bits: 1,
             a_bits: 1,
         };
-        let original = image.rgba.clone();
+        let original = image.rgba().to_vec();
 
         let _embedded = embed(&image, config, b"abc").expect("embed should succeed");
-        assert_eq!(image.rgba, original);
+        assert_eq!(image.rgba(), original);
     }
 
     #[test]
@@ -774,7 +742,7 @@ mod tests {
 
         assert!(detect(&stripped).is_none());
 
-        let mut expected = embedded.rgba;
+        let mut expected = embedded.rgba().to_vec();
         let mut cursor = BitCursor::new(config);
         let bits_to_clear = 80_u64 + (payload.len() as u64) * 8;
         for _ in 0..bits_to_clear {
@@ -782,7 +750,7 @@ mod tests {
             cursor.advance();
         }
 
-        assert_eq!(stripped.rgba, expected);
+        assert_eq!(stripped.rgba(), expected);
     }
 
     #[test]
@@ -796,9 +764,8 @@ mod tests {
         };
 
         let stripped = remove(&image, config);
-        assert_eq!(stripped.rgba, image.rgba);
-        assert_eq!(stripped.width, image.width);
-        assert_eq!(stripped.height, image.height);
+        assert_eq!(stripped.rgba(), image.rgba());
+        assert_eq!(stripped.dimensions(), image.dimensions());
     }
 
     #[test]
@@ -869,45 +836,5 @@ mod tests {
 
         let err = extract(&image, &info).expect_err("payload must be rejected if it does not fit");
         assert!(matches!(err, StegError::PayloadTooLarge { .. }));
-    }
-
-    #[test]
-    fn embed_rejects_invalid_decoded_image_buffer() {
-        let image = DecodedImage {
-            width: 2,
-            height: 2,
-            rgba: vec![0; 12],
-        };
-        let config = StegConfig {
-            r_bits: 1,
-            g_bits: 1,
-            b_bits: 1,
-            a_bits: 0,
-        };
-
-        let err = embed(&image, config, b"x").expect_err("must reject mismatched RGBA buffer");
-        assert!(matches!(err, StegError::InvalidImageBuffer { .. }));
-    }
-
-    #[test]
-    fn extract_rejects_invalid_decoded_image_buffer() {
-        let image = DecodedImage {
-            width: 2,
-            height: 2,
-            rgba: vec![0; 12],
-        };
-        let info = StegInfo {
-            config: StegConfig {
-                r_bits: 1,
-                g_bits: 1,
-                b_bits: 1,
-                a_bits: 0,
-            },
-            version: 0,
-            payload_len: 0,
-        };
-
-        let err = extract(&image, &info).expect_err("must reject mismatched RGBA buffer");
-        assert!(matches!(err, StegError::InvalidImageBuffer { .. }));
     }
 }

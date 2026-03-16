@@ -7,8 +7,8 @@ use crate::BmpViewerApp;
 impl BmpViewerApp {
     pub(crate) fn open_resize_window(&mut self) {
         if let Some(img) = self.document.transformed_image.as_ref() {
-            self.transforms.resize.width_input = img.width.to_string();
-            self.transforms.resize.height_input = img.height.to_string();
+            self.transforms.resize.width_input = img.width().to_string();
+            self.transforms.resize.height_input = img.height().to_string();
             self.transforms.resize.open = true;
         } else {
             "Load an image first".clone_into(&mut self.status);
@@ -34,7 +34,7 @@ impl BmpViewerApp {
             .resizable(false)
             .default_width(320.0)
             .show(ctx, |ui| {
-                ui.label(format!("Current size: {}x{}", current.width, current.height));
+                ui.label(format!("Current size: {}x{}", current.width(), current.height()));
                 ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
@@ -51,7 +51,7 @@ impl BmpViewerApp {
                         && let Ok(w) = self.transforms.resize.width_input.trim().parse::<u32>()
                         && w > 0
                     {
-                        let ratio = current.height as f32 / current.width as f32;
+                        let ratio = current.height() as f32 / current.width() as f32;
                         let h = ((w as f32 * ratio).round().max(1.0)) as u32;
                         self.transforms.resize.height_input = h.to_string();
                     }
@@ -62,7 +62,7 @@ impl BmpViewerApp {
                         && let Ok(h) = self.transforms.resize.height_input.trim().parse::<u32>()
                         && h > 0
                     {
-                        let ratio = current.width as f32 / current.height as f32;
+                        let ratio = current.width() as f32 / current.height() as f32;
                         let w = ((h as f32 * ratio).round().max(1.0)) as u32;
                         self.transforms.resize.width_input = w.to_string();
                     }
@@ -75,7 +75,7 @@ impl BmpViewerApp {
                         && let Ok(w) = self.transforms.resize.width_input.trim().parse::<u32>()
                         && w > 0
                     {
-                        let ratio = current.height as f32 / current.width as f32;
+                        let ratio = current.height() as f32 / current.width() as f32;
                         let h = ((w as f32 * ratio).round().max(1.0)) as u32;
                         self.transforms.resize.height_input = h.to_string();
                     }
@@ -104,28 +104,28 @@ impl BmpViewerApp {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if ui.small_button("50%").clicked() {
-                        self.transforms.resize.width_input =
-                            ((current.width as f32 * 0.5).round().max(1.0) as u32).to_string();
-                        self.transforms.resize.height_input =
-                            ((current.height as f32 * 0.5).round().max(1.0) as u32).to_string();
+                        let half_width = ((current.width() as f32 * 0.5).round().max(1.0)) as u32;
+                        let half_height = ((current.height() as f32 * 0.5).round().max(1.0)) as u32;
+                        self.transforms.resize.width_input = half_width.to_string();
+                        self.transforms.resize.height_input = half_height.to_string();
                     }
                     if ui.small_button("200%").clicked() {
-                        self.transforms.resize.width_input =
-                            ((current.width as f32 * 2.0).round().max(1.0) as u32).to_string();
-                        self.transforms.resize.height_input =
-                            ((current.height as f32 * 2.0).round().max(1.0) as u32).to_string();
+                        let double_width = ((current.width() as f32 * 2.0).round().max(1.0)) as u32;
+                        let double_height = ((current.height() as f32 * 2.0).round().max(1.0)) as u32;
+                        self.transforms.resize.width_input = double_width.to_string();
+                        self.transforms.resize.height_input = double_height.to_string();
                     }
                     if ui.small_button("Reset").clicked() {
-                        self.transforms.resize.width_input = current.width.to_string();
-                        self.transforms.resize.height_input = current.height.to_string();
+                        self.transforms.resize.width_input = current.width().to_string();
+                        self.transforms.resize.height_input = current.height().to_string();
                     }
                 });
 
                 let validation = validate_resize_inputs(
                     &self.transforms.resize.width_input,
                     &self.transforms.resize.height_input,
-                    current.width,
-                    current.height,
+                    current.width(),
+                    current.height(),
                     self.transforms.resize.keep_aspect,
                 );
 
@@ -158,8 +158,8 @@ impl BmpViewerApp {
         let Ok((width, height)) = validate_resize_inputs(
             &self.transforms.resize.width_input,
             &self.transforms.resize.height_input,
-            current.width,
-            current.height,
+            current.width(),
+            current.height(),
             self.transforms.resize.keep_aspect,
         ) else {
             return None;

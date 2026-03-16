@@ -11,10 +11,10 @@ impl BmpViewerApp {
             return;
         };
 
-        self.transforms.crop.x = (image.width.saturating_sub(1)) / 2;
-        self.transforms.crop.y = (image.height.saturating_sub(1)) / 2;
-        self.transforms.crop.width = image.width.max(1);
-        self.transforms.crop.height = image.height.max(1);
+        self.transforms.crop.x = (image.width().saturating_sub(1)) / 2;
+        self.transforms.crop.y = (image.height().saturating_sub(1)) / 2;
+        self.transforms.crop.width = image.width().max(1);
+        self.transforms.crop.height = image.height().max(1);
         self.transforms.crop.drag_mode = None;
         self.transforms.crop.drag_start_image = None;
         self.transforms.crop.drag_start_rect = None;
@@ -30,8 +30,8 @@ impl BmpViewerApp {
             self.transforms.crop.open = false;
             return None;
         };
-        let img_w = image.width;
-        let img_h = image.height;
+        let img_w = image.width();
+        let img_h = image.height();
 
         let mut open = self.transforms.crop.open;
         let mut apply = false;
