@@ -5,15 +5,30 @@ use bmp::runtime::transform::{ConvolutionCustom, ImageTransform, Kernel};
 use crate::BmpViewerApp;
 
 impl BmpViewerApp {
-    /// Resizes the custom kernel weight grid to match `custom_kernel_size`.
+    /// Resizes the custom kernel grid while preserving centered overlap.
     ///
-    /// When growing, new cells default to "0". When shrinking, excess cells
-    /// are discarded. The weights are stored in row-major order.
-    pub(crate) fn resize_kernel_weights(&mut self) {
-        let n = self.transforms.kernel.size;
-        let needed = n * n;
-        self.transforms.kernel.weights.resize(needed, "0".to_owned());
-        self.transforms.kernel.weights.truncate(needed);
+    /// Existing values are copied from the old kernel's center-aligned region
+    /// into the new kernel's center-aligned region. Cells outside the overlap
+    /// are initialized to `"0"`.
+    pub(crate) fn resize_kernel_weights(&mut self, old_size: usize, new_size: usize) {
+        let old_weights = std::mem::take(&mut self.transforms.kernel.weights);
+        let mut new_weights = vec!["0".to_owned(); new_size * new_size];
+
+        let overlap = old_size.min(new_size);
+        let old_offset = (old_size - overlap) / 2;
+        let new_offset = (new_size - overlap) / 2;
+
+        for y in 0..overlap {
+            for x in 0..overlap {
+                let old_idx = (y + old_offset) * old_size + (x + old_offset);
+                let new_idx = (y + new_offset) * new_size + (x + new_offset);
+                if let Some(value) = old_weights.get(old_idx) {
+                    new_weights[new_idx].clone_from(value);
+                }
+            }
+        }
+
+        self.transforms.kernel.weights = new_weights;
     }
 
     /// Shows the custom kernel editor as a floating `egui::Window`.
@@ -50,7 +65,7 @@ impl BmpViewerApp {
                             }
                         });
                     if self.transforms.kernel.size != old_size {
-                        self.resize_kernel_weights();
+                        self.resize_kernel_weights(old_size, self.transforms.kernel.size);
                     }
                 });
 
