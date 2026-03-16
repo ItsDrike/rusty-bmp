@@ -361,9 +361,9 @@ impl TransformOp for Resize {
         let sy_scale = src_h as f32 / dst_h as f32;
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(dy, row)| {
-            let sy = (dy as f32 + 0.5) * sy_scale - 0.5;
+            let sy = ((dy as f32 + 0.5) * sy_scale - 0.5).clamp(0.0, src_h as f32 - 1.0);
             for dx in 0..dst_w {
-                let sx = (dx as f32 + 0.5) * sx_scale - 0.5;
+                let sx = ((dx as f32 + 0.5) * sx_scale - 0.5).clamp(0.0, src_w as f32 - 1.0);
                 let dst = dx as usize * 4;
                 let px = sample_rgba(image, sx, sy, self.interpolation);
                 row[dst..dst + 4].copy_from_slice(&px);
@@ -893,6 +893,34 @@ mod tests {
         .apply(&image)
         .expect("resize should always succeed");
         assert_eq!(out.rgba(), image.rgba());
+    }
+
+    #[test]
+    fn resize_upscale_keeps_opaque_edges() {
+        let image = DecodedImage::new(
+            2,
+            2,
+            vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        )
+        .expect("valid image");
+
+        for interpolation in [
+            RotationInterpolation::Nearest,
+            RotationInterpolation::Bilinear,
+            RotationInterpolation::Bicubic,
+        ] {
+            let out = Resize {
+                width: 3,
+                height: 3,
+                interpolation,
+            }
+            .apply(&image)
+            .expect("resize should always succeed");
+
+            for px in out.rgba().chunks_exact(4) {
+                assert_eq!(px[3], 255, "unexpected transparent pixel with {interpolation:?}");
+            }
+        }
     }
 
     #[test]
