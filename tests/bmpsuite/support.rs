@@ -7,7 +7,7 @@ use std::{
 
 use bmp::raw::Bmp;
 
-pub(crate) fn bmpsuite_root() -> PathBuf {
+pub fn bmpsuite_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("bmpsuite")
 }
 
@@ -29,26 +29,23 @@ fn ensure_suite_generated() -> bool {
             .arg("stamp")
             .status();
 
-        match status {
-            Ok(status) => status.success(),
-            Err(_) => false,
-        }
+        status.is_ok_and(|status| status.success())
     })
 }
 
-pub(crate) fn require_suite_generated() {
+pub fn require_suite_generated() {
     assert!(
         ensure_suite_generated(),
         "failed to generate bmpsuite fixtures; make sure 'make' and a C compiler are available"
     );
 }
 
-pub(crate) fn parse_bmp(path: &Path) -> Result<Bmp, bmp::raw::BmpError> {
+pub fn parse_bmp(path: &Path) -> Result<Bmp, bmp::raw::BmpError> {
     let mut file = File::open(path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
     Bmp::read_checked(&mut file)
 }
 
-pub(crate) fn to_rel_suite_path(path: &Path) -> String {
+pub fn to_rel_suite_path(path: &Path) -> String {
     let root = bmpsuite_root();
     path.strip_prefix(&root)
         .unwrap_or(path)

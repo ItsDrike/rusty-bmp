@@ -669,7 +669,7 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect, embed, extract, remove, write_bit, BitCursor, StegConfig, StegError, StegInfo};
+    use super::{BitCursor, StegConfig, StegError, StegInfo, detect, embed, extract, remove, write_bit};
     use crate::runtime::decode::DecodedImage;
 
     fn patterned_image(width: u32, height: u32) -> DecodedImage {

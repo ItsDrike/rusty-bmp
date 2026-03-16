@@ -102,7 +102,9 @@ impl BmpViewerApp {
             return None;
         }
 
+        #[allow(clippy::cast_possible_truncation)]
         let x_milli = (self.transforms.skew.x_percent * 10.0).round().clamp(-1000.0, 1000.0) as i16;
+        #[allow(clippy::cast_possible_truncation)]
         let y_milli = (self.transforms.skew.y_percent * 10.0).round().clamp(-1000.0, 1000.0) as i16;
         Some(
             Skew {

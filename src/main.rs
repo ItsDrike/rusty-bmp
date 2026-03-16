@@ -10,7 +10,7 @@
 use std::{
     collections::HashSet,
     fs::File,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, TryRecvError},
     time::Duration,
 };
@@ -18,8 +18,8 @@ use std::{
 use bmp::{
     raw::Bmp,
     runtime::{
-        decode::{decode_to_rgba, DecodedImage},
-        encode::{encode_rgba_to_bmp_ext, save_bmp_ext, SaveFormat, SaveHeaderVersion, SourceMetadata},
+        decode::{DecodedImage, decode_to_rgba},
+        encode::{SaveFormat, SaveHeaderVersion, SourceMetadata, encode_rgba_to_bmp_ext, save_bmp_ext},
         steganography::{self, StegInfo},
         transform::{ImageTransform, RotationInterpolation, TransformPipeline, TranslateMode},
     },
@@ -350,7 +350,6 @@ impl Default for BmpViewerApp {
 
 impl BmpViewerApp {
     fn validate_embed_fits_current_image(
-        &self,
         current: &DecodedImage,
         op: &ImageTransform,
     ) -> Result<(), steganography::StegError> {
@@ -402,8 +401,8 @@ impl BmpViewerApp {
         self.document.transformed_image = Some(image);
     }
 
-    pub(crate) fn load_path(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let mut file = match File::open(&path) {
+    pub(crate) fn load_path(&mut self, ctx: &egui::Context, path: &Path) {
+        let mut file = match File::open(path) {
             Ok(file) => file,
             Err(err) => {
                 self.status = format!("Failed to open {}: {err}", path.display());
@@ -446,7 +445,7 @@ impl BmpViewerApp {
         self.viewport.zoom = 0.0;
         self.viewport.pan_offset = egui::Vec2::ZERO;
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
-        self.document.loaded_path = Some(path.clone());
+        self.document.loaded_path = Some(path.to_path_buf());
         self.status = format!("Loaded {}", path.display());
     }
 
@@ -457,7 +456,7 @@ impl BmpViewerApp {
             .pick_file()
         {
             self.path_input = path.display().to_string();
-            self.load_path(ctx, path);
+            self.load_path(ctx, &path);
         }
     }
 
@@ -467,10 +466,9 @@ impl BmpViewerApp {
                 self.steganography.overwrite_warned = false;
             }
 
-            if let Err(err) = self.validate_embed_fits_current_image(current, &op) {
+            if let Err(err) = Self::validate_embed_fits_current_image(current, &op) {
                 self.status = format!(
-                    "Embedding aborted: payload no longer fits current image ({}). The steganography transform was not applied.",
-                    err
+                    "Embedding aborted: payload no longer fits current image ({err}). The steganography transform was not applied."
                 );
                 return;
             }
@@ -541,10 +539,9 @@ impl BmpViewerApp {
         if let Some(op) = self.document.redo_stack.pop()
             && let Some(current) = self.document.transformed_image.as_ref()
         {
-            if let Err(err) = self.validate_embed_fits_current_image(current, &op) {
+            if let Err(err) = Self::validate_embed_fits_current_image(current, &op) {
                 self.status = format!(
-                    "Redo skipped: steganography payload no longer fits after prior edits ({}). The embed step was dropped.",
-                    err
+                    "Redo skipped: steganography payload no longer fits after prior edits ({err}). The embed step was dropped."
                 );
                 return;
             }
@@ -552,7 +549,7 @@ impl BmpViewerApp {
             let next = match op.apply(current) {
                 Ok(next) => next,
                 Err(err) => {
-                    self.status = format!("Redo failed while applying {}: {err}", op);
+                    self.status = format!("Redo failed while applying {op}: {err}");
                     return;
                 }
             };
@@ -564,12 +561,11 @@ impl BmpViewerApp {
     /// Returns whether the currently selected save settings preserve the exact
     /// embedded steganography payload, determined by an in-memory roundtrip.
     fn save_preserves_current_steg_payload(&self) -> Result<bool, String> {
-        let (image, info) = match (
+        let (Some(image), Some(info)) = (
             self.document.transformed_image.as_ref(),
             self.steganography.detected.as_ref(),
-        ) {
-            (Some(img), Some(info)) => (img, info),
-            _ => return Ok(true),
+        ) else {
+            return Ok(true);
         };
 
         let original_payload = bmp::runtime::steganography::extract(image, info)
@@ -643,12 +639,12 @@ impl BmpViewerApp {
 
     pub(crate) fn save_to_path(&mut self, ctx: &egui::Context, path: &std::path::Path) {
         if self.pending_save.is_some() {
-            self.status = "A save operation is already in progress".to_owned();
+            "A save operation is already in progress".clone_into(&mut self.status);
             return;
         }
 
         if self.document.transformed_image.is_none() {
-            self.status = "Nothing to save".to_owned();
+            "Nothing to save".clone_into(&mut self.status);
             return;
         }
 
@@ -689,12 +685,12 @@ impl BmpViewerApp {
     /// steg-destroy dialog).
     pub(crate) fn do_save(&mut self, ctx: &egui::Context, path: &std::path::Path) {
         if self.pending_save.is_some() {
-            self.status = "A save operation is already in progress".to_owned();
+            "A save operation is already in progress".clone_into(&mut self.status);
             return;
         }
 
         let Some(image) = self.document.transformed_image.as_ref() else {
-            self.status = "Nothing to save".to_owned();
+            "Nothing to save".clone_into(&mut self.status);
             return;
         };
 
@@ -735,7 +731,7 @@ impl BmpViewerApp {
             }
             Err(TryRecvError::Disconnected) => {
                 self.pending_save = None;
-                self.status = "Save failed: worker disconnected".to_owned();
+                "Save failed: worker disconnected".clone_into(&mut self.status);
                 None
             }
         };
@@ -755,7 +751,7 @@ impl BmpViewerApp {
                 self.status = format!("Saved {} ({}, {})", done.path.display(), done.format, done.header);
                 // Re-load from disk so metadata, original_image, and pipeline
                 // all reflect the file as it was actually written.
-                self.load_path(ctx, done.path);
+                self.load_path(ctx, &done.path);
             }
             Err(err) => {
                 self.status = format!("Save failed: {err}");
@@ -765,7 +761,7 @@ impl BmpViewerApp {
 
     pub(crate) fn save_current(&mut self, ctx: &egui::Context) {
         if self.document.transformed_image.is_none() {
-            self.status = "Nothing to save".to_owned();
+            "Nothing to save".clone_into(&mut self.status);
             return;
         }
 
@@ -783,7 +779,7 @@ impl BmpViewerApp {
 
     pub(crate) fn save_overwrite(&mut self, ctx: &egui::Context) {
         let Some(path) = self.document.loaded_path.clone() else {
-            self.status = "No file to overwrite".to_owned();
+            "No file to overwrite".clone_into(&mut self.status);
             return;
         };
 
@@ -905,30 +901,83 @@ fn unique_rgb_colors_exceed(image: &DecodedImage, limit: usize) -> bool {
     false
 }
 
+/// Returns `true` if every pixel in the image lies exactly on the RGB555
+/// quantization grid.
+///
+/// The check simulates a roundtrip through 5-bit color precision:
+///
+/// 1. Each RGB channel is reduced from 8 bits to 5 bits using
+///    integer rounding.
+/// 2. The value is then expanded back to 8 bits.
+/// 3. If the reconstructed value matches the original channel value,
+///    that channel is representable exactly in RGB555.
+///
+/// If all pixels pass this test, encoding the image to RGB555 will not
+/// introduce any color quantization error.
+///
+/// This function is used as a fast pre-check for save formats that store
+/// colors in 5-bit channels (e.g. `RGB555`) so the application can warn
+/// the user when precision would be lost.
 fn all_pixels_exact_in_5bit_grid(image: &DecodedImage) -> bool {
     image.rgba.chunks_exact(4).all(|px| {
+        // Lossy convert color bits to 0..=32 range (5-bit)
         let r5 = (u16::from(px[0]) * 31 + 127) / 255;
         let g5 = (u16::from(px[1]) * 31 + 127) / 255;
         let b5 = (u16::from(px[2]) * 31 + 127) / 255;
 
+        // Get back an equivalent 0..=255 (8-bit) value from the reduced vals
+        // Safe: The casts in here never truncate, calculation guarantees u8 range
+        #[allow(clippy::cast_possible_truncation)]
         let r8 = ((r5 * 255 + 15) / 31) as u8;
+        #[allow(clippy::cast_possible_truncation)]
         let g8 = ((g5 * 255 + 15) / 31) as u8;
+        #[allow(clippy::cast_possible_truncation)]
         let b8 = ((b5 * 255 + 15) / 31) as u8;
 
+        // Check whether the original color values match the reduced range values
         px[0] == r8 && px[1] == g8 && px[2] == b8
     })
 }
 
+/// Returns `true` if every pixel in the image lies exactly on the RGB565
+/// quantization grid.
+///
+/// RGB565 stores colors using:
+///
+/// - 5 bits for red
+/// - 6 bits for green
+/// - 5 bits for blue
+///
+/// This function checks whether each channel would survive a
+/// quantization roundtrip without change:
+///
+/// 1. Convert the 8-bit channel to its reduced precision (5 or 6 bits)
+///    using integer rounding.
+/// 2. Expand the reduced value back to 8 bits.
+/// 3. Compare with the original channel value.
+///
+/// If all pixels pass, saving the image as RGB565 will not introduce
+/// color quantization artifacts.
+///
+/// Used by save-quality checks to warn the user when converting an
+/// image to RGB565 would reduce color precision.
 fn all_pixels_exact_in_565_grid(image: &DecodedImage) -> bool {
     image.rgba.chunks_exact(4).all(|px| {
+        // Lossy convert color bits to 0..=32 (5-bit) / 0..=128 (6-bit) range
         let r5 = (u16::from(px[0]) * 31 + 127) / 255;
         let g6 = (u16::from(px[1]) * 63 + 127) / 255;
         let b5 = (u16::from(px[2]) * 31 + 127) / 255;
 
+        // Get back an equivalent 0..=255 (8-bit) value from the reduced vals
+        // Safe: The casts in here never truncate, calculation guarantees u8 range
+        #[allow(clippy::cast_possible_truncation)]
         let r8 = ((r5 * 255 + 15) / 31) as u8;
+        #[allow(clippy::cast_possible_truncation)]
         let g8 = ((g6 * 255 + 31) / 63) as u8;
+        #[allow(clippy::cast_possible_truncation)]
         let b8 = ((b5 * 255 + 15) / 31) as u8;
 
+        // Check whether the original color values match the reduced range values
         px[0] == r8 && px[1] == g8 && px[2] == b8
     })
 }
@@ -978,7 +1027,7 @@ impl eframe::App for BmpViewerApp {
             && let Some(path) = &file.path
         {
             self.path_input = path.display().to_string();
-            self.load_path(ctx, path.clone());
+            self.load_path(ctx, path);
         }
 
         // --- Panels (order matters: top/side/bottom claim space before central) ---

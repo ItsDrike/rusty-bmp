@@ -88,7 +88,8 @@ impl BmpViewerApp {
             return None;
         }
 
-        let angle_tenths = (self.transforms.rotate.angle * 10.0).round().clamp(-36000.0, 36000.0) as i16;
+        #[allow(clippy::cast_possible_truncation)]
+        let angle_tenths = (self.transforms.rotate.angle * 10.0).round().clamp(-36000.0, 36000.0) as i32;
         Some(
             RotateAny {
                 angle_tenths,

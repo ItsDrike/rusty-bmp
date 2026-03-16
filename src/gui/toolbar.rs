@@ -28,7 +28,7 @@ impl BmpViewerApp {
                     if path.as_os_str().is_empty() {
                         "Please enter a path".clone_into(&mut self.status);
                     } else {
-                        self.load_path(ctx, path);
+                        self.load_path(ctx, &path);
                     }
                 }
             });

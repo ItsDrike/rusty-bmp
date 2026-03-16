@@ -625,7 +625,7 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{rgba_output_len, DecodeError, MAX_DECODED_RGBA_BYTES};
+    use super::{DecodeError, MAX_DECODED_RGBA_BYTES, rgba_output_len};
 
     #[test]
     fn rgba_output_len_rejects_multiplication_overflow() {

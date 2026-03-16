@@ -8,6 +8,7 @@ use bmp::runtime::transform::{
 use crate::BmpViewerApp;
 
 /// Deferred actions from the side panel that need `&mut self` after the closure returns.
+#[allow(clippy::struct_excessive_bools)]
 pub struct SidePanelActions {
     pub remove_transform: Option<usize>,
     pub do_undo: bool,

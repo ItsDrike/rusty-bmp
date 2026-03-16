@@ -209,14 +209,29 @@ impl TransformOp for RotateRight {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RotateAny {
-    pub angle_tenths: i16,
+    pub angle_tenths: i32,
     pub interpolation: RotationInterpolation,
     pub expand: bool,
 }
 
+impl RotateAny {
+    /// Returns the rotation angle in degrees.
+    ///
+    /// The internal representation stores the angle in tenths of a degree
+    /// (`angle_tenths`). This converts it to a floating-point degree value for
+    /// use in trigonometric calculations.
+    fn angle_degrees(self) -> f32 {
+        debug_assert!((-36000..=36000).contains(&self.angle_tenths));
+
+        // Safe: f32 has 24 bits of precision, which fits the expected range of angle_tenths
+        #[allow(clippy::cast_precision_loss)]
+        return self.angle_tenths as f32 / 10.0;
+    }
+}
+
 impl fmt::Display for RotateAny {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let angle = f32::from(self.angle_tenths) / 10.0;
+        let angle = self.angle_degrees();
         let mode = if self.expand { "Expand" } else { "Crop" };
         write!(f, "Rotate {angle:+.1} deg ({}, {mode})", self.interpolation)
     }
@@ -233,7 +248,8 @@ impl TransformOp for RotateAny {
     ///
     /// Pixels outside the source image are filled with transparent black.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let angle_degrees = f32::from(self.angle_tenths) / 10.0;
+        let angle_degrees = self.angle_degrees();
+
         let src_w = image.width as usize;
         let src_h = image.height as usize;
         if src_w == 0 || src_h == 0 {

@@ -19,11 +19,7 @@ impl BmpViewerApp {
                 // Scale that fits the entire image within the panel (aspect-ratio preserving).
                 let fit_scale = {
                     let s = (avail.x / tex_size.x).min(avail.y / tex_size.y);
-                    if s.is_finite() && s > 0.0 {
-                        s
-                    } else {
-                        1.0
-                    }
+                    if s.is_finite() && s > 0.0 { s } else { 1.0 }
                 };
 
                 // Resolve the effective zoom: 0.0 means "fit to panel".
@@ -544,10 +540,14 @@ fn dragged_crop_rect(
     img_h: u32,
 ) -> (u32, u32, u32, u32) {
     let (sx, sy, sw, sh) = start;
-    let mut x = sx as i32;
-    let mut y = sy as i32;
-    let mut w = sw as i32;
-    let mut h = sh as i32;
+    let img_w = i64::from(img_w);
+    let img_h = i64::from(img_h);
+    let mut x = i64::from(sx);
+    let mut y = i64::from(sy);
+    let mut w = i64::from(sw);
+    let mut h = i64::from(sh);
+    let dx = i64::from(dx);
+    let dy = i64::from(dy);
 
     match mode {
         CropDragMode::Move => {
@@ -595,28 +595,30 @@ fn dragged_crop_rect(
     h = h.max(1);
 
     // Clamp position/size into image bounds.
-    x = x.clamp(0, img_w as i32 - 1);
-    y = y.clamp(0, img_h as i32 - 1);
-    w = w.min(img_w as i32);
-    h = h.min(img_h as i32);
-    if x + w > img_w as i32 {
+    x = x.clamp(0, img_w - 1);
+    y = y.clamp(0, img_h - 1);
+    w = w.min(img_w);
+    h = h.min(img_h);
+
+    if x + w > img_w {
         if matches!(
             mode,
             CropDragMode::Left | CropDragMode::TopLeft | CropDragMode::BottomLeft | CropDragMode::Move
         ) {
-            x = img_w as i32 - w;
+            x = img_w - w;
         } else {
-            w = img_w as i32 - x;
+            w = img_w - x;
         }
     }
-    if y + h > img_h as i32 {
+
+    if y + h > img_h {
         if matches!(
             mode,
             CropDragMode::Top | CropDragMode::TopLeft | CropDragMode::TopRight | CropDragMode::Move
         ) {
-            y = img_h as i32 - h;
+            y = img_h - h;
         } else {
-            h = img_h as i32 - y;
+            h = img_h - y;
         }
     }
 

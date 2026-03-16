@@ -22,6 +22,7 @@ struct DibExpectation {
     info_masks: Option<[u32; 3]>,
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn assert_dib_expectation(rel_path: &str, expected: DibExpectation) {
     let path = bmpsuite_root().join(rel_path);
     let parsed = parse_bmp(&path).unwrap_or_else(|err| panic!("expected successful parse for {rel_path}: {err}"));
