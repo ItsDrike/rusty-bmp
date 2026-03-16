@@ -2,6 +2,7 @@ use eframe::egui;
 
 use bmp::runtime::transform::{ImageTransform, Resize, RotationInterpolation};
 
+use super::utils::{scaled_dim, scaled_dim_by_factor};
 use crate::BmpViewerApp;
 
 impl BmpViewerApp {
@@ -51,8 +52,7 @@ impl BmpViewerApp {
                         && let Ok(w) = self.transforms.resize.width_input.trim().parse::<u32>()
                         && w > 0
                     {
-                        let ratio = current.height() as f32 / current.width() as f32;
-                        let h = ((w as f32 * ratio).round().max(1.0)) as u32;
+                        let h = scaled_dim(w, current.height(), current.width());
                         self.transforms.resize.height_input = h.to_string();
                     }
 
@@ -62,8 +62,7 @@ impl BmpViewerApp {
                         && let Ok(h) = self.transforms.resize.height_input.trim().parse::<u32>()
                         && h > 0
                     {
-                        let ratio = current.width() as f32 / current.height() as f32;
-                        let w = ((h as f32 * ratio).round().max(1.0)) as u32;
+                        let w = scaled_dim(h, current.width(), current.height());
                         self.transforms.resize.width_input = w.to_string();
                     }
                 });
@@ -75,8 +74,7 @@ impl BmpViewerApp {
                         && let Ok(w) = self.transforms.resize.width_input.trim().parse::<u32>()
                         && w > 0
                     {
-                        let ratio = current.height() as f32 / current.width() as f32;
-                        let h = ((w as f32 * ratio).round().max(1.0)) as u32;
+                        let h = scaled_dim(w, current.height(), current.width());
                         self.transforms.resize.height_input = h.to_string();
                     }
                     ui.label("Interpolation:");
@@ -104,14 +102,14 @@ impl BmpViewerApp {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if ui.small_button("50%").clicked() {
-                        let half_width = ((current.width() as f32 * 0.5).round().max(1.0)) as u32;
-                        let half_height = ((current.height() as f32 * 0.5).round().max(1.0)) as u32;
+                        let half_width = scaled_dim_by_factor(current.width(), 0.5);
+                        let half_height = scaled_dim_by_factor(current.height(), 0.5);
                         self.transforms.resize.width_input = half_width.to_string();
                         self.transforms.resize.height_input = half_height.to_string();
                     }
                     if ui.small_button("200%").clicked() {
-                        let double_width = ((current.width() as f32 * 2.0).round().max(1.0)) as u32;
-                        let double_height = ((current.height() as f32 * 2.0).round().max(1.0)) as u32;
+                        let double_width = scaled_dim_by_factor(current.width(), 2.0);
+                        let double_height = scaled_dim_by_factor(current.height(), 2.0);
                         self.transforms.resize.width_input = double_width.to_string();
                         self.transforms.resize.height_input = double_height.to_string();
                     }
@@ -191,9 +189,7 @@ fn validate_resize_inputs(
     }
 
     if keep_aspect && cur_w > 0 && cur_h > 0 {
-        let current_ratio = cur_h as f32 / cur_w as f32;
-        h = ((w as f32 * current_ratio).round().max(1.0)) as u32;
-        // Reflect auto-adjusted value by returning it.
+        h = scaled_dim(w, cur_h, cur_w);
     }
 
     // Safety cap against accidental gigantic allocations.

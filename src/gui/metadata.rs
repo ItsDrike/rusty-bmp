@@ -10,6 +10,27 @@ pub struct BmpInfoSections {
     pub decoded_stats: String,
 }
 
+/// Formats an integer with thousands grouping using commas.
+///
+/// The function inserts a comma every three digits counting from the
+/// least significant digit, producing a human-readable representation
+/// of large numbers.
+///
+/// This is used for display purposes in UI metadata (e.g. byte counts)
+/// where improved readability is desirable.
+///
+/// The implementation constructs the grouped string by iterating over
+/// the digits in reverse order and inserting separators every three
+/// characters, then reversing the result back to normal order.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(with_grouping(0), "0");
+/// assert_eq!(with_grouping(12), "12");
+/// assert_eq!(with_grouping(1_234), "1,234");
+/// assert_eq!(with_grouping(12_345_678), "12,345,678");
+/// ```
 fn with_grouping(value: u64) -> String {
     let s = value.to_string();
     let mut out = String::with_capacity(s.len() + (s.len() / 3));
@@ -22,20 +43,51 @@ fn with_grouping(value: u64) -> String {
     out.chars().rev().collect()
 }
 
+/// Formats a byte count into a human-readable string using binary units.
+///
+/// The output always includes the exact byte count with thousands grouping,
+/// followed by a scaled representation in binary units (`KiB`, `MiB`, `GiB`,
+/// `TiB`) when appropriate.
+///
+/// The scaled value is shown with two decimal places and computed entirely
+/// using integer arithmetic to avoid floating-point precision issues.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(format_bytes(999), "999 B");
+/// assert_eq!(format_bytes(1_024), "1,024 B (1.00 KiB)");
+/// assert_eq!(format_bytes(1_536), "1,536 B (1.50 KiB)");
+/// assert_eq!(format_bytes(5 * 1_048_576), "5,242,880 B (5.00 MiB)");
+/// ```
+///
+/// # Notes
+///
+/// * Binary units are used (`1 KiB = 1024 B`).
+/// * The fractional part is truncated to two decimal places rather than
+///   rounded, which keeps the implementation simple and fully integer-based.
 fn format_bytes(value: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut scaled = value as f64;
+
+    let mut scaled = value;
     let mut unit = 0usize;
-    while scaled >= 1024.0 && unit < (UNITS.len() - 1) {
-        scaled /= 1024.0;
+
+    while scaled >= 1024 && unit < UNITS.len() - 1 {
+        scaled /= 1024;
         unit += 1;
     }
 
     if unit == 0 {
-        format!("{} B", with_grouping(value))
-    } else {
-        format!("{} B ({scaled:.2} {})", with_grouping(value), UNITS[unit])
+        return format!("{} B", with_grouping(value));
     }
+
+    let divisor = 1024u64.pow(u32::try_from(unit).unwrap());
+    let whole = value / divisor;
+    let remainder = value % divisor;
+
+    let fraction = (remainder * 100) / divisor;
+
+    format!("{} B ({}.{:02} {})", with_grouping(value), whole, fraction, UNITS[unit])
 }
 
 const fn compression_name(compression: Compression) -> &'static str {
@@ -56,6 +108,10 @@ fn write_decode_stats(out: &mut String, decoded: &DecodedImage, encoded_pixel_by
     let _ = writeln!(out, "Decoded bytes per pixel: 4");
 
     if encoded_pixel_bytes > 0 {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "ratio is used only for human-readable diagnostics and printed with two decimal places"
+        )]
         let ratio = decoded_bytes as f64 / encoded_pixel_bytes as f64;
         let _ = writeln!(out, "Decode expansion ratio: {ratio:.2}x");
     }

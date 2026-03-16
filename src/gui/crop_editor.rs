@@ -2,6 +2,7 @@ use eframe::egui;
 
 use bmp::runtime::transform::{Crop, ImageTransform};
 
+use super::utils::scaled_dim;
 use crate::BmpViewerApp;
 
 impl BmpViewerApp {
@@ -82,27 +83,21 @@ impl BmpViewerApp {
                         && !height_resp.has_focus()
                         && img_w > 0
                     {
-                        let ratio = img_h as f32 / img_w as f32;
-                        self.transforms.crop.height =
-                            ((self.transforms.crop.width as f32 * ratio).round().max(1.0)) as u32;
+                        self.transforms.crop.height = scaled_dim(self.transforms.crop.width, img_h, img_w);
                     }
                     if self.transforms.crop.keep_aspect
                         && height_resp.changed()
                         && !width_resp.has_focus()
                         && img_h > 0
                     {
-                        let ratio = img_w as f32 / img_h as f32;
-                        self.transforms.crop.width =
-                            ((self.transforms.crop.height as f32 * ratio).round().max(1.0)) as u32;
+                        self.transforms.crop.width = scaled_dim(self.transforms.crop.height, img_w, img_h);
                     }
                 });
 
                 ui.horizontal(|ui| {
                     let keep_aspect_resp = ui.checkbox(&mut self.transforms.crop.keep_aspect, "Keep aspect ratio");
                     if self.transforms.crop.keep_aspect && keep_aspect_resp.changed() && img_w > 0 {
-                        let ratio = img_h as f32 / img_w as f32;
-                        self.transforms.crop.height =
-                            ((self.transforms.crop.width as f32 * ratio).round().max(1.0)) as u32;
+                        self.transforms.crop.height = scaled_dim(self.transforms.crop.width, img_h, img_w);
                     }
                 });
 

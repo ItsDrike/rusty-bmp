@@ -112,7 +112,9 @@ impl BmpViewerApp {
                     update_checker_tile_with_hysteresis(&mut self.viewport.checker_tile_img_px, effective_zoom);
                     self.ensure_checker_texture(ctx, self.viewport.checker_tile_img_px);
                     if let Some(checker) = self.viewport.checker_texture.as_ref() {
+                        #[allow(clippy::cast_precision_loss)]
                         let repeats_x = (tex_size.x / (self.viewport.checker_tile_img_px as f32 * 2.0)).max(1.0);
+                        #[allow(clippy::cast_precision_loss)]
                         let repeats_y = (tex_size.y / (self.viewport.checker_tile_img_px as f32 * 2.0)).max(1.0);
                         painter.image(
                             checker.id(),
@@ -139,10 +141,12 @@ impl BmpViewerApp {
                     {
                         let (cx, cy, cw, ch) = self.crop_rect_for_image(image_width, image_height);
 
+                        #[allow(clippy::cast_precision_loss)]
                         let crop_min = egui::pos2(
                             img_rect.min.x + cx as f32 * effective_zoom,
                             img_rect.min.y + cy as f32 * effective_zoom,
                         );
+                        #[allow(clippy::cast_precision_loss)]
                         let crop_size = egui::vec2(cw as f32 * effective_zoom, ch as f32 * effective_zoom);
                         let crop_rect = egui::Rect::from_min_size(crop_min, crop_size);
 
@@ -268,7 +272,9 @@ impl BmpViewerApp {
                         {
                             crop_drag_captured = true;
                             let cur = screen_to_image(pointer, img_rect, effective_zoom);
+                            #[allow(clippy::cast_possible_truncation)]
                             let dx = (cur.x - start_pos.x).round() as i32;
+                            #[allow(clippy::cast_possible_truncation)]
                             let dy = (cur.y - start_pos.y).round() as i32;
                             let (nx, ny, nw, nh) =
                                 dragged_crop_rect(mode, start_rect, dx, dy, image_width, image_height);
@@ -302,7 +308,9 @@ impl BmpViewerApp {
                 {
                     // Map screen position to image pixel coordinates.
                     let rel = pointer - img_rect.min;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let px = (rel.x / effective_zoom) as u32;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let py = (rel.y / effective_zoom) as u32;
 
                     if let Some(image) = &self.document.transformed_image
@@ -311,7 +319,9 @@ impl BmpViewerApp {
                         self.viewport.hovered_pixel = Some((px, py, rgba));
 
                         // Draw highlight outline around the hovered pixel.
+                        #[allow(clippy::cast_precision_loss)]
                         let pixel_screen_x = img_rect.min.x + px as f32 * effective_zoom;
+                        #[allow(clippy::cast_precision_loss)]
                         let pixel_screen_y = img_rect.min.y + py as f32 * effective_zoom;
                         let pixel_rect = egui::Rect::from_min_size(
                             egui::pos2(pixel_screen_x, pixel_screen_y),
@@ -423,10 +433,12 @@ fn update_checker_tile_with_hysteresis(tile: &mut u32, zoom: f32) {
         *tile = 8;
     }
 
+    #[allow(clippy::cast_precision_loss)]
     while (*tile as f32 * zoom) < MIN_SCREEN_TILE && *tile < MAX_IMG_TILE {
         *tile = (*tile * 2).min(MAX_IMG_TILE);
     }
 
+    #[allow(clippy::cast_precision_loss)]
     while (*tile as f32 * zoom) > MAX_SCREEN_TILE && *tile > MIN_IMG_TILE {
         *tile = (*tile / 2).max(MIN_IMG_TILE);
     }
@@ -615,5 +627,6 @@ fn dragged_crop_rect(
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     (x as u32, y as u32, w as u32, h as u32)
 }

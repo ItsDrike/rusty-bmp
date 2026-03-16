@@ -10,5 +10,6 @@ mod steg_embed_window;
 mod steg_inspect_window;
 mod toolbar;
 mod translate_editor;
+mod utils;
 mod viewer;
 mod zoom_bar;
