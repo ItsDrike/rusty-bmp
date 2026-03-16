@@ -104,7 +104,7 @@ impl BmpViewerApp {
 
                 // Position the image centered in the panel, offset by pan.
                 let img_center = panel_rect.center() + self.viewport.pan_offset;
-                let img_rect = egui::Rect::from_center_size(img_center, display_size);
+                let img_rect = snap_rect_to_pixel_grid(egui::Rect::from_center_size(img_center, display_size), ctx);
 
                 // Clip to the panel and paint.
                 let painter = ui.painter_at(panel_rect);
@@ -446,6 +446,15 @@ fn update_checker_tile_with_hysteresis(tile: &mut u32, zoom: f32) {
     while (*tile as f32 * zoom) > MAX_SCREEN_TILE && *tile > MIN_IMG_TILE {
         *tile = (*tile / 2).max(MIN_IMG_TILE);
     }
+}
+
+fn snap_rect_to_pixel_grid(rect: egui::Rect, ctx: &egui::Context) -> egui::Rect {
+    let pixel = 1.0 / ctx.pixels_per_point();
+    let snap = |v: f32| (v / pixel).round() * pixel;
+    egui::Rect::from_min_max(
+        egui::pos2(snap(rect.min.x), snap(rect.min.y)),
+        egui::pos2(snap(rect.max.x), snap(rect.max.y)),
+    )
 }
 
 fn screen_to_image(pointer: egui::Pos2, img_rect: egui::Rect, zoom: f32) -> egui::Pos2 {
