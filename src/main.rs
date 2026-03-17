@@ -992,12 +992,14 @@ impl eframe::App for BmpViewerApp {
             let cmd = i.modifiers.command; // Ctrl on Linux/Windows, Cmd on macOS
             let shift = i.modifiers.shift;
             (
-                cmd && i.key_pressed(egui::Key::O),           // Open
-                cmd && !shift && i.key_pressed(egui::Key::S), // Save
-                cmd && shift && i.key_pressed(egui::Key::S),  // Save As
-                cmd && !shift && i.key_pressed(egui::Key::Z), // Undo
-                cmd && (shift && i.key_pressed(egui::Key::Z)  // Redo (Ctrl+Shift+Z)
-                    || i.key_pressed(egui::Key::Y)), // Redo (Ctrl+Y)
+                cmd && i.key_pressed(egui::Key::O),                              // Open
+                cmd && !shift && i.key_pressed(egui::Key::S),                    // Save
+                cmd && shift && i.key_pressed(egui::Key::S),                     // Save As
+                !text_has_focus && cmd && !shift && i.key_pressed(egui::Key::Z), // Undo
+                !text_has_focus
+                    && cmd
+                    && (shift && i.key_pressed(egui::Key::Z) // Redo (Ctrl+Shift+Z)
+                        || i.key_pressed(egui::Key::Y)), // Redo (Ctrl+Y)
             )
         });
         let (kb_open, kb_save, kb_save_as, kb_undo, kb_redo) = kb;
