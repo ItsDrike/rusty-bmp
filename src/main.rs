@@ -201,9 +201,9 @@ pub(crate) struct SteganographyUiState {
     pub(crate) embed_open: bool,
     /// Whether the "Inspect Steganography" window is open.
     pub(crate) inspect_open: bool,
-    /// Whether we already warned the user this frame that a transform was
-    /// applied on top of an embedded steg payload.
-    /// Reset to `false` whenever the pipeline's top-most op is no longer steg.
+    /// Whether we already warned the user that a transform was
+    /// applied while steganography was detected in the image.
+    /// Reset when loading a new image and in undo/embed paths.
     pub(crate) overwrite_warned: bool,
     /// Path awaiting save confirmation because saving may alter image data.
     pub(crate) save_confirm_pending: Option<std::path::PathBuf>,
@@ -490,10 +490,7 @@ impl BmpViewerApp {
         let should_confirm_overwrite = !self.steganography.overwrite_warned
             && !matches!(op, ImageTransform::EmbedSteganography(_))
             && !matches!(op, ImageTransform::RemoveSteganography(_))
-            && matches!(
-                self.document.pipeline.ops().last(),
-                Some(last) if matches!(last, ImageTransform::EmbedSteganography(_))
-            );
+            && self.steganography.detected.is_some();
 
         if should_confirm_overwrite {
             self.steganography.transform_confirm_pending = Some(op);
