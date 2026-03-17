@@ -193,12 +193,17 @@ pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
 
     // Repeatedly split the largest bucket until we have enough.
     while buckets.len() < max_colors {
-        // Find the largest bucket that can still be split.
+        // Find the largest bucket that also has the most color-distinctiveness
+        // and can still be split.
         let split_idx = buckets
             .iter()
             .enumerate()
             .filter(|(_, b)| !b.terminal && b.pixel_indices.len() >= 2)
-            .max_by_key(|(_, b)| b.pixel_indices.len())
+            .max_by_key(|(_, b)| {
+                let (r_range, g_range, b_range) = b.channel_ranges(rgba);
+                let volume = usize::from(r_range) * usize::from(g_range) * usize::from(b_range);
+                volume * b.pixel_indices.len()
+            })
             .map(|(idx, _)| idx);
 
         let Some(split_idx) = split_idx else {
