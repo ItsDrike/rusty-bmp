@@ -271,15 +271,19 @@ impl BmpViewerApp {
                                 ui.horizontal(|ui| {
                                     ui.monospace(format!("{}.", i + 1));
                                     ui.label(op.to_string());
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui
-                                            .small_button("\u{00d7}")
-                                            .on_hover_text("Remove this transform")
-                                            .clicked()
-                                        {
-                                            remove_transform = Some(i);
-                                        }
-                                    });
+                                    let right_padding = 18.0;
+                                    let button_width = 18.0;
+                                    let spacer = (ui.available_width() - button_width - right_padding).max(0.0);
+                                    if spacer > 0.0 {
+                                        ui.add_space(spacer);
+                                    }
+                                    if ui
+                                        .add_sized([button_width, 18.0], egui::Button::new("\u{00d7}").small())
+                                        .on_hover_text("Remove this transform")
+                                        .clicked()
+                                    {
+                                        remove_transform = Some(i);
+                                    }
                                 });
                             }
                         }
