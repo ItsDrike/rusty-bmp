@@ -189,7 +189,7 @@ impl ConvolutionFilter {
             Self::Blur => Kernel::new(vec![1, 2, 1, 2, 4, 2, 1, 2, 1], 3, 16, 0),
             Self::Sharpen => Kernel::new(vec![0, -1, 0, -1, 5, -1, 0, -1, 0], 3, 1, 0),
             Self::EdgeDetect => Kernel::new(vec![-1, -1, -1, -1, 8, -1, -1, -1, -1], 3, 1, 0),
-            Self::Emboss => Kernel::new(vec![-2, -1, 0, -1, 1, 1, 0, 1, 2], 3, 1, 128),
+            Self::Emboss => Kernel::new(vec![-2, -1, 0, -1, 0, 1, 0, 1, 2], 3, 1, 128),
         }
     }
 }
