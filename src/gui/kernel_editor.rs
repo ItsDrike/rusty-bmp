@@ -4,6 +4,15 @@ use bmp::runtime::transform::{ConvolutionCustom, ImageTransform, Kernel};
 
 use crate::BmpViewerApp;
 
+#[derive(Clone, Copy)]
+enum KernelPresetKind {
+    Blur,
+    Sharpen,
+    Edge,
+    Emboss,
+    Identity,
+}
+
 impl BmpViewerApp {
     /// Resizes the custom kernel grid while preserving centered overlap.
     ///
@@ -123,19 +132,19 @@ impl BmpViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("Load preset:");
                     if ui.small_button("Blur").clicked() {
-                        self.load_kernel_preset(&[1, 2, 1, 2, 4, 2, 1, 2, 1], 3, 16, 0);
+                        self.load_kernel_preset(KernelPresetKind::Blur);
                     }
                     if ui.small_button("Sharpen").clicked() {
-                        self.load_kernel_preset(&[0, -1, 0, -1, 5, -1, 0, -1, 0], 3, 1, 0);
+                        self.load_kernel_preset(KernelPresetKind::Sharpen);
                     }
                     if ui.small_button("Edge").clicked() {
-                        self.load_kernel_preset(&[-1, -1, -1, -1, 8, -1, -1, -1, -1], 3, 1, 0);
+                        self.load_kernel_preset(KernelPresetKind::Edge);
                     }
                     if ui.small_button("Emboss").clicked() {
-                        self.load_kernel_preset(&[-2, -1, 0, -1, 1, 1, 0, 1, 2], 3, 1, 128);
+                        self.load_kernel_preset(KernelPresetKind::Emboss);
                     }
                     if ui.small_button("Identity").clicked() {
-                        self.load_kernel_preset(&[0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0);
+                        self.load_kernel_preset(KernelPresetKind::Identity);
                     }
                 });
 
@@ -230,9 +239,76 @@ impl BmpViewerApp {
         Ok(Kernel::new(weights, n, divisor, bias))
     }
 
-    /// Loads a preset kernel into the editor fields.
-    fn load_kernel_preset(&mut self, weights: &[i32], size: usize, divisor: i32, bias: i32) {
-        self.transforms.kernel.size = size;
+    fn gaussian_row(size: usize) -> Vec<i32> {
+        #[expect(clippy::match_same_arms)]
+        match size {
+            1 => vec![1],
+            3 => vec![1, 2, 1],
+            5 => vec![1, 4, 6, 4, 1],
+            7 => vec![1, 6, 15, 20, 15, 6, 1],
+            _ => vec![1],
+        }
+    }
+
+    fn blur_kernel_for_size(size: usize) -> (Vec<i32>, i32) {
+        let row = Self::gaussian_row(size);
+        let row_sum: i32 = row.iter().sum();
+        let mut weights = Vec::with_capacity(size * size);
+        for y in 0..size {
+            for x in 0..size {
+                weights.push(row[y] * row[x]);
+            }
+        }
+        (weights, row_sum * row_sum)
+    }
+
+    /// Loads a preset kernel into the editor fields for the current kernel size.
+    fn load_kernel_preset(&mut self, preset: KernelPresetKind) {
+        let target_size = self.transforms.kernel.size;
+        let center = target_size * target_size / 2;
+
+        let (weights, divisor, bias) = match preset {
+            KernelPresetKind::Blur => {
+                let (weights, divisor) = Self::blur_kernel_for_size(target_size);
+                (weights, divisor, 0)
+            }
+            KernelPresetKind::Sharpen => match target_size {
+                1 => (vec![1], 1, 0),
+                3 => (vec![0, -1, 0, -1, 5, -1, 0, -1, 0], 1, 0),
+                _ => {
+                    let (mut weights, divisor) = Self::blur_kernel_for_size(target_size);
+                    for w in &mut weights {
+                        *w = -*w;
+                    }
+                    weights[center] += 2 * divisor;
+                    (weights, divisor, 0)
+                }
+            },
+            KernelPresetKind::Edge => {
+                let mut weights = vec![-1; target_size * target_size];
+                let center_weight = i32::try_from(target_size * target_size - 1).unwrap_or(i32::MAX);
+                weights[center] = center_weight;
+                (weights, 1, 0)
+            }
+            KernelPresetKind::Emboss => {
+                let half = i32::try_from(target_size / 2).unwrap_or(0);
+                let mut weights = Vec::with_capacity(target_size * target_size);
+                for y in 0..target_size {
+                    for x in 0..target_size {
+                        let x = i32::try_from(x).unwrap_or(0);
+                        let y = i32::try_from(y).unwrap_or(0);
+                        weights.push((x - half) + (y - half));
+                    }
+                }
+                (weights, 1, 128)
+            }
+            KernelPresetKind::Identity => {
+                let mut weights = vec![0; target_size * target_size];
+                weights[center] = 1;
+                (weights, 1, 0)
+            }
+        };
+
         self.transforms.kernel.weights = weights.iter().map(std::string::ToString::to_string).collect();
         self.transforms.kernel.divisor = divisor.to_string();
         self.transforms.kernel.bias = bias.to_string();
