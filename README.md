@@ -64,7 +64,7 @@ Example:
 - Save using multiple BMP header versions: Core, Info, V4, and V5
 - Save as 1-bit, 4-bit, 8-bit, 16-bit, 24-bit, and 32-bit BMP variants
 - Save indexed and compressed outputs including `RLE4`, `RLE8`, and `BITFIELDS`
-- Median-cut quantization for paletted re-encoding
+- Wu quantization for paletted re-encoding
 - Save warnings for transparency loss, color precision loss, heavy quantization, and steganography breakage
 - Preservation of advanced V4/V5 metadata where applicable, including color-space related fields and ICC profile data
 
