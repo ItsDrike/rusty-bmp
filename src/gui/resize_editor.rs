@@ -163,14 +163,15 @@ impl BmpViewerApp {
             return None;
         };
 
-        Some(
-            Resize {
-                width,
-                height,
-                interpolation: self.transforms.resize.interpolation,
+        let resize = match Resize::try_new(width, height, self.transforms.resize.interpolation) {
+            Ok(resize) => resize,
+            Err(err) => {
+                self.status = format!("Invalid resize settings: {err}");
+                return None;
             }
-            .into(),
-        )
+        };
+
+        Some(resize.into())
     }
 }
 

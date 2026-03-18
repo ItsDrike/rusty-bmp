@@ -160,7 +160,15 @@ impl BmpViewerApp {
             img_h,
         );
 
-        Some(Crop { x, y, width, height }.into())
+        let crop = match Crop::try_new(x, y, width, height) {
+            Ok(crop) => crop,
+            Err(err) => {
+                self.status = format!("Invalid crop settings: {err}");
+                return None;
+            }
+        };
+
+        Some(crop.into())
     }
 
     fn clamp_crop_inputs(&mut self, img_w: u32, img_h: u32) {

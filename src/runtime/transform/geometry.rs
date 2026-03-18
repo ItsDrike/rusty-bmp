@@ -6,9 +6,10 @@
 //! Most operations support multiple interpolation methods and use
 //! Rayon for parallel processing across image rows.
 
-use std::fmt;
+use std::{fmt, num::NonZeroU32};
 
 use rayon::prelude::*;
+use thiserror::Error;
 
 use crate::runtime::decode::DecodedImage;
 
@@ -61,6 +62,34 @@ impl fmt::Display for RotationInterpolation {
             Self::Bicubic => write!(f, "Bicubic"),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum GeometryValidationError {
+    #[error("resize width must be at least 1 pixel")]
+    ResizeWidthZero,
+    #[error("resize height must be at least 1 pixel")]
+    ResizeHeightZero,
+    #[error("crop width must be at least 1 pixel")]
+    CropWidthZero,
+    #[error("crop height must be at least 1 pixel")]
+    CropHeightZero,
+    #[error("crop origin ({x}, {y}) is outside image bounds {image_width}x{image_height}")]
+    CropOriginOutOfBounds {
+        x: u32,
+        y: u32,
+        image_width: u32,
+        image_height: u32,
+    },
+    #[error("crop rectangle x={x}, y={y}, {width}x{height} exceeds image bounds {image_width}x{image_height}")]
+    CropOutOfBounds {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        image_width: u32,
+        image_height: u32,
+    },
 }
 
 /// Determines how image bounds are handled when translating (shifting)
@@ -327,14 +356,64 @@ impl TransformOp for RotateAny {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Resize {
-    pub width: u32,
-    pub height: u32,
-    pub interpolation: RotationInterpolation,
+    width: NonZeroU32,
+    height: NonZeroU32,
+    interpolation: RotationInterpolation,
+}
+
+impl Resize {
+    #[must_use]
+    pub const fn new(width: NonZeroU32, height: NonZeroU32, interpolation: RotationInterpolation) -> Self {
+        Self {
+            width,
+            height,
+            interpolation,
+        }
+    }
+
+    /// Creates a resize operation with validated non-zero dimensions.
+    ///
+    /// # Errors
+    /// Returns [`GeometryValidationError`] if either dimension is zero.
+    pub const fn try_new(
+        width: u32,
+        height: u32,
+        interpolation: RotationInterpolation,
+    ) -> Result<Self, GeometryValidationError> {
+        let Some(width) = NonZeroU32::new(width) else {
+            return Err(GeometryValidationError::ResizeWidthZero);
+        };
+        let Some(height) = NonZeroU32::new(height) else {
+            return Err(GeometryValidationError::ResizeHeightZero);
+        };
+        Ok(Self::new(width, height, interpolation))
+    }
+
+    #[must_use]
+    pub const fn width(self) -> u32 {
+        self.width.get()
+    }
+
+    #[must_use]
+    pub const fn height(self) -> u32 {
+        self.height.get()
+    }
+
+    #[must_use]
+    pub const fn interpolation(self) -> RotationInterpolation {
+        self.interpolation
+    }
 }
 
 impl fmt::Display for Resize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Resize to {}x{} ({})", self.width, self.height, self.interpolation)
+        write!(
+            f,
+            "Resize to {}x{} ({})",
+            self.width(),
+            self.height(),
+            self.interpolation
+        )
     }
 }
 
@@ -346,8 +425,8 @@ impl TransformOp for Resize {
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
         let src_w = image.width();
         let src_h = image.height();
-        let dst_w = self.width.max(1);
-        let dst_h = self.height.max(1);
+        let dst_w = self.width();
+        let dst_h = self.height();
 
         if src_w == dst_w && src_h == dst_h {
             return Ok(image.clone());
@@ -574,33 +653,102 @@ impl TransformOp for Translate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Crop {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
+    x: u32,
+    y: u32,
+    width: NonZeroU32,
+    height: NonZeroU32,
+}
+
+impl Crop {
+    #[must_use]
+    pub const fn new(x: u32, y: u32, width: NonZeroU32, height: NonZeroU32) -> Self {
+        Self { x, y, width, height }
+    }
+
+    /// Creates a crop operation with validated non-zero dimensions.
+    ///
+    /// # Errors
+    /// Returns [`GeometryValidationError`] if `width` or `height` is zero.
+    pub const fn try_new(x: u32, y: u32, width: u32, height: u32) -> Result<Self, GeometryValidationError> {
+        let Some(width) = NonZeroU32::new(width) else {
+            return Err(GeometryValidationError::CropWidthZero);
+        };
+        let Some(height) = NonZeroU32::new(height) else {
+            return Err(GeometryValidationError::CropHeightZero);
+        };
+        Ok(Self::new(x, y, width, height))
+    }
+
+    #[must_use]
+    pub const fn x(self) -> u32 {
+        self.x
+    }
+
+    #[must_use]
+    pub const fn y(self) -> u32 {
+        self.y
+    }
+
+    #[must_use]
+    pub const fn width(self) -> u32 {
+        self.width.get()
+    }
+
+    #[must_use]
+    pub const fn height(self) -> u32 {
+        self.height.get()
+    }
 }
 
 impl fmt::Display for Crop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Crop x={}, y={}, {}x{}", self.x, self.y, self.width, self.height)
+        write!(
+            f,
+            "Crop x={}, y={}, {}x{}",
+            self.x(),
+            self.y(),
+            self.width(),
+            self.height()
+        )
     }
 }
 
 impl TransformOp for Crop {
     /// Extracts a rectangular region from the image.
     ///
-    /// The crop rectangle is clamped to source bounds and output size is at
-    /// least `1x1`.
+    /// The crop rectangle must fit fully inside the source image.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
         let src_w = image.width();
         let src_h = image.height();
 
-        let x0 = self.x.min(src_w.saturating_sub(1));
-        let y0 = self.y.min(src_h.saturating_sub(1));
-        let max_w = src_w - x0;
-        let max_h = src_h - y0;
-        let out_w = self.width.max(1).min(max_w);
-        let out_h = self.height.max(1).min(max_h);
+        if self.x >= src_w || self.y >= src_h {
+            return Err(GeometryValidationError::CropOriginOutOfBounds {
+                x: self.x,
+                y: self.y,
+                image_width: src_w,
+                image_height: src_h,
+            }
+            .into());
+        }
+
+        let out_w = self.width();
+        let out_h = self.height();
+        let max_w = src_w - self.x;
+        let max_h = src_h - self.y;
+        if out_w > max_w || out_h > max_h {
+            return Err(GeometryValidationError::CropOutOfBounds {
+                x: self.x,
+                y: self.y,
+                width: out_w,
+                height: out_h,
+                image_width: src_w,
+                image_height: src_h,
+            }
+            .into());
+        }
+
+        let x0 = self.x;
+        let y0 = self.y;
 
         if x0 == 0 && y0 == 0 && out_w == src_w && out_h == src_h {
             return Ok(image.clone());
@@ -885,13 +1033,10 @@ mod tests {
             ],
         )
         .expect("valid image");
-        let out = Resize {
-            width: 3,
-            height: 2,
-            interpolation: RotationInterpolation::Bicubic,
-        }
-        .apply(&image)
-        .expect("resize should always succeed");
+        let out = Resize::try_new(3, 2, RotationInterpolation::Bicubic)
+            .expect("valid resize")
+            .apply(&image)
+            .expect("resize should always succeed");
         assert_eq!(out.rgba(), image.rgba());
     }
 
@@ -909,13 +1054,10 @@ mod tests {
             RotationInterpolation::Bilinear,
             RotationInterpolation::Bicubic,
         ] {
-            let out = Resize {
-                width: 3,
-                height: 3,
-                interpolation,
-            }
-            .apply(&image)
-            .expect("resize should always succeed");
+            let out = Resize::try_new(3, 3, interpolation)
+                .expect("valid resize")
+                .apply(&image)
+                .expect("resize should always succeed");
 
             for px in out.rgba().chunks_exact(4) {
                 assert_eq!(px[3], 255, "unexpected transparent pixel with {interpolation:?}");
@@ -973,14 +1115,10 @@ mod tests {
             vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
         )
         .expect("valid image");
-        let out = Crop {
-            x: 0,
-            y: 0,
-            width: 2,
-            height: 2,
-        }
-        .apply(&image)
-        .expect("crop should always succeed");
+        let out = Crop::try_new(0, 0, 2, 2)
+            .expect("valid crop")
+            .apply(&image)
+            .expect("crop should always succeed");
         assert_eq!(out.rgba(), image.rgba());
     }
 
@@ -1075,11 +1213,7 @@ mod tests {
             interpolation: RotationInterpolation::Nearest,
             expand: false,
         };
-        let _ = Resize {
-            width: 10,
-            height: 10,
-            interpolation: RotationInterpolation::Bilinear,
-        };
+        let _ = Resize::try_new(10, 10, RotationInterpolation::Bilinear).expect("valid resize");
         let _ = Skew {
             x_milli: 10,
             y_milli: 20,
@@ -1092,11 +1226,6 @@ mod tests {
             mode: TranslateMode::Crop,
             fill: [0, 0, 0, 0],
         };
-        let _ = Crop {
-            x: 0,
-            y: 0,
-            width: 1,
-            height: 1,
-        };
+        let _ = Crop::try_new(0, 0, 1, 1).expect("valid crop");
     }
 }

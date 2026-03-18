@@ -7,12 +7,18 @@ use crate::runtime::decode::{DecodedImage, DecodedImageError};
 use super::{
     color::{Brightness, Contrast, Grayscale, InvertColors, Sepia},
     convolution::{ConvolutionCustom, ConvolutionPreset},
-    geometry::{Crop, MirrorHorizontal, MirrorVertical, Resize, RotateAny, RotateLeft, RotateRight, Skew, Translate},
+    geometry::{
+        Crop, GeometryValidationError, MirrorHorizontal, MirrorVertical, Resize, RotateAny, RotateLeft, RotateRight,
+        Skew, Translate,
+    },
     steganography::{self, EmbedSteganography, RemoveSteganography},
 };
 
 #[derive(Debug, Error)]
 pub enum TransformError {
+    #[error("invalid geometry: {0}")]
+    InvalidGeometry(#[from] GeometryValidationError),
+
     #[error("steganography error: {0}")]
     Steganography(#[from] steganography::StegError),
 
