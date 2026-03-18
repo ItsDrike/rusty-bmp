@@ -202,3 +202,7 @@ src/
   lib.rs     reusable library exports
 tests/       unit tests, integration tests, BMPSuite coverage
 ```
+
+## License
+
+This project is licensed under the GNU Lesser General Public License v3.0 only (`LGPL-3.0-only`). See `LICENSE.txt` for the full text.
