@@ -106,14 +106,19 @@ impl BmpViewerApp {
         let x_milli = (self.transforms.skew.x_percent * 10.0).round().clamp(-1000.0, 1000.0) as i16;
         #[allow(clippy::cast_possible_truncation)]
         let y_milli = (self.transforms.skew.y_percent * 10.0).round().clamp(-1000.0, 1000.0) as i16;
-        Some(
-            Skew {
-                x_milli,
-                y_milli,
-                interpolation: self.transforms.skew.interpolation,
-                expand: self.transforms.skew.expand,
+        let skew = match Skew::try_new(
+            x_milli,
+            y_milli,
+            self.transforms.skew.interpolation,
+            self.transforms.skew.expand,
+        ) {
+            Ok(skew) => skew,
+            Err(err) => {
+                self.status = format!("Invalid skew settings: {err}");
+                return None;
             }
-            .into(),
-        )
+        };
+
+        Some(skew.into())
     }
 }

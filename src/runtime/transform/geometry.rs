@@ -90,6 +90,10 @@ pub enum GeometryValidationError {
         image_width: u32,
         image_height: u32,
     },
+    #[error("skew parameters are near-singular: x_milli={x_milli}, y_milli={y_milli} (1 - kx*ky too close to 0)")]
+    SkewNearSingular { x_milli: i16, y_milli: i16 },
+    #[error("skew expansion produced invalid output bounds")]
+    SkewInvalidOutputBounds,
 }
 
 /// Determines how image bounds are handled when translating (shifting)
@@ -467,10 +471,86 @@ impl TransformOp for Resize {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Skew {
-    pub x_milli: i16,
-    pub y_milli: i16,
-    pub interpolation: RotationInterpolation,
-    pub expand: bool,
+    x_milli: i16,
+    y_milli: i16,
+    interpolation: RotationInterpolation,
+    expand: bool,
+}
+
+impl Skew {
+    /// Minimum allowed absolute determinant magnitude for the skew matrix.
+    ///
+    /// The skew transform matrix is:
+    ///
+    /// ```text
+    /// [ 1  kx ]
+    /// [ ky  1 ]
+    /// ```
+    ///
+    /// with determinant `det = 1 - kx*ky`. Very small `|det|` means the matrix
+    /// is singular or near-singular, which causes numerical instability and
+    /// extreme coordinate blow-up when inverting for sampling.
+    const MIN_DET_ABS: f64 = 1e-4;
+
+    /// Creates a skew operation with validated shear factors.
+    ///
+    /// # Errors
+    /// Returns [`GeometryValidationError::SkewNearSingular`] when the
+    /// transform matrix determinant is too close to zero.
+    pub fn try_new(
+        x_milli: i16,
+        y_milli: i16,
+        interpolation: RotationInterpolation,
+        expand: bool,
+    ) -> Result<Self, GeometryValidationError> {
+        if Self::determinant(x_milli, y_milli).abs() < Self::MIN_DET_ABS {
+            return Err(GeometryValidationError::SkewNearSingular { x_milli, y_milli });
+        }
+
+        Ok(Self {
+            x_milli,
+            y_milli,
+            interpolation,
+            expand,
+        })
+    }
+
+    /// Returns the determinant of the skew matrix for milli-shear parameters.
+    ///
+    /// `x_milli`/`y_milli` are fixed-point shear factors scaled by 1000
+    /// (`kx = x_milli / 1000`, `ky = y_milli / 1000`).
+    ///
+    /// ```text
+    /// det = 1 - kx*ky
+    /// ```
+    ///
+    /// This value is used to reject singular or near-singular transforms and
+    /// to compute the inverse mapping in [`TransformOp::apply`].
+    const fn determinant(x_milli: i16, y_milli: i16) -> f64 {
+        let kx = x_milli as f64 / 1000.0;
+        let ky = y_milli as f64 / 1000.0;
+        1.0 - kx * ky
+    }
+
+    #[must_use]
+    pub const fn x_milli(self) -> i16 {
+        self.x_milli
+    }
+
+    #[must_use]
+    pub const fn y_milli(self) -> i16 {
+        self.y_milli
+    }
+
+    #[must_use]
+    pub const fn interpolation(self) -> RotationInterpolation {
+        self.interpolation
+    }
+
+    #[must_use]
+    pub const fn expand(self) -> bool {
+        self.expand
+    }
 }
 
 impl fmt::Display for Skew {
@@ -491,12 +571,16 @@ impl TransformOp for Skew {
         let src_w = image.width();
         let src_h = image.height();
 
-        let kx = f64::from(self.x_milli) / 1000.0;
-        let ky = f64::from(self.y_milli) / 1000.0;
+        let kx = f64::from(self.x_milli()) / 1000.0;
+        let ky = f64::from(self.y_milli()) / 1000.0;
 
-        let det = 1.0_f64 - kx * ky;
-        if det.abs() < 1e-6 {
-            return Ok(image.clone());
+        let det = Self::determinant(self.x_milli(), self.y_milli());
+        if det.abs() < Self::MIN_DET_ABS {
+            return Err(GeometryValidationError::SkewNearSingular {
+                x_milli: self.x_milli(),
+                y_milli: self.y_milli(),
+            }
+            .into());
         }
 
         let src_cx = (f64::from(src_w) - 1.0) * 0.5;
@@ -528,10 +612,10 @@ impl TransformOp for Skew {
             let h_f = (max_y - min_y).ceil().max(0.0);
 
             if !w_f.is_finite() || !h_f.is_finite() {
-                return Ok(image.clone());
+                return Err(GeometryValidationError::SkewInvalidOutputBounds.into());
             }
             if w_f > f64::from(u32::MAX - 1) || h_f > f64::from(u32::MAX - 1) {
-                return Ok(image.clone());
+                return Err(GeometryValidationError::SkewInvalidOutputBounds.into());
             }
 
             let w_u32 = w_f as u32 + 1;
@@ -561,7 +645,7 @@ impl TransformOp for Skew {
                 let sx = sx_rel + src_cx;
                 let sy = sy_rel + src_cy;
                 let dst = dx_i as usize * 4;
-                let sample = sample_rgba(image, sx as f32, sy as f32, self.interpolation);
+                let sample = sample_rgba(image, sx as f32, sy as f32, self.interpolation());
                 row[dst..dst + 4].copy_from_slice(&sample);
             }
         });
@@ -574,7 +658,7 @@ impl TransformOp for Skew {
     }
 
     fn replay_cost(&self) -> u32 {
-        match self.interpolation {
+        match self.interpolation() {
             RotationInterpolation::Nearest => 3,
             RotationInterpolation::Bilinear => 5,
             RotationInterpolation::Bicubic => 8,
@@ -976,8 +1060,8 @@ fn cubic_weight(t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Crop, ImageTransform, MirrorHorizontal, MirrorVertical, Resize, RotateAny, RotateLeft, RotateRight,
-        RotationInterpolation, Skew, TransformOp, Translate, TranslateMode,
+        Crop, GeometryValidationError, ImageTransform, MirrorHorizontal, MirrorVertical, Resize, RotateAny,
+        RotateLeft, RotateRight, RotationInterpolation, Skew, TransformOp, Translate, TranslateMode,
     };
     use crate::runtime::decode::DecodedImage;
 
@@ -1075,15 +1159,24 @@ mod tests {
             ],
         )
         .expect("valid image");
-        let out = Skew {
-            x_milli: 0,
-            y_milli: 0,
-            interpolation: RotationInterpolation::Nearest,
-            expand: false,
-        }
-        .apply(&image)
-        .expect("skew should always succeed");
+        let out = Skew::try_new(0, 0, RotationInterpolation::Nearest, false)
+            .expect("valid skew")
+            .apply(&image)
+            .expect("skew should always succeed");
         assert_eq!(out.rgba(), image.rgba());
+    }
+
+    #[test]
+    fn skew_try_new_rejects_near_singular_inputs() {
+        let err = Skew::try_new(1000, 1000, RotationInterpolation::Bilinear, true)
+            .expect_err("singular skew should be rejected");
+        assert!(matches!(
+            err,
+            GeometryValidationError::SkewNearSingular {
+                x_milli: 1000,
+                y_milli: 1000
+            }
+        ));
     }
 
     #[test]
@@ -1214,12 +1307,7 @@ mod tests {
             expand: false,
         };
         let _ = Resize::try_new(10, 10, RotationInterpolation::Bilinear).expect("valid resize");
-        let _ = Skew {
-            x_milli: 10,
-            y_milli: 20,
-            interpolation: RotationInterpolation::Bicubic,
-            expand: true,
-        };
+        let _ = Skew::try_new(10, 20, RotationInterpolation::Bicubic, true).expect("valid skew");
         let _ = Translate {
             dx: 1,
             dy: 2,
