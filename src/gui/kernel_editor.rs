@@ -2,7 +2,7 @@ use eframe::egui;
 
 use bmp::runtime::transform::{ConvolutionCustom, ImageTransform, Kernel};
 
-use crate::BmpViewerApp;
+use crate::{BmpViewerApp, KernelSize};
 
 #[derive(Clone, Copy)]
 enum KernelPresetKind {
@@ -14,32 +14,6 @@ enum KernelPresetKind {
 }
 
 impl BmpViewerApp {
-    /// Resizes the custom kernel grid while preserving centered overlap.
-    ///
-    /// Existing values are copied from the old kernel's center-aligned region
-    /// into the new kernel's center-aligned region. Cells outside the overlap
-    /// are initialized to `"0"`.
-    pub(crate) fn resize_kernel_weights(&mut self, old_size: usize, new_size: usize) {
-        let old_weights = std::mem::take(&mut self.transforms.kernel.weights);
-        let mut new_weights = vec!["0".to_owned(); new_size * new_size];
-
-        let overlap = old_size.min(new_size);
-        let old_offset = (old_size - overlap) / 2;
-        let new_offset = (new_size - overlap) / 2;
-
-        for y in 0..overlap {
-            for x in 0..overlap {
-                let old_idx = (y + old_offset) * old_size + (x + old_offset);
-                let new_idx = (y + new_offset) * new_size + (x + new_offset);
-                if let Some(value) = old_weights.get(old_idx) {
-                    new_weights[new_idx].clone_from(value);
-                }
-            }
-        }
-
-        self.transforms.kernel.weights = new_weights;
-    }
-
     /// Shows the custom kernel editor as a floating `egui::Window`.
     ///
     /// Called from the main `update()` method. Returns `Some(op)` when the
@@ -62,35 +36,35 @@ impl BmpViewerApp {
                 // --- Size selector ---
                 ui.horizontal(|ui| {
                     ui.label("Kernel size:");
-                    let old_size = self.transforms.kernel.size;
+                    let old_size = self.transforms.kernel.size();
+                    let mut selected_size = old_size;
                     egui::ComboBox::from_id_salt("kernel_size")
-                        .selected_text(format!(
-                            "{}x{}",
-                            self.transforms.kernel.size, self.transforms.kernel.size
-                        ))
+                        .selected_text(format!("{}x{}", old_size.as_usize(), old_size.as_usize()))
                         .show_ui(ui, |ui| {
-                            for &s in &[1, 3, 5, 7] {
-                                ui.selectable_value(&mut self.transforms.kernel.size, s, format!("{s}x{s}"));
+                            for size in KernelSize::ALL {
+                                let size_value = size.as_usize();
+                                ui.selectable_value(&mut selected_size, size, format!("{size_value}x{size_value}"));
                             }
                         });
-                    if self.transforms.kernel.size != old_size {
-                        self.resize_kernel_weights(old_size, self.transforms.kernel.size);
+                    if selected_size != old_size {
+                        self.transforms.kernel.resize_preserving(selected_size);
                     }
                 });
 
                 ui.add_space(4.0);
 
                 // --- Weight grid ---
-                let n = self.transforms.kernel.size;
+                let n = self.transforms.kernel.size_value();
                 let half = n / 2;
                 egui::Grid::new("kernel_weights_grid")
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
+                        let weights = self.transforms.kernel.weights_mut();
                         for y in 0..n {
                             for x in 0..n {
                                 let idx = y * n + x;
                                 let is_center = x == half && y == half;
-                                let widget = egui::TextEdit::singleline(&mut self.transforms.kernel.weights[idx])
+                                let widget = egui::TextEdit::singleline(&mut weights[idx])
                                     .desired_width(36.0)
                                     .horizontal_align(egui::Align::Center);
                                 let response = ui.add(widget);
@@ -115,13 +89,13 @@ impl BmpViewerApp {
                 ui.horizontal(|ui| {
                     ui.label("Divisor:");
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.transforms.kernel.divisor)
+                        egui::TextEdit::singleline(self.transforms.kernel.divisor_mut())
                             .desired_width(50.0)
                             .horizontal_align(egui::Align::Center),
                     );
                     ui.label("Bias:");
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.transforms.kernel.bias)
+                        egui::TextEdit::singleline(self.transforms.kernel.bias_mut())
                             .desired_width(50.0)
                             .horizontal_align(egui::Align::Center),
                     );
@@ -185,19 +159,19 @@ impl BmpViewerApp {
     /// Validates the current kernel editor fields and returns the `Kernel` or
     /// an error message.
     fn validate_custom_kernel(&self) -> Result<Kernel, String> {
-        let n = self.transforms.kernel.size;
+        let n = self.transforms.kernel.size_value();
         let expected = n * n;
 
-        if self.transforms.kernel.weights.len() != expected {
+        if self.transforms.kernel.weights().len() != expected {
             return Err(format!(
                 "Expected {} weights, got {}",
                 expected,
-                self.transforms.kernel.weights.len()
+                self.transforms.kernel.weights().len()
             ));
         }
 
         let mut weights = Vec::with_capacity(expected);
-        for (i, s) in self.transforms.kernel.weights.iter().enumerate() {
+        for (i, s) in self.transforms.kernel.weights().iter().enumerate() {
             let trimmed = s.trim();
             if trimmed.is_empty() {
                 return Err(format!("Weight cell {} is empty", i + 1));
@@ -219,10 +193,10 @@ impl BmpViewerApp {
         let divisor: i32 = self
             .transforms
             .kernel
-            .divisor
+            .divisor()
             .trim()
             .parse()
-            .map_err(|_| format!("Invalid divisor: \"{}\"", self.transforms.kernel.divisor.trim()))?;
+            .map_err(|_| format!("Invalid divisor: \"{}\"", self.transforms.kernel.divisor().trim()))?;
 
         if divisor == 0 {
             return Err("Divisor must not be zero".to_owned());
@@ -231,10 +205,10 @@ impl BmpViewerApp {
         let bias: i32 = self
             .transforms
             .kernel
-            .bias
+            .bias()
             .trim()
             .parse()
-            .map_err(|_| format!("Invalid bias: \"{}\"", self.transforms.kernel.bias.trim()))?;
+            .map_err(|_| format!("Invalid bias: \"{}\"", self.transforms.kernel.bias().trim()))?;
 
         Kernel::new(weights, n, divisor, bias).map_err(|err| err.to_string())
     }
@@ -264,7 +238,7 @@ impl BmpViewerApp {
 
     /// Loads a preset kernel into the editor fields for the current kernel size.
     fn load_kernel_preset(&mut self, preset: KernelPresetKind) {
-        let target_size = self.transforms.kernel.size;
+        let target_size = self.transforms.kernel.size_value();
         let center = target_size * target_size / 2;
 
         let (weights, divisor, bias) = match preset {
@@ -309,8 +283,10 @@ impl BmpViewerApp {
             }
         };
 
-        self.transforms.kernel.weights = weights.iter().map(std::string::ToString::to_string).collect();
-        self.transforms.kernel.divisor = divisor.to_string();
-        self.transforms.kernel.bias = bias.to_string();
+        self.transforms
+            .kernel
+            .set_weights(weights.iter().map(std::string::ToString::to_string).collect());
+        self.transforms.kernel.set_divisor(divisor.to_string());
+        self.transforms.kernel.set_bias(bias.to_string());
     }
 }

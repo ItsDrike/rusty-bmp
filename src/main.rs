@@ -167,18 +167,126 @@ pub(crate) struct TransformToolState {
     pub(crate) tonal: TonalAdjustState,
 }
 
+/// Allowed side lengths for the custom convolution kernel editor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KernelSize {
+    One,
+    Three,
+    Five,
+    Seven,
+}
+
+impl KernelSize {
+    pub(crate) const ALL: [Self; 4] = [Self::One, Self::Three, Self::Five, Self::Seven];
+
+    pub(crate) const fn as_usize(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Three => 3,
+            Self::Five => 5,
+            Self::Seven => 7,
+        }
+    }
+
+    const fn cell_count(self) -> usize {
+        let size = self.as_usize();
+        size * size
+    }
+}
+
 /// State for the custom kernel editor dialog.
 pub(crate) struct KernelToolState {
     /// Whether the custom kernel editor window is open.
     pub(crate) open: bool,
     /// Side length of the custom kernel being edited (1, 3, 5, or 7).
-    pub(crate) size: usize,
+    size: KernelSize,
     /// Per-cell weight strings for the kernel editor (size*size elements).
-    pub(crate) weights: Vec<String>,
+    weights: Vec<String>,
     /// Divisor string for the kernel editor.
-    pub(crate) divisor: String,
+    divisor: String,
     /// Bias string for the kernel editor.
-    pub(crate) bias: String,
+    bias: String,
+}
+
+impl KernelToolState {
+    pub(crate) fn new() -> Self {
+        Self {
+            open: false,
+            size: KernelSize::Three,
+            weights: vec!["0".to_owned(); KernelSize::Three.cell_count()],
+            divisor: "1".to_owned(),
+            bias: "0".to_owned(),
+        }
+    }
+
+    pub(crate) const fn size(&self) -> KernelSize {
+        self.size
+    }
+
+    pub(crate) const fn size_value(&self) -> usize {
+        self.size.as_usize()
+    }
+
+    pub(crate) fn resize_preserving(&mut self, new_size: KernelSize) {
+        let old_size = self.size.as_usize();
+        let new_size_value = new_size.as_usize();
+        let old_weights = std::mem::take(&mut self.weights);
+        let mut new_weights = vec!["0".to_owned(); new_size.cell_count()];
+
+        let overlap = old_size.min(new_size_value);
+        let old_offset = (old_size - overlap) / 2;
+        let new_offset = (new_size_value - overlap) / 2;
+
+        for y in 0..overlap {
+            for x in 0..overlap {
+                let old_idx = (y + old_offset) * old_size + (x + old_offset);
+                let new_idx = (y + new_offset) * new_size_value + (x + new_offset);
+                if let Some(value) = old_weights.get(old_idx) {
+                    new_weights[new_idx].clone_from(value);
+                }
+            }
+        }
+
+        self.size = new_size;
+        self.weights = new_weights;
+    }
+
+    pub(crate) fn weights(&self) -> &[String] {
+        &self.weights
+    }
+
+    pub(crate) fn weights_mut(&mut self) -> &mut [String] {
+        &mut self.weights
+    }
+
+    pub(crate) fn set_weights(&mut self, weights: Vec<String>) {
+        assert_eq!(weights.len(), self.size.cell_count());
+        self.weights = weights;
+    }
+
+    pub(crate) fn divisor(&self) -> &str {
+        &self.divisor
+    }
+
+    pub(crate) const fn divisor_mut(&mut self) -> &mut String {
+        &mut self.divisor
+    }
+
+    pub(crate) fn set_divisor(&mut self, divisor: String) {
+        self.divisor = divisor;
+    }
+
+    pub(crate) fn bias(&self) -> &str {
+        &self.bias
+    }
+
+    pub(crate) const fn bias_mut(&mut self) -> &mut String {
+        &mut self.bias
+    }
+
+    pub(crate) fn set_bias(&mut self, bias: String) {
+        self.bias = bias;
+    }
 }
 
 /// State for arbitrary-angle rotation dialog.
@@ -349,13 +457,7 @@ impl Default for BmpViewerApp {
                 pan_offset: egui::Vec2::ZERO,
             },
             transforms: TransformToolState {
-                kernel: KernelToolState {
-                    open: false,
-                    size: 3,
-                    weights: vec!["0".to_owned(); 9],
-                    divisor: "1".to_owned(),
-                    bias: "0".to_owned(),
-                },
+                kernel: KernelToolState::new(),
                 rotate: RotateToolState {
                     open: false,
                     angle: 0.0,
