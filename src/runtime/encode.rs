@@ -159,7 +159,7 @@ impl SaveFormat {
 
         // Additional check: does the config use alpha, and does this format drop alpha?
         if let Some(config) = steg_config
-            && config.a_bits > 0
+            && config.a_bits() > 0
         {
             // Rgb24 has no alpha byte at all.
             // Rgb32 stores the 4th byte as a reserved zero - alpha data is lost.

@@ -32,10 +32,25 @@ use super::model::{ImageTransform, TransformError, TransformOp};
 /// many least-significant bits of the channel are used to carry steg data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StegConfig {
-    pub r_bits: u8, // 0..=8
-    pub g_bits: u8, // 0..=8
-    pub b_bits: u8, // 0..=8
-    pub a_bits: u8, // 0..=8
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+pub enum StegConfigError {
+    #[error("red channel bit depth {bits} exceeds maximum 8")]
+    RedBitsOutOfRange { bits: u8 },
+
+    #[error("green channel bit depth {bits} exceeds maximum 8")]
+    GreenBitsOutOfRange { bits: u8 },
+
+    #[error("blue channel bit depth {bits} exceeds maximum 8")]
+    BlueBitsOutOfRange { bits: u8 },
+
+    #[error("alpha channel bit depth {bits} exceeds maximum 8")]
+    AlphaBitsOutOfRange { bits: u8 },
 }
 
 /// Metadata decoded from a detected steganography header.
@@ -79,10 +94,10 @@ impl fmt::Display for EmbedSteganography {
             f,
             "Embed Steganography ({} bytes, R{}G{}B{}A{})",
             self.payload.len(),
-            self.config.r_bits,
-            self.config.g_bits,
-            self.config.b_bits,
-            self.config.a_bits
+            self.config.r_bits(),
+            self.config.g_bits(),
+            self.config.b_bits(),
+            self.config.a_bits()
         )
     }
 }
@@ -111,7 +126,10 @@ impl fmt::Display for RemoveSteganography {
         write!(
             f,
             "Remove Steganography (R{}G{}B{}A{})",
-            self.config.r_bits, self.config.g_bits, self.config.b_bits, self.config.a_bits
+            self.config.r_bits(),
+            self.config.g_bits(),
+            self.config.b_bits(),
+            self.config.a_bits()
         )
     }
 }
@@ -138,10 +156,57 @@ impl TransformOp for RemoveSteganography {
 const HEADER_BITS: u64 = 80;
 
 impl StegConfig {
+    /// Creates a validated steganography channel configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StegConfigError`] if any channel depth exceeds 8 bits.
+    pub const fn new(r_bits: u8, g_bits: u8, b_bits: u8, a_bits: u8) -> Result<Self, StegConfigError> {
+        if r_bits > 8 {
+            return Err(StegConfigError::RedBitsOutOfRange { bits: r_bits });
+        }
+        if g_bits > 8 {
+            return Err(StegConfigError::GreenBitsOutOfRange { bits: g_bits });
+        }
+        if b_bits > 8 {
+            return Err(StegConfigError::BlueBitsOutOfRange { bits: b_bits });
+        }
+        if a_bits > 8 {
+            return Err(StegConfigError::AlphaBitsOutOfRange { bits: a_bits });
+        }
+
+        Ok(Self {
+            r: r_bits,
+            g: g_bits,
+            b: b_bits,
+            a: a_bits,
+        })
+    }
+
+    #[must_use]
+    pub const fn r_bits(self) -> u8 {
+        self.r
+    }
+
+    #[must_use]
+    pub const fn g_bits(self) -> u8 {
+        self.g
+    }
+
+    #[must_use]
+    pub const fn b_bits(self) -> u8 {
+        self.b
+    }
+
+    #[must_use]
+    pub const fn a_bits(self) -> u8 {
+        self.a
+    }
+
     /// Total bits contributed by this config per pixel.
     #[must_use]
     pub const fn bits_per_pixel(self) -> u8 {
-        self.r_bits + self.g_bits + self.b_bits + self.a_bits
+        self.r + self.g + self.b + self.a
     }
 
     /// Total number of bits available for steg data in an image (including the
@@ -165,7 +230,7 @@ impl StegConfig {
     /// The result always fits in `u16` (max value 6560 < 8192 = 2^13).
     #[must_use]
     pub const fn encode_config_bits(self) -> u16 {
-        self.r_bits as u16 + self.g_bits as u16 * 9 + self.b_bits as u16 * 81 + self.a_bits as u16 * 729
+        self.r as u16 + self.g as u16 * 9 + self.b as u16 * 81 + self.a as u16 * 729
     }
 
     /// Decode a 13-bit base-9 integer back into a `StegConfig`.
@@ -185,12 +250,10 @@ impl StegConfig {
         if r > 8 || g > 8 || b > 8 || a > 8 {
             return None;
         }
-        Some(Self {
-            r_bits: r,
-            g_bits: g,
-            b_bits: b,
-            a_bits: a,
-        })
+        match Self::new(r, g, b, a) {
+            Ok(config) => Some(config),
+            Err(_) => None,
+        }
     }
 }
 
@@ -240,10 +303,10 @@ impl BitCursor {
     /// How many bits per channel the current channel contributes.
     const fn current_channel_bits(&self) -> u8 {
         match self.channel {
-            0 => self.config.r_bits,
-            1 => self.config.g_bits,
-            2 => self.config.b_bits,
-            3 => self.config.a_bits,
+            0 => self.config.r_bits(),
+            1 => self.config.g_bits(),
+            2 => self.config.b_bits(),
+            3 => self.config.a_bits(),
             _ => 0,
         }
     }
@@ -606,6 +669,7 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
 /// Returns the first `StegInfo` that passes all header checks, or `None` if
 /// the image does not appear to contain steganography.
 #[must_use]
+#[allow(clippy::missing_panics_doc)]
 pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
     // Need at least enough pixels to hold the header.
     // Even in the best case (all channels, 8 bits each = 32 bits/pixel), that
@@ -616,12 +680,8 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
         for b_bits in 0u8..=8 {
             for g_bits in 0u8..=8 {
                 for r_bits in 0u8..=8 {
-                    let config = StegConfig {
-                        r_bits,
-                        g_bits,
-                        b_bits,
-                        a_bits,
-                    };
+                    let config = StegConfig::new(r_bits, g_bits, b_bits, a_bits)
+                        .expect("loop only generates valid per-channel bit depths");
                     if config.bits_per_pixel() == 0 {
                         continue;
                     }
@@ -639,6 +699,10 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
 mod tests {
     use super::{BitCursor, StegConfig, StegError, StegInfo, detect, embed, extract, remove, write_bit};
     use crate::runtime::decode::DecodedImage;
+
+    fn steg_config(r_bits: u8, g_bits: u8, b_bits: u8, a_bits: u8) -> StegConfig {
+        StegConfig::new(r_bits, g_bits, b_bits, a_bits).expect("test config should be valid")
+    }
 
     fn patterned_image(width: u32, height: u32) -> DecodedImage {
         let mut rgba = Vec::with_capacity((width as usize) * (height as usize) * 4);
@@ -666,34 +730,19 @@ mod tests {
 
     #[test]
     fn config_capacity_helpers_behave_as_expected() {
-        let config = StegConfig {
-            r_bits: 1,
-            g_bits: 2,
-            b_bits: 3,
-            a_bits: 0,
-        };
+        let config = steg_config(1, 2, 3, 0);
         assert_eq!(config.bits_per_pixel(), 6);
         assert_eq!(config.total_bits(10, 5), 300);
         assert_eq!(config.capacity_bytes(10, 5), 27);
 
-        let tiny = StegConfig {
-            r_bits: 1,
-            g_bits: 0,
-            b_bits: 0,
-            a_bits: 0,
-        };
+        let tiny = steg_config(1, 0, 0, 0);
         assert_eq!(tiny.capacity_bytes(2, 2), 0);
     }
 
     #[test]
     fn embed_detect_extract_roundtrip_succeeds() {
         let image = patterned_image(16, 16);
-        let config = StegConfig {
-            r_bits: 2,
-            g_bits: 1,
-            b_bits: 2,
-            a_bits: 0,
-        };
+        let config = steg_config(2, 1, 2, 0);
         let payload = b"steganography test payload";
 
         let embedded = embed(&image, config, payload).expect("embed should succeed");
@@ -709,12 +758,7 @@ mod tests {
     #[test]
     fn embed_does_not_modify_original_image() {
         let image = patterned_image(8, 8);
-        let config = StegConfig {
-            r_bits: 1,
-            g_bits: 1,
-            b_bits: 1,
-            a_bits: 1,
-        };
+        let config = steg_config(1, 1, 1, 1);
         let original = image.rgba().to_vec();
 
         let _embedded = embed(&image, config, b"abc").expect("embed should succeed");
@@ -730,12 +774,7 @@ mod tests {
     #[test]
     fn remove_clears_only_header_and_payload_bits() {
         let image = patterned_image(12, 12);
-        let config = StegConfig {
-            r_bits: 3,
-            g_bits: 2,
-            b_bits: 1,
-            a_bits: 0,
-        };
+        let config = steg_config(3, 2, 1, 0);
         let payload = b"hidden";
         let embedded = embed(&image, config, payload).expect("embed should succeed");
         let stripped = remove(&embedded, config);
@@ -756,12 +795,7 @@ mod tests {
     #[test]
     fn remove_leaves_image_unchanged_when_no_valid_header_exists() {
         let image = patterned_image(12, 12);
-        let config = StegConfig {
-            r_bits: 2,
-            g_bits: 1,
-            b_bits: 0,
-            a_bits: 0,
-        };
+        let config = steg_config(2, 1, 0, 0);
 
         let stripped = remove(&image, config);
         assert_eq!(stripped.rgba(), image.rgba());
@@ -771,12 +805,7 @@ mod tests {
     #[test]
     fn embed_rejects_no_channels_config() {
         let image = patterned_image(8, 8);
-        let config = StegConfig {
-            r_bits: 0,
-            g_bits: 0,
-            b_bits: 0,
-            a_bits: 0,
-        };
+        let config = steg_config(0, 0, 0, 0);
 
         let err = embed(&image, config, b"x").expect_err("must reject no-channel config");
         assert!(matches!(err, StegError::NoChannels));
@@ -785,12 +814,7 @@ mod tests {
     #[test]
     fn embed_rejects_insufficient_capacity() {
         let image = patterned_image(2, 2);
-        let config = StegConfig {
-            r_bits: 1,
-            g_bits: 0,
-            b_bits: 0,
-            a_bits: 0,
-        };
+        let config = steg_config(1, 0, 0, 0);
 
         let err = embed(&image, config, b"").expect_err("must reject when header cannot fit");
         assert!(matches!(
@@ -806,12 +830,7 @@ mod tests {
     fn extract_rejects_no_channels_config() {
         let image = patterned_image(8, 8);
         let info = StegInfo {
-            config: StegConfig {
-                r_bits: 0,
-                g_bits: 0,
-                b_bits: 0,
-                a_bits: 0,
-            },
+            config: steg_config(0, 0, 0, 0),
             version: 0,
             payload_len: 0,
         };
@@ -824,12 +843,7 @@ mod tests {
     fn extract_rejects_payload_too_large_from_header_info() {
         let image = patterned_image(8, 8);
         let info = StegInfo {
-            config: StegConfig {
-                r_bits: 1,
-                g_bits: 1,
-                b_bits: 1,
-                a_bits: 0,
-            },
+            config: steg_config(1, 1, 1, 0),
             version: 0,
             payload_len: u32::MAX,
         };

@@ -51,12 +51,13 @@ impl BmpViewerApp {
                 ui.add_space(4.0);
 
                 // Capacity indicator
-                let config = StegConfig {
-                    r_bits: self.steganography.r_bits,
-                    g_bits: self.steganography.g_bits,
-                    b_bits: self.steganography.b_bits,
-                    a_bits: self.steganography.a_bits,
-                };
+                let config = StegConfig::new(
+                    self.steganography.r_bits,
+                    self.steganography.g_bits,
+                    self.steganography.b_bits,
+                    self.steganography.a_bits,
+                )
+                .expect("steganography sliders restrict channel depths to 0..=8");
 
                 let (capacity_bytes, payload_bytes) = if let Some(img) = &self.document.transformed_image {
                     let cap = config.capacity_bytes(img.width(), img.height());
@@ -142,12 +143,13 @@ impl BmpViewerApp {
             return None;
         }
 
-        let config = StegConfig {
-            r_bits: self.steganography.r_bits,
-            g_bits: self.steganography.g_bits,
-            b_bits: self.steganography.b_bits,
-            a_bits: self.steganography.a_bits,
-        };
+        let config = StegConfig::new(
+            self.steganography.r_bits,
+            self.steganography.g_bits,
+            self.steganography.b_bits,
+            self.steganography.a_bits,
+        )
+        .expect("steganography sliders restrict channel depths to 0..=8");
         let payload = self.steganography.text_input.as_bytes().to_vec();
 
         Some(EmbedSteganography { config, payload }.into())

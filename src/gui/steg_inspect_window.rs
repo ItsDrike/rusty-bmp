@@ -43,19 +43,19 @@ impl BmpViewerApp {
                                 ui.end_row();
 
                                 ui.label("Red bits:");
-                                ui.monospace(info.config.r_bits.to_string());
+                                ui.monospace(info.config.r_bits().to_string());
                                 ui.end_row();
 
                                 ui.label("Green bits:");
-                                ui.monospace(info.config.g_bits.to_string());
+                                ui.monospace(info.config.g_bits().to_string());
                                 ui.end_row();
 
                                 ui.label("Blue bits:");
-                                ui.monospace(info.config.b_bits.to_string());
+                                ui.monospace(info.config.b_bits().to_string());
                                 ui.end_row();
 
                                 ui.label("Alpha bits:");
-                                ui.monospace(info.config.a_bits.to_string());
+                                ui.monospace(info.config.a_bits().to_string());
                                 ui.end_row();
                             });
 
