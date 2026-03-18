@@ -72,7 +72,11 @@ struct LoadedDocument {
     /// The decoded image before any transforms (kept for pipeline reapply).
     original_image: DecodedImage,
     /// Current image after applying all transforms in `history`.
-    transformed_image: DecodedImage,
+    ///
+    /// `None` means the current view is identical to `original_image`
+    /// (typically when no transforms are applied), which avoids storing a
+    /// duplicate full-size buffer.
+    transformed_image: Option<DecodedImage>,
     /// Applied transform pipeline and redo stack for this loaded session.
     history: TransformHistory,
     /// Source BMP color metadata preserved for re-encoding, when available.
@@ -96,8 +100,8 @@ impl DocumentState {
         source_metadata: Option<SourceMetadata>,
     ) {
         self.loaded = Some(LoadedDocument {
-            original_image: decoded.clone(),
-            transformed_image: decoded,
+            original_image: decoded,
+            transformed_image: None,
             history: TransformHistory::default(),
             source_metadata,
             loaded_path,
@@ -105,7 +109,9 @@ impl DocumentState {
     }
 
     pub(crate) fn transformed_image(&self) -> Option<&DecodedImage> {
-        self.loaded.as_ref().map(|doc| &doc.transformed_image)
+        self.loaded
+            .as_ref()
+            .map(|doc| doc.transformed_image.as_ref().unwrap_or(&doc.original_image))
     }
 
     pub(crate) fn original_image(&self) -> Option<&DecodedImage> {
@@ -114,7 +120,11 @@ impl DocumentState {
 
     pub(crate) fn set_transformed_image(&mut self, image: DecodedImage) -> bool {
         if let Some(doc) = self.loaded.as_mut() {
-            doc.transformed_image = image;
+            if doc.history.is_empty() {
+                doc.transformed_image = None;
+            } else {
+                doc.transformed_image = Some(image);
+            }
             true
         } else {
             false
