@@ -42,6 +42,12 @@ pub(crate) enum CropDragMode {
     BottomRight,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ZoomMode {
+    Fit,
+    Scale(f32),
+}
+
 /// Image/session data that is tied to the currently loaded BMP and transform pipeline.
 pub(crate) struct DocumentState {
     pub(crate) image_stats: String,
@@ -145,9 +151,8 @@ pub(crate) struct ViewportState {
     /// Checker tile size in image pixels. Adjusted with hysteresis so redraws
     /// only happen when tiles become too small/large on screen.
     pub(crate) checker_tile_img_px: u32,
-    /// Absolute zoom level: screen pixels per image pixel.
-    /// A value of 0.0 means "fit the image to the available panel space".
-    pub(crate) zoom: f32,
+    /// Zoom level for image display.
+    pub(crate) zoom: ZoomMode,
     /// The effective zoom level from the last frame (used for display in the zoom bar).
     pub(crate) last_effective_zoom: f32,
     /// Pixel under the cursor: (x, y, [r, g, b, a]). Stored per-frame for the zoom bar.
@@ -458,7 +463,7 @@ impl Default for BmpViewerApp {
                 checker_texture_tile_img_px: 0,
                 has_transparency: false,
                 checker_tile_img_px: 8,
-                zoom: 0.0,
+                zoom: ZoomMode::Fit,
                 last_effective_zoom: 1.0,
                 hovered_pixel: None,
                 pan_offset: egui::Vec2::ZERO,
@@ -620,7 +625,7 @@ impl BmpViewerApp {
         self.steganography.save_confirm_reason = None;
         self.document.original_image = Some(decoded.clone());
         // New image load resets viewport to fit.
-        self.viewport.zoom = 0.0;
+        self.viewport.zoom = ZoomMode::Fit;
         self.viewport.pan_offset = egui::Vec2::ZERO;
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
         self.document.loaded_path = Some(path.to_path_buf());

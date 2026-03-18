@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::{BmpViewerApp, CropDragMode};
+use crate::{BmpViewerApp, CropDragMode, ZoomMode};
 
 impl BmpViewerApp {
     /// Renders the central panel: image display with zoom/pan, pixel inspector, or empty state.
@@ -22,11 +22,9 @@ impl BmpViewerApp {
                     if s.is_finite() && s > 0.0 { s } else { 1.0 }
                 };
 
-                // Resolve the effective zoom: 0.0 means "fit to panel".
-                let effective_zoom = if self.viewport.zoom == 0.0 {
-                    fit_scale
-                } else {
-                    self.viewport.zoom
+                let effective_zoom = match self.viewport.zoom {
+                    ZoomMode::Fit => fit_scale,
+                    ZoomMode::Scale(scale) => scale,
                 };
 
                 // Allocate the full available area and sense drag + scroll.
@@ -46,17 +44,17 @@ impl BmpViewerApp {
                 });
 
                 if kb_zoom_in {
-                    self.viewport.zoom = (effective_zoom * 1.25).max(0.01);
+                    self.viewport.zoom = ZoomMode::Scale((effective_zoom * 1.25).max(0.01));
                 }
                 if kb_zoom_out {
-                    self.viewport.zoom = (effective_zoom / 1.25).max(0.01);
+                    self.viewport.zoom = ZoomMode::Scale((effective_zoom / 1.25).max(0.01));
                 }
                 if kb_zoom_fit {
-                    self.viewport.zoom = 0.0;
+                    self.viewport.zoom = ZoomMode::Fit;
                     self.viewport.pan_offset = egui::Vec2::ZERO;
                 }
                 if kb_zoom_1to1 {
-                    self.viewport.zoom = 1.0;
+                    self.viewport.zoom = ZoomMode::Scale(1.0);
                     self.viewport.pan_offset = egui::Vec2::ZERO;
                 }
 
@@ -76,22 +74,21 @@ impl BmpViewerApp {
                         self.viewport.pan_offset = pointer - panel_center - cursor_rel * ratio;
                     }
 
-                    self.viewport.zoom = new_zoom;
+                    self.viewport.zoom = ZoomMode::Scale(new_zoom);
                 }
 
                 let mut crop_drag_captured = false;
 
                 // --- Double-click to fit ---
                 if response.double_clicked() {
-                    self.viewport.zoom = 0.0;
+                    self.viewport.zoom = ZoomMode::Fit;
                     self.viewport.pan_offset = egui::Vec2::ZERO;
                 }
 
                 // Re-resolve after possible changes above.
-                let effective_zoom = if self.viewport.zoom == 0.0 {
-                    fit_scale
-                } else {
-                    self.viewport.zoom
+                let effective_zoom = match self.viewport.zoom {
+                    ZoomMode::Fit => fit_scale,
+                    ZoomMode::Scale(scale) => scale,
                 };
                 let display_size = tex_size * effective_zoom;
 

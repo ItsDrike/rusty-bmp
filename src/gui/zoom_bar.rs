@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::BmpViewerApp;
+use crate::{BmpViewerApp, ZoomMode};
 
 impl BmpViewerApp {
     /// Renders the bottom zoom status bar: zoom percentage, pixel info, Fit/1:1 buttons.
@@ -16,10 +16,9 @@ impl BmpViewerApp {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     // Zoom label on the left.
-                    let zoom_label = if self.viewport.zoom == 0.0 {
-                        format!("{:.0}% (Fit)", self.viewport.last_effective_zoom * 100.0)
-                    } else {
-                        format!("{:.0}%", self.viewport.zoom * 100.0)
+                    let zoom_label = match self.viewport.zoom {
+                        ZoomMode::Fit => format!("{:.0}% (Fit)", self.viewport.last_effective_zoom * 100.0),
+                        ZoomMode::Scale(scale) => format!("{:.0}%", scale * 100.0),
                     };
                     ui.monospace(&zoom_label);
 
@@ -41,23 +40,26 @@ impl BmpViewerApp {
 
                     // Push buttons to the right.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let is_1to1 = (self.viewport.zoom - 1.0).abs() < f32::EPSILON;
+                        let is_1to1 = matches!(
+                            self.viewport.zoom,
+                            ZoomMode::Scale(scale) if (scale - 1.0).abs() < f32::EPSILON
+                        );
                         if ui
                             .add_enabled(!is_1to1, egui::Button::new("1:1").small())
                             .on_hover_text("Actual pixel size (1)")
                             .clicked()
                         {
-                            self.viewport.zoom = 1.0;
+                            self.viewport.zoom = ZoomMode::Scale(1.0);
                             self.viewport.pan_offset = egui::Vec2::ZERO;
                         }
 
-                        let is_fit = self.viewport.zoom.abs() < f32::EPSILON;
+                        let is_fit = matches!(self.viewport.zoom, ZoomMode::Fit);
                         if ui
                             .add_enabled(!is_fit, egui::Button::new("Fit").small())
-                            .on_hover_text("Fit image to panel (0)")
+                            .on_hover_text("Fit image to panel")
                             .clicked()
                         {
-                            self.viewport.zoom = 0.0;
+                            self.viewport.zoom = ZoomMode::Fit;
                             self.viewport.pan_offset = egui::Vec2::ZERO;
                         }
                     });
