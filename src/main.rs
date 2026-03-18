@@ -50,14 +50,86 @@ pub(crate) struct DocumentState {
     /// The decoded image before any transforms (kept for pipeline reapply).
     pub(crate) original_image: Option<DecodedImage>,
     pub(crate) transformed_image: Option<DecodedImage>,
-    pub(crate) pipeline: TransformPipeline,
-    /// Transforms that were undone, available for redo. Cleared on new transform or step removal.
-    pub(crate) redo_stack: Vec<ImageTransform>,
+    history: TransformHistory,
     pub(crate) save_format: SaveFormat,
     pub(crate) save_header_version: SaveHeaderVersion,
     pub(crate) source_metadata: Option<SourceMetadata>,
     /// Path of the currently loaded file (for "Save" without a dialog).
     pub(crate) loaded_path: Option<PathBuf>,
+}
+
+#[derive(Default)]
+pub(crate) struct TransformHistory {
+    pipeline: TransformPipeline,
+    /// Transforms that were undone, available for redo. Cleared on new transform or step removal.
+    redo_stack: Vec<ImageTransform>,
+}
+
+impl DocumentState {
+    pub(crate) const fn history(&self) -> &TransformHistory {
+        &self.history
+    }
+
+    pub(crate) const fn history_mut(&mut self) -> &mut TransformHistory {
+        &mut self.history
+    }
+}
+
+impl TransformHistory {
+    pub(crate) fn clear(&mut self) {
+        self.pipeline.clear();
+        self.redo_stack.clear();
+    }
+
+    pub(crate) fn record_apply(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
+        self.pipeline.push(op, current_image);
+        self.redo_stack.clear();
+    }
+
+    pub(crate) fn pop_undo(&mut self) -> Option<ImageTransform> {
+        self.pipeline.pop()
+    }
+
+    pub(crate) fn push_redo(&mut self, op: ImageTransform) {
+        self.redo_stack.push(op);
+    }
+
+    pub(crate) fn pop_redo(&mut self) -> Option<ImageTransform> {
+        self.redo_stack.pop()
+    }
+
+    pub(crate) fn remove(&mut self, index: usize) {
+        self.pipeline.remove(index);
+        self.redo_stack.clear();
+    }
+
+    pub(crate) fn apply_with_warnings(&self, original: &DecodedImage) -> (DecodedImage, Vec<String>) {
+        self.pipeline.apply_with_warnings(original)
+    }
+
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.pipeline.is_empty()
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.pipeline.len()
+    }
+
+    pub(crate) fn ops(&self) -> &[ImageTransform] {
+        self.pipeline.ops()
+    }
+
+    pub(crate) fn last_applied(&self) -> Option<&ImageTransform> {
+        self.pipeline.ops().last()
+    }
+
+    pub(crate) const fn has_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    pub(crate) fn last_redo(&self) -> Option<&ImageTransform> {
+        self.redo_stack.last()
+    }
 }
 
 /// Viewport-related UI state for the central image panel.
@@ -259,8 +331,7 @@ impl Default for BmpViewerApp {
                 palette_colors: Vec::new(),
                 original_image: None,
                 transformed_image: None,
-                pipeline: TransformPipeline::default(),
-                redo_stack: Vec::new(),
+                history: TransformHistory::default(),
                 save_format: SaveFormat::default(),
                 save_header_version: SaveHeaderVersion::default(),
                 source_metadata: None,
@@ -426,7 +497,7 @@ impl BmpViewerApp {
             }
         };
 
-        self.document.pipeline.clear();
+        self.document.history_mut().clear();
         self.document.save_format = SaveFormat::from_bmp(&bmp);
         self.document.save_header_version = SaveHeaderVersion::from_bmp(&bmp);
         self.document.source_metadata = SourceMetadata::from_bmp(&bmp);
@@ -480,8 +551,8 @@ impl BmpViewerApp {
                     return;
                 }
             };
-            self.document.pipeline.push(op, Some(current));
-            self.document.redo_stack.clear();
+            let checkpoint_image = current.clone();
+            self.document.history_mut().record_apply(op, Some(&checkpoint_image));
             self.update_transformed_image(ctx, next);
         }
     }
@@ -502,9 +573,9 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn undo_transform(&mut self, ctx: &egui::Context) {
-        if let Some(op) = self.document.pipeline.pop() {
+        if let Some(op) = self.document.history_mut().pop_undo() {
             if let Some(inv) = op.inverse() {
-                self.document.redo_stack.push(op);
+                self.document.history_mut().push_redo(op);
                 // O(1) path: apply the inverse transform.
                 if let Some(current) = self.document.transformed_image.as_ref() {
                     let result = match inv.apply(current) {
@@ -517,10 +588,10 @@ impl BmpViewerApp {
                     self.update_transformed_image(ctx, result);
                 }
             } else {
-                self.document.redo_stack.push(op);
+                self.document.history_mut().push_redo(op);
                 // Lossy transform: replay the remaining pipeline from the original image.
                 if let Some(original) = self.document.original_image.as_ref() {
-                    let (result, warnings) = self.document.pipeline.apply_with_warnings(original);
+                    let (result, warnings) = self.document.history().apply_with_warnings(original);
                     if !warnings.is_empty() {
                         self.status = warnings.join(" ");
                     }
@@ -533,7 +604,7 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn redo_transform(&mut self, ctx: &egui::Context) {
-        if let Some(op) = self.document.redo_stack.pop()
+        if let Some(op) = self.document.history_mut().pop_redo()
             && let Some(current) = self.document.transformed_image.as_ref()
         {
             if let Err(err) = Self::validate_embed_fits_current_image(current, &op) {
@@ -550,7 +621,8 @@ impl BmpViewerApp {
                     return;
                 }
             };
-            self.document.pipeline.push(op, Some(current));
+            let checkpoint_image = current.clone();
+            self.document.history_mut().record_apply(op, Some(&checkpoint_image));
             self.update_transformed_image(ctx, next);
         }
     }

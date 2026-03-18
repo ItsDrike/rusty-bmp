@@ -216,26 +216,25 @@ impl BmpViewerApp {
                         });
                     });
 
-                    egui::CollapsingHeader::new(if self.document.pipeline.is_empty() {
+                    egui::CollapsingHeader::new(if self.document.history().is_empty() {
                         "Transforms History".to_owned()
                     } else {
-                        format!("Transforms History ({})", self.document.pipeline.len())
+                        format!("Transforms History ({})", self.document.history().len())
                     })
                     .default_open(true)
                     .show(ui, |ui| {
-                        let has_history = !self.document.pipeline.is_empty();
-                        let has_redo = !self.document.redo_stack.is_empty();
+                        let history = self.document.history();
+                        let has_history = !history.is_empty();
+                        let has_redo = history.has_redo();
 
                         if !has_history && !has_redo {
                             ui.label("Apply a transformation to see transform history.");
                         } else {
                             ui.horizontal(|ui| {
                                 let can_undo = has_history;
-                                let undo_tooltip =
-                                    self.document.pipeline.ops().last().map_or_else(
-                                        || "Nothing to undo".to_owned(),
-                                        |op| format!("Undo {op} (Ctrl+Z)"),
-                                    );
+                                let undo_tooltip = history
+                                    .last_applied()
+                                    .map_or_else(|| "Nothing to undo".to_owned(), |op| format!("Undo {op} (Ctrl+Z)"));
                                 if ui
                                     .add_enabled(can_undo, egui::Button::new("Undo").small())
                                     .on_hover_text(&undo_tooltip)
@@ -245,7 +244,7 @@ impl BmpViewerApp {
                                 }
 
                                 let can_redo = has_redo;
-                                let redo_tooltip = self.document.redo_stack.last().map_or_else(
+                                let redo_tooltip = history.last_redo().map_or_else(
                                     || "Nothing to redo".to_owned(),
                                     |op| format!("Redo {op} (Ctrl+Shift+Z)"),
                                 );
@@ -267,7 +266,7 @@ impl BmpViewerApp {
                                 }
                             });
 
-                            for (i, op) in self.document.pipeline.ops().iter().enumerate() {
+                            for (i, op) in history.ops().iter().enumerate() {
                                 ui.horizontal(|ui| {
                                     ui.monospace(format!("{}.", i + 1));
                                     ui.label(op.to_string());
@@ -373,11 +372,10 @@ impl BmpViewerApp {
             self.transforms.kernel.open = true;
         }
         if let Some(index) = actions.remove_transform {
-            self.document.pipeline.remove(index);
-            self.document.redo_stack.clear();
+            self.document.history_mut().remove(index);
             self.steganography.overwrite_warned = false;
-            if let Some(original) = &self.document.original_image {
-                let (result, warnings) = self.document.pipeline.apply_with_warnings(original);
+            if let Some(original) = self.document.original_image.as_ref() {
+                let (result, warnings) = self.document.history().apply_with_warnings(original);
                 if !warnings.is_empty() {
                     self.status = warnings.join(" ");
                 }
@@ -397,8 +395,7 @@ impl BmpViewerApp {
             self.redo_transform(ctx);
         }
         if actions.do_clear {
-            self.document.pipeline.clear();
-            self.document.redo_stack.clear();
+            self.document.history_mut().clear();
             self.steganography.overwrite_warned = false;
             if let Some(original) = &self.document.original_image {
                 let result = original.clone();
