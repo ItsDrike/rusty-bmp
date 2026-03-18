@@ -64,7 +64,7 @@ impl BmpViewerApp {
                 ui.separator();
                 egui::ScrollArea::vertical().id_salt("inspector_scroll").show(ui, |ui| {
                     egui::CollapsingHeader::new("Edit").default_open(true).show(ui, |ui| {
-                        let has_image = self.document.transformed_image.is_some();
+                        let has_image = self.document.transformed_image().is_some();
                         if !has_image {
                             ui.label("Load an image to enable editing tools.");
                             return;
@@ -216,14 +216,19 @@ impl BmpViewerApp {
                         });
                     });
 
-                    egui::CollapsingHeader::new(if self.document.history().is_empty() {
-                        "Transforms History".to_owned()
-                    } else {
-                        format!("Transforms History ({})", self.document.history().len())
+                    egui::CollapsingHeader::new(match self.document.history() {
+                        Some(history) if !history.is_empty() => {
+                            format!("Transforms History ({})", history.len())
+                        }
+                        _ => "Transforms History".to_owned(),
                     })
                     .default_open(true)
                     .show(ui, |ui| {
-                        let history = self.document.history();
+                        let Some(history) = self.document.history() else {
+                            ui.label("Load an image to enable transform history.");
+                            return;
+                        };
+
                         let has_history = !history.is_empty();
                         let has_redo = history.has_redo();
 
@@ -372,10 +377,12 @@ impl BmpViewerApp {
             self.transforms.kernel.open = true;
         }
         if let Some(index) = actions.remove_transform {
-            self.document.history_mut().remove(index);
+            if let Some(history) = self.document.history_mut() {
+                history.remove(index);
+            }
             self.steganography.overwrite_warned = false;
-            if let Some(original) = self.document.original_image.as_ref() {
-                let (result, warnings) = self.document.history().apply_with_warnings(original);
+            if let (Some(original), Some(history)) = (self.document.original_image(), self.document.history()) {
+                let (result, warnings) = history.apply_with_warnings(original);
                 if !warnings.is_empty() {
                     self.status = warnings.join(" ");
                 }
@@ -395,9 +402,11 @@ impl BmpViewerApp {
             self.redo_transform(ctx);
         }
         if actions.do_clear {
-            self.document.history_mut().clear();
+            if let Some(history) = self.document.history_mut() {
+                history.clear();
+            }
             self.steganography.overwrite_warned = false;
-            if let Some(original) = &self.document.original_image {
+            if let Some(original) = self.document.original_image() {
                 let result = original.clone();
                 self.update_transformed_image(ctx, result);
             }

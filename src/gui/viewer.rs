@@ -132,8 +132,7 @@ impl BmpViewerApp {
                 if self.transforms.crop.open {
                     if let Some((image_width, image_height)) = self
                         .document
-                        .transformed_image
-                        .as_ref()
+                        .transformed_image()
                         .map(|image| (image.width(), image.height()))
                     {
                         let (cx, cy, cw, ch) = self.crop_rect_for_image(image_width, image_height);
@@ -306,7 +305,7 @@ impl BmpViewerApp {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let py = (rel.y / effective_zoom) as u32;
 
-                    if let Some(image) = &self.document.transformed_image
+                    if let Some(image) = self.document.transformed_image()
                         && let Some(rgba) = image.pixel(px, py)
                     {
                         self.viewport.hovered_pixel = Some((px, py, rgba));
@@ -377,7 +376,7 @@ impl BmpViewerApp {
     }
 
     fn ensure_checker_texture(&mut self, ctx: &egui::Context, tile_img_px: u32) {
-        if self.document.transformed_image.is_none() {
+        if self.document.transformed_image().is_none() {
             self.viewport.checker_texture = None;
             self.viewport.checker_texture_tile_img_px = 0;
             return;

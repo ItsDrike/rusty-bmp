@@ -67,7 +67,7 @@ impl BmpViewerApp {
                         }
                     });
                 let save_as_clicked = ui.button("Save As...").clicked();
-                let can_save = self.document.loaded_path.is_some() && self.document.transformed_image.is_some();
+                let can_save = self.document.loaded_path().is_some() && self.document.transformed_image().is_some();
                 let save_clicked = ui.add_enabled(can_save, egui::Button::new("Save")).clicked();
                 if save_as_clicked {
                     self.save_current(ctx);

@@ -53,15 +53,32 @@ pub(crate) struct DocumentState {
     pub(crate) image_stats: String,
     pub(crate) decoded_stats: String,
     pub(crate) palette_colors: Vec<[u8; 4]>,
-    /// The decoded image before any transforms (kept for pipeline reapply).
-    pub(crate) original_image: Option<DecodedImage>,
-    pub(crate) transformed_image: Option<DecodedImage>,
-    history: TransformHistory,
     pub(crate) save_format: SaveFormat,
     pub(crate) save_header_version: SaveHeaderVersion,
-    pub(crate) source_metadata: Option<SourceMetadata>,
-    /// Path of the currently loaded file (for "Save" without a dialog).
-    pub(crate) loaded_path: Option<PathBuf>,
+    loaded: Option<LoadedDocument>,
+}
+
+/// Per-file session state that only exists while an image is loaded.
+///
+/// Keeping these fields in one struct prevents partially-loaded document
+/// states (for example, history without an image, or a transformed image
+/// without a corresponding original baseline).
+struct LoadedDocument {
+    /// Decoded image as originally loaded from disk.
+    ///
+    /// This snapshot is kept immutable so lossy operations can be replayed from
+    /// a stable baseline when rebuilding the transform pipeline (for example,
+    /// after removing a middle transform or undoing a non-invertible step).
+    /// The decoded image before any transforms (kept for pipeline reapply).
+    original_image: DecodedImage,
+    /// Current image after applying all transforms in `history`.
+    transformed_image: DecodedImage,
+    /// Applied transform pipeline and redo stack for this loaded session.
+    history: TransformHistory,
+    /// Source BMP color metadata preserved for re-encoding, when available.
+    source_metadata: Option<SourceMetadata>,
+    /// Path of the loaded file used by overwrite-save actions.
+    loaded_path: PathBuf,
 }
 
 #[derive(Default)]
@@ -72,12 +89,66 @@ pub(crate) struct TransformHistory {
 }
 
 impl DocumentState {
-    pub(crate) const fn history(&self) -> &TransformHistory {
-        &self.history
+    pub(crate) fn load(
+        &mut self,
+        decoded: DecodedImage,
+        loaded_path: PathBuf,
+        source_metadata: Option<SourceMetadata>,
+    ) {
+        self.loaded = Some(LoadedDocument {
+            original_image: decoded.clone(),
+            transformed_image: decoded,
+            history: TransformHistory::default(),
+            source_metadata,
+            loaded_path,
+        });
     }
 
-    pub(crate) const fn history_mut(&mut self) -> &mut TransformHistory {
-        &mut self.history
+    pub(crate) fn transformed_image(&self) -> Option<&DecodedImage> {
+        self.loaded.as_ref().map(|doc| &doc.transformed_image)
+    }
+
+    pub(crate) fn original_image(&self) -> Option<&DecodedImage> {
+        self.loaded.as_ref().map(|doc| &doc.original_image)
+    }
+
+    pub(crate) fn set_transformed_image(&mut self, image: DecodedImage) -> bool {
+        if let Some(doc) = self.loaded.as_mut() {
+            doc.transformed_image = image;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn source_metadata(&self) -> Option<&SourceMetadata> {
+        self.loaded.as_ref().and_then(|doc| doc.source_metadata.as_ref())
+    }
+
+    pub(crate) fn source_metadata_cloned(&self) -> Option<SourceMetadata> {
+        self.loaded.as_ref().and_then(|doc| doc.source_metadata.clone())
+    }
+
+    pub(crate) fn loaded_path(&self) -> Option<&Path> {
+        self.loaded.as_ref().map(|doc| doc.loaded_path.as_path())
+    }
+
+    pub(crate) fn loaded_path_cloned(&self) -> Option<PathBuf> {
+        self.loaded.as_ref().map(|doc| doc.loaded_path.clone())
+    }
+
+    pub(crate) fn set_loaded_path(&mut self, path: PathBuf) {
+        if let Some(doc) = self.loaded.as_mut() {
+            doc.loaded_path = path;
+        }
+    }
+
+    pub(crate) fn history(&self) -> Option<&TransformHistory> {
+        self.loaded.as_ref().map(|doc| &doc.history)
+    }
+
+    pub(crate) fn history_mut(&mut self) -> Option<&mut TransformHistory> {
+        self.loaded.as_mut().map(|doc| &mut doc.history)
     }
 }
 
@@ -449,13 +520,9 @@ impl Default for BmpViewerApp {
                 image_stats: String::new(),
                 decoded_stats: String::new(),
                 palette_colors: Vec::new(),
-                original_image: None,
-                transformed_image: None,
-                history: TransformHistory::default(),
                 save_format: SaveFormat::default(),
                 save_header_version: SaveHeaderVersion::default(),
-                source_metadata: None,
-                loaded_path: None,
+                loaded: None,
             },
             viewport: ViewportState {
                 texture: None,
@@ -581,7 +648,8 @@ impl BmpViewerApp {
         let color =
             egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.rgba());
         self.viewport.texture = Some(ctx.load_texture(label, color, egui::TextureOptions::NEAREST));
-        self.document.transformed_image = Some(image);
+        let updated = self.document.set_transformed_image(image);
+        debug_assert!(updated, "display image requires a loaded document session");
     }
 
     pub(crate) fn load_path(&mut self, ctx: &egui::Context, path: &Path) {
@@ -609,10 +677,10 @@ impl BmpViewerApp {
             }
         };
 
-        self.document.history_mut().clear();
         self.document.save_format = SaveFormat::from_bmp(&bmp);
         self.document.save_header_version = SaveHeaderVersion::from_bmp(&bmp);
-        self.document.source_metadata = SourceMetadata::from_bmp(&bmp);
+        self.document
+            .load(decoded.clone(), path.to_path_buf(), SourceMetadata::from_bmp(&bmp));
         let info = gui::metadata::format_bmp_info_sections(&bmp, &decoded);
         self.document.image_stats = info.image_stats;
         self.document.decoded_stats = info.decoded_stats;
@@ -623,12 +691,10 @@ impl BmpViewerApp {
         self.steganography.transform_confirm_pending = None;
         self.steganography.save_confirm_pending = None;
         self.steganography.save_confirm_reason = None;
-        self.document.original_image = Some(decoded.clone());
         // New image load resets viewport to fit.
         self.viewport.zoom = ZoomMode::Fit;
         self.viewport.pan_offset = egui::Vec2::ZERO;
         self.set_display_image(ctx, decoded, path.to_string_lossy().to_string());
-        self.document.loaded_path = Some(path.to_path_buf());
         self.status = format!("Loaded {}", path.display());
     }
 
@@ -644,7 +710,7 @@ impl BmpViewerApp {
     }
 
     fn apply_transform_now(&mut self, ctx: &egui::Context, op: ImageTransform) {
-        if let Some(current) = self.document.transformed_image.as_ref() {
+        if let Some(current) = self.document.transformed_image() {
             if matches!(op, ImageTransform::EmbedSteganography(_)) {
                 self.steganography.overwrite_warned = false;
             }
@@ -664,7 +730,9 @@ impl BmpViewerApp {
                 }
             };
             let checkpoint_image = current.clone();
-            self.document.history_mut().record_apply(op, Some(&checkpoint_image));
+            if let Some(history) = self.document.history_mut() {
+                history.record_apply(op, Some(&checkpoint_image));
+            }
             self.update_transformed_image(ctx, next);
         }
     }
@@ -685,39 +753,45 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn undo_transform(&mut self, ctx: &egui::Context) {
-        if let Some(op) = self.document.history_mut().pop_undo() {
-            if let Some(inv) = op.inverse() {
-                self.document.history_mut().push_redo(op);
-                // O(1) path: apply the inverse transform.
-                if let Some(current) = self.document.transformed_image.as_ref() {
-                    let result = match inv.apply(current) {
-                        Ok(result) => result,
-                        Err(err) => {
-                            self.status = format!("Undo failed while applying inverse: {err}");
-                            return;
-                        }
-                    };
-                    self.update_transformed_image(ctx, result);
-                }
-            } else {
-                self.document.history_mut().push_redo(op);
-                // Lossy transform: replay the remaining pipeline from the original image.
-                if let Some(original) = self.document.original_image.as_ref() {
-                    let (result, warnings) = self.document.history().apply_with_warnings(original);
-                    if !warnings.is_empty() {
-                        self.status = warnings.join(" ");
-                    }
-                    self.update_transformed_image(ctx, result);
-                }
+        let Some(op) = self.document.history_mut().and_then(TransformHistory::pop_undo) else {
+            return;
+        };
+
+        if let Some(inv) = op.inverse() {
+            if let Some(history) = self.document.history_mut() {
+                history.push_redo(op);
             }
-            // After undo, reset the overwrite warning so it can fire again if needed.
-            self.steganography.overwrite_warned = false;
+            // O(1) path: apply the inverse transform.
+            if let Some(current) = self.document.transformed_image() {
+                let result = match inv.apply(current) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        self.status = format!("Undo failed while applying inverse: {err}");
+                        return;
+                    }
+                };
+                self.update_transformed_image(ctx, result);
+            }
+        } else {
+            if let Some(history) = self.document.history_mut() {
+                history.push_redo(op);
+            }
+            // Lossy transform: replay the remaining pipeline from the original image.
+            if let (Some(original), Some(history)) = (self.document.original_image(), self.document.history()) {
+                let (result, warnings) = history.apply_with_warnings(original);
+                if !warnings.is_empty() {
+                    self.status = warnings.join(" ");
+                }
+                self.update_transformed_image(ctx, result);
+            }
         }
+        // After undo, reset the overwrite warning so it can fire again if needed.
+        self.steganography.overwrite_warned = false;
     }
 
     pub(crate) fn redo_transform(&mut self, ctx: &egui::Context) {
-        if let Some(op) = self.document.history_mut().pop_redo()
-            && let Some(current) = self.document.transformed_image.as_ref()
+        if let Some(op) = self.document.history_mut().and_then(TransformHistory::pop_redo)
+            && let Some(current) = self.document.transformed_image()
         {
             if let Err(err) = Self::validate_embed_fits_current_image(current, &op) {
                 self.status = format!(
@@ -734,7 +808,9 @@ impl BmpViewerApp {
                 }
             };
             let checkpoint_image = current.clone();
-            self.document.history_mut().record_apply(op, Some(&checkpoint_image));
+            if let Some(history) = self.document.history_mut() {
+                history.record_apply(op, Some(&checkpoint_image));
+            }
             self.update_transformed_image(ctx, next);
         }
     }
@@ -742,10 +818,8 @@ impl BmpViewerApp {
     /// Returns whether the currently selected save settings preserve the exact
     /// embedded steganography payload, determined by an in-memory roundtrip.
     fn save_preserves_current_steg_payload(&self) -> Result<bool, String> {
-        let (Some(image), Some(info)) = (
-            self.document.transformed_image.as_ref(),
-            self.steganography.detected.as_ref(),
-        ) else {
+        let (Some(image), Some(info)) = (self.document.transformed_image(), self.steganography.detected.as_ref())
+        else {
             return Ok(true);
         };
 
@@ -756,7 +830,7 @@ impl BmpViewerApp {
             image,
             self.document.save_format,
             self.document.save_header_version,
-            self.document.source_metadata.as_ref(),
+            self.document.source_metadata(),
         )
         .map_err(|e| format!("failed to encode save-check roundtrip: {e}"))?;
 
@@ -774,7 +848,7 @@ impl BmpViewerApp {
 
     /// Fast save-quality checks that avoid costly encode+decode roundtrips.
     fn save_quality_warning_reasons(&self) -> Vec<String> {
-        let Some(image) = self.document.transformed_image.as_ref() else {
+        let Some(image) = self.document.transformed_image() else {
             return Vec::new();
         };
 
@@ -824,7 +898,7 @@ impl BmpViewerApp {
             return;
         }
 
-        if self.document.transformed_image.is_none() {
+        if self.document.transformed_image().is_none() {
             "Nothing to save".clone_into(&mut self.status);
             return;
         }
@@ -870,13 +944,13 @@ impl BmpViewerApp {
             return;
         }
 
-        let Some(image) = self.document.transformed_image.as_ref() else {
+        let Some(image) = self.document.transformed_image() else {
             "Nothing to save".clone_into(&mut self.status);
             return;
         };
 
         let image = image.clone();
-        let source = self.document.source_metadata.clone();
+        let source = self.document.source_metadata_cloned();
         let format = self.document.save_format;
         let header = self.document.save_header_version;
         let save_path = path.to_path_buf();
@@ -928,7 +1002,7 @@ impl BmpViewerApp {
         match done.result {
             Ok(()) => {
                 self.path_input = done.path.display().to_string();
-                self.document.loaded_path = Some(done.path.clone());
+                self.document.set_loaded_path(done.path.clone());
                 self.status = format!("Saved {} ({}, {})", done.path.display(), done.format, done.header);
                 // Re-load from disk so metadata, original_image, and pipeline
                 // all reflect the file as it was actually written.
@@ -941,7 +1015,7 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn save_current(&mut self, ctx: &egui::Context) {
-        if self.document.transformed_image.is_none() {
+        if self.document.transformed_image().is_none() {
             "Nothing to save".clone_into(&mut self.status);
             return;
         }
@@ -959,7 +1033,7 @@ impl BmpViewerApp {
     }
 
     pub(crate) fn save_overwrite(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.document.loaded_path.clone() else {
+        let Some(path) = self.document.loaded_path_cloned() else {
             "No file to overwrite".clone_into(&mut self.status);
             return;
         };

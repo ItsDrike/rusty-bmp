@@ -11,7 +11,7 @@ impl BmpViewerApp {
             return None;
         }
 
-        let Some(current) = self.document.transformed_image.as_ref() else {
+        let Some(current) = self.document.transformed_image() else {
             self.transforms.translate.open = false;
             return None;
         };

@@ -7,7 +7,7 @@ use crate::BmpViewerApp;
 
 impl BmpViewerApp {
     pub(crate) fn open_resize_window(&mut self) {
-        if let Some(img) = self.document.transformed_image.as_ref() {
+        if let Some(img) = self.document.transformed_image() {
             self.transforms.resize.width_input = img.width().to_string();
             self.transforms.resize.height_input = img.height().to_string();
             self.transforms.resize.open = true;
@@ -21,7 +21,7 @@ impl BmpViewerApp {
             return None;
         }
 
-        let Some(current) = self.document.transformed_image.as_ref() else {
+        let Some(current) = self.document.transformed_image() else {
             self.transforms.resize.open = false;
             return None;
         };

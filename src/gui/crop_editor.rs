@@ -7,7 +7,7 @@ use crate::BmpViewerApp;
 
 impl BmpViewerApp {
     pub(crate) fn open_crop_window(&mut self) {
-        let Some(image) = self.document.transformed_image.as_ref() else {
+        let Some(image) = self.document.transformed_image() else {
             "Load an image first".clone_into(&mut self.status);
             return;
         };
@@ -25,7 +25,7 @@ impl BmpViewerApp {
             return None;
         }
 
-        let Some(image) = self.document.transformed_image.as_ref() else {
+        let Some(image) = self.document.transformed_image() else {
             self.transforms.crop.open = false;
             return None;
         };
