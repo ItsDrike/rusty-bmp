@@ -1,3 +1,5 @@
+//! "Inspect steganography" window for detection, extraction, and removal.
+
 use eframe::egui;
 
 use bmp::runtime::{
@@ -5,10 +7,11 @@ use bmp::runtime::{
     transform::{ImageTransform, RemoveSteganography},
 };
 
-use crate::BmpViewerApp;
+use crate::gui::BmpViewerApp;
 
 impl BmpViewerApp {
-    pub(crate) fn show_steg_inspect_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
+    /// Renders the steganography inspection window and returns removal when requested.
+    pub(in crate::gui) fn show_steg_inspect_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
         if !self.steganography.inspect_open {
             return None;
         }
@@ -153,7 +156,7 @@ impl BmpViewerApp {
             && let (Some(img), Some(info)) = (self.document.transformed_image(), &self.steganography.detected)
         {
             let result = steganography::extract(img, info).map_err(|e| e.to_string());
-            self.steganography.extracted = Some(result);
+            self.steganography.set_extracted(result);
         }
 
         if do_remove && let Some(info) = self.steganography.detected.as_ref() {

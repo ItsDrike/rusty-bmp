@@ -1,12 +1,29 @@
+//! Translation tool state and dialog UI.
+
 use eframe::egui;
 use eframe::egui::color_picker;
 
 use bmp::runtime::transform::{ImageTransform, Translate, TranslateMode};
 
-use crate::BmpViewerApp;
+use crate::gui::BmpViewerApp;
+
+/// State for translate dialog.
+pub(in crate::gui) struct TranslateToolState {
+    /// Whether the translate window is open.
+    pub(in crate::gui) open: bool,
+    /// Horizontal translation in pixels.
+    pub(in crate::gui) dx: i32,
+    /// Vertical translation in pixels.
+    pub(in crate::gui) dy: i32,
+    /// Crop/expand mode for translation.
+    pub(in crate::gui) mode: TranslateMode,
+    /// Fill color for uncovered pixels after translation.
+    pub(in crate::gui) fill: [u8; 4],
+}
 
 impl BmpViewerApp {
-    pub(crate) fn show_translate_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
+    /// Renders the translate dialog and returns a translate transform when applied.
+    pub(in crate::gui) fn show_translate_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
         if !self.transforms.translate.open {
             return None;
         }

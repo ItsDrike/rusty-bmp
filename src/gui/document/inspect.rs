@@ -1,3 +1,5 @@
+//! Formatting helpers and cached inspection data shown in the inspector panel.
+
 use std::fmt::Write as _;
 
 use bmp::{
@@ -5,9 +7,27 @@ use bmp::{
     runtime::decode::DecodedImage,
 };
 
-pub struct BmpInfoSections {
-    pub image_stats: String,
-    pub decoded_stats: String,
+pub(super) struct BmpInfoSections {
+    pub(super) image_stats: String,
+    pub(super) decoded_stats: String,
+}
+
+#[derive(Default)]
+/// UI-facing metadata derived from the currently loaded BMP.
+pub(in crate::gui) struct DocumentInspection {
+    pub(in crate::gui) image_stats: String,
+    pub(in crate::gui) decoded_stats: String,
+    pub(in crate::gui) palette_colors: Vec<[u8; 4]>,
+}
+
+/// Extracts any color table entries for palette-based BMP variants.
+pub(super) fn extract_palette_colors(bmp: &Bmp) -> Vec<[u8; 4]> {
+    match bmp {
+        Bmp::Core(data) => data.color_table.iter().map(|c| [c.red, c.green, c.blue, 255]).collect(),
+        Bmp::Info(data) => data.color_table.iter().map(|c| [c.red, c.green, c.blue, 255]).collect(),
+        Bmp::V4(data) => data.color_table.iter().map(|c| [c.red, c.green, c.blue, 255]).collect(),
+        Bmp::V5(data) => data.color_table.iter().map(|c| [c.red, c.green, c.blue, 255]).collect(),
+    }
 }
 
 /// Formats an integer with thousands grouping using commas.
@@ -162,7 +182,8 @@ fn write_common_section(
     let _ = writeln!(out, "Pixel data offset: {}", format_bytes(u64::from(pixel_data_offset)));
 }
 
-pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSections {
+/// Formats the inspector's human-readable BMP metadata sections.
+pub(super) fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSections {
     let mut out = String::new();
     match bmp {
         Bmp::Core(data) => {
@@ -274,12 +295,25 @@ pub fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> BmpInfoSec
         }
     }
 
+    let encoded_bytes = encoded_pixel_bytes(bmp);
     let mut decoded_stats = String::new();
-    write_decode_stats(&mut decoded_stats, decoded, encoded_pixel_bytes(bmp));
+    write_decode_stats(&mut decoded_stats, decoded, encoded_bytes);
 
     BmpInfoSections {
         image_stats: out,
         decoded_stats,
+    }
+}
+
+impl DocumentInspection {
+    /// Builds inspector-facing derived data for a newly loaded BMP.
+    pub(in crate::gui) fn from_bmp(bmp: &Bmp, decoded: &DecodedImage) -> Self {
+        let info = format_bmp_info_sections(bmp, decoded);
+        Self {
+            image_stats: info.image_stats,
+            decoded_stats: info.decoded_stats,
+            palette_colors: extract_palette_colors(bmp),
+        }
     }
 }
 

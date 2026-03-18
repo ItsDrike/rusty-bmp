@@ -1,15 +1,20 @@
-mod crop_editor;
-mod kernel_editor;
-pub mod metadata;
-pub mod palette;
-mod resize_editor;
-mod rotate_editor;
-mod side_panel;
-mod skew_editor;
-mod steg_embed_window;
-mod steg_inspect_window;
-mod toolbar;
-mod translate_editor;
-mod utils;
-mod viewer;
-mod zoom_bar;
+//! GUI application shell and feature modules for the BMP viewer.
+
+mod app;
+mod document;
+mod panels;
+mod save;
+mod session;
+mod steganography;
+mod tools;
+
+use app::BmpViewerApp;
+
+pub fn run() -> Result<(), eframe::Error> {
+    let options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "BMP Viewer",
+        options,
+        Box::new(|_cc| Ok(Box::<app::BmpViewerApp>::default())),
+    )
+}

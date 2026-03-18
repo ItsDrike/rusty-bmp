@@ -1,11 +1,26 @@
+//! Arbitrary-angle rotation tool state and dialog UI.
+
 use eframe::egui;
 
 use bmp::runtime::transform::{ImageTransform, RotateAny, RotationInterpolation};
 
-use crate::BmpViewerApp;
+use crate::gui::BmpViewerApp;
+
+/// State for arbitrary-angle rotation dialog.
+pub(in crate::gui) struct RotateToolState {
+    /// Whether the arbitrary-angle rotation window is open.
+    pub(in crate::gui) open: bool,
+    /// Angle in degrees used by arbitrary-angle rotation.
+    pub(in crate::gui) angle: f32,
+    /// Interpolation method for arbitrary-angle rotation.
+    pub(in crate::gui) interpolation: RotationInterpolation,
+    /// Whether to expand output canvas to fit the full rotated image.
+    pub(in crate::gui) expand: bool,
+}
 
 impl BmpViewerApp {
-    pub(crate) fn show_rotate_any_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
+    /// Renders the arbitrary-angle rotation dialog and returns its transform when applied.
+    pub(in crate::gui) fn show_rotate_any_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
         if !self.transforms.rotate.open {
             return None;
         }

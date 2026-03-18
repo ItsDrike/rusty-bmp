@@ -1,22 +1,44 @@
+//! Resize tool state and resize dialog UI.
+
 use eframe::egui;
 
 use bmp::runtime::transform::{ImageTransform, Resize, RotationInterpolation};
 
-use super::utils::{scaled_dim, scaled_dim_by_factor};
-use crate::BmpViewerApp;
+use crate::gui::BmpViewerApp;
 
-impl BmpViewerApp {
-    pub(crate) fn open_resize_window(&mut self) {
-        if let Some(img) = self.document.transformed_image() {
-            self.transforms.resize.width_input = img.width().to_string();
-            self.transforms.resize.height_input = img.height().to_string();
-            self.transforms.resize.open = true;
-        } else {
-            "Load an image first".clone_into(&mut self.status);
-        }
+use super::math::{scaled_dim, scaled_dim_by_factor};
+
+/// State for resize dialog.
+pub(in crate::gui) struct ResizeToolState {
+    /// Whether the resize window is open.
+    pub(in crate::gui) open: bool,
+    /// Target width input for resize dialog.
+    pub(in crate::gui) width_input: String,
+    /// Target height input for resize dialog.
+    pub(in crate::gui) height_input: String,
+    /// Keep source aspect ratio when applying resize.
+    pub(in crate::gui) keep_aspect: bool,
+    /// Interpolation method for resize.
+    pub(in crate::gui) interpolation: RotationInterpolation,
+}
+
+impl ResizeToolState {
+    /// Initializes the resize dialog inputs from the current image dimensions.
+    pub(in crate::gui) fn open_for_image(&mut self, width: u32, height: u32) {
+        self.width_input = width.to_string();
+        self.height_input = height.to_string();
+        self.open = true;
     }
 
-    pub(crate) fn show_resize_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
+    /// Parses and validates the dialog inputs against the current image size.
+    fn validated_dims(&self, cur_w: u32, cur_h: u32) -> Result<(u32, u32), &'static str> {
+        validate_resize_inputs(&self.width_input, &self.height_input, cur_w, cur_h, self.keep_aspect)
+    }
+}
+
+impl BmpViewerApp {
+    /// Renders the resize window and returns a resize transform when applied.
+    pub(in crate::gui) fn show_resize_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
         if !self.transforms.resize.open {
             return None;
         }
@@ -119,13 +141,7 @@ impl BmpViewerApp {
                     }
                 });
 
-                let validation = validate_resize_inputs(
-                    &self.transforms.resize.width_input,
-                    &self.transforms.resize.height_input,
-                    current.width(),
-                    current.height(),
-                    self.transforms.resize.keep_aspect,
-                );
+                let validation = self.transforms.resize.validated_dims(current.width(), current.height());
 
                 ui.add_space(6.0);
                 match &validation {
@@ -153,13 +169,7 @@ impl BmpViewerApp {
             return None;
         }
 
-        let Ok((width, height)) = validate_resize_inputs(
-            &self.transforms.resize.width_input,
-            &self.transforms.resize.height_input,
-            current.width(),
-            current.height(),
-            self.transforms.resize.keep_aspect,
-        ) else {
+        let Ok((width, height)) = self.transforms.resize.validated_dims(current.width(), current.height()) else {
             return None;
         };
 
@@ -175,6 +185,7 @@ impl BmpViewerApp {
     }
 }
 
+/// Validates resize text inputs and normalizes them into concrete target dimensions.
 fn validate_resize_inputs(
     width_input: &str,
     height_input: &str,

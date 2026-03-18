@@ -1,3 +1,5 @@
+//! Small geometry-only math helpers shared by crop and resize tools.
+
 /// Computes a dimension scaled to preserve an aspect ratio.
 ///
 /// This helper is used by the crop UI when "Keep aspect ratio" is enabled.
@@ -30,7 +32,7 @@
 ///
 /// An image with size 1920 x 1080 has an aspect ratio of 1080 / 1920.
 /// If the width becomes 400 and we want to keep the same ratio, the
-/// corresponding height is 255:
+/// corresponding height is 225:
 ///
 /// ```text
 /// assert_eq!(scaled_dim(400, 1080, 1920), 225); // maintain 16:9 aspect ratio

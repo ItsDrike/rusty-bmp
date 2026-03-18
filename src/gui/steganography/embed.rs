@@ -1,3 +1,5 @@
+//! "Embed steganography" window and its UI flow.
+
 use eframe::egui;
 
 use bmp::runtime::{
@@ -5,10 +7,11 @@ use bmp::runtime::{
     transform::{EmbedSteganography, ImageTransform},
 };
 
-use crate::BmpViewerApp;
+use crate::gui::BmpViewerApp;
 
 impl BmpViewerApp {
-    pub(crate) fn show_steg_embed_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
+    /// Renders the "Embed Steganography Data" window and returns the requested transform when applied.
+    pub(in crate::gui) fn show_steg_embed_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
         if !self.steganography.embed_open {
             return None;
         }

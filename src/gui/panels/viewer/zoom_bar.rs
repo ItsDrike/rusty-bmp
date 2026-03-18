@@ -1,12 +1,15 @@
+//! Bottom status bar for zoom controls and hovered-pixel details.
+
 use eframe::egui;
 
-use crate::{BmpViewerApp, ZoomMode};
+use super::ZoomMode;
+use crate::gui::BmpViewerApp;
 
 impl BmpViewerApp {
     /// Renders the bottom zoom status bar: zoom percentage, pixel info, Fit/1:1 buttons.
     ///
     /// Only shown when a texture is loaded.
-    pub(crate) fn show_zoom_bar(&mut self, ctx: &egui::Context) {
+    pub(in crate::gui) fn show_zoom_bar(&mut self, ctx: &egui::Context) {
         if self.viewport.texture.is_none() {
             return;
         }

@@ -1,11 +1,28 @@
+//! Skew/shear tool state and dialog UI.
+
 use eframe::egui;
 
 use bmp::runtime::transform::{ImageTransform, RotationInterpolation, Skew};
 
-use crate::BmpViewerApp;
+use crate::gui::BmpViewerApp;
+
+/// State for skew/shear dialog.
+pub(in crate::gui) struct SkewToolState {
+    /// Whether the skew/shear window is open.
+    pub(in crate::gui) open: bool,
+    /// X shear (%) used by skew dialog.
+    pub(in crate::gui) x_percent: f32,
+    /// Y shear (%) used by skew dialog.
+    pub(in crate::gui) y_percent: f32,
+    /// Interpolation method for skew.
+    pub(in crate::gui) interpolation: RotationInterpolation,
+    /// Whether to expand output canvas for skew.
+    pub(in crate::gui) expand: bool,
+}
 
 impl BmpViewerApp {
-    pub(crate) fn show_skew_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
+    /// Renders the skew dialog and returns a skew transform when applied.
+    pub(in crate::gui) fn show_skew_window(&mut self, ctx: &egui::Context) -> Option<ImageTransform> {
         if !self.transforms.skew.open {
             return None;
         }
@@ -74,7 +91,7 @@ impl BmpViewerApp {
 
                 let kx = self.transforms.skew.x_percent / 100.0;
                 let ky = self.transforms.skew.y_percent / 100.0;
-                let det = 1.0 - kx * ky;
+                let det: f32 = 1.0 - kx * ky;
 
                 ui.add_space(6.0);
                 if det.abs() < 1e-4 {
