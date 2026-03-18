@@ -246,7 +246,7 @@ impl BmpViewerApp {
                         // Fallback capture: if drag_started was not latched this frame,
                         // attempt to start crop interaction while already dragging.
                         if response.dragged_by(egui::PointerButton::Primary)
-                            && self.transforms.crop.drag_mode.is_none()
+                            && self.transforms.crop.drag.is_none()
                             && let Some(pointer) = response.interact_pointer_pos()
                             && start_crop_drag(
                                 self,
@@ -263,41 +263,33 @@ impl BmpViewerApp {
 
                         // Apply ongoing drag delta.
                         if response.dragged_by(egui::PointerButton::Primary)
-                            && let (Some(mode), Some(start_rect), Some(start_pos), Some(pointer)) = (
-                                self.transforms.crop.drag_mode,
-                                self.transforms.crop.drag_start_rect,
-                                self.transforms.crop.drag_start_image,
-                                response.interact_pointer_pos(),
-                            )
+                            && let (Some(drag), Some(pointer)) =
+                                (self.transforms.crop.drag, response.interact_pointer_pos())
                         {
                             crop_drag_captured = true;
                             let cur = screen_to_image(pointer, img_rect, effective_zoom);
                             #[allow(clippy::cast_possible_truncation)]
-                            let dx = (cur.x - start_pos.x).round() as i32;
+                            let dx = (cur.x - drag.start_image.x).round() as i32;
                             #[allow(clippy::cast_possible_truncation)]
-                            let dy = (cur.y - start_pos.y).round() as i32;
+                            let dy = (cur.y - drag.start_image.y).round() as i32;
                             let (nx, ny, nw, nh) =
-                                dragged_crop_rect(mode, start_rect, dx, dy, image_width, image_height);
+                                dragged_crop_rect(drag.mode, drag.start_rect, dx, dy, image_width, image_height);
                             self.set_crop_from_rect(nx, ny, nw, nh, image_width, image_height);
                         }
 
                         // Finish drag.
                         if response.drag_stopped_by(egui::PointerButton::Primary) {
-                            self.transforms.crop.drag_mode = None;
-                            self.transforms.crop.drag_start_image = None;
-                            self.transforms.crop.drag_start_rect = None;
+                            self.transforms.crop.drag = None;
                         }
                     }
                 } else {
-                    self.transforms.crop.drag_mode = None;
-                    self.transforms.crop.drag_start_image = None;
-                    self.transforms.crop.drag_start_rect = None;
+                    self.transforms.crop.drag = None;
                 }
 
                 // --- Drag to pan (only when crop interaction is not active) ---
                 let pan_drag = response.dragged_by(egui::PointerButton::Middle)
                     || (response.dragged_by(egui::PointerButton::Primary)
-                        && self.transforms.crop.drag_mode.is_none()
+                        && self.transforms.crop.drag.is_none()
                         && !crop_drag_captured);
                 if pan_drag {
                     self.viewport.pan_offset += response.drag_delta();
@@ -477,9 +469,11 @@ fn start_crop_drag(
         return false;
     };
 
-    app.transforms.crop.drag_mode = Some(mode);
-    app.transforms.crop.drag_start_rect = Some(start_rect);
-    app.transforms.crop.drag_start_image = Some(screen_to_image(pointer, img_rect, zoom));
+    app.transforms.crop.drag = Some(crate::CropDragState {
+        mode,
+        start_rect,
+        start_image: screen_to_image(pointer, img_rect, zoom),
+    });
     true
 }
 

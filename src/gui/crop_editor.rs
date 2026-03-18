@@ -16,9 +16,7 @@ impl BmpViewerApp {
         self.transforms.crop.y = (image.height().saturating_sub(1)) / 2;
         self.transforms.crop.width = image.width().max(1);
         self.transforms.crop.height = image.height().max(1);
-        self.transforms.crop.drag_mode = None;
-        self.transforms.crop.drag_start_image = None;
-        self.transforms.crop.drag_start_rect = None;
+        self.transforms.crop.drag = None;
         self.transforms.crop.open = true;
     }
 

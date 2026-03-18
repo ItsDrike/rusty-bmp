@@ -352,6 +352,17 @@ pub(crate) struct TonalAdjustState {
 }
 
 /// State for crop dialog and interactive crop handles in the viewer.
+#[derive(Clone, Copy)]
+pub(crate) struct CropDragState {
+    /// Active crop drag mode for visual crop manipulation.
+    pub(crate) mode: CropDragMode,
+    /// Pointer position in image coordinates at drag start.
+    pub(crate) start_image: egui::Pos2,
+    /// Crop rect (x, y, w, h) snapshot at drag start.
+    pub(crate) start_rect: (u32, u32, u32, u32),
+}
+
+/// State for crop dialog and interactive crop handles in the viewer.
 pub(crate) struct CropToolState {
     /// Whether the crop window is open.
     pub(crate) open: bool,
@@ -365,12 +376,8 @@ pub(crate) struct CropToolState {
     pub(crate) height: u32,
     /// Keep crop rectangle aspect ratio tied to the image aspect ratio.
     pub(crate) keep_aspect: bool,
-    /// Active crop drag mode for visual crop manipulation.
-    pub(crate) drag_mode: Option<CropDragMode>,
-    /// Pointer position in image coordinates at drag start.
-    pub(crate) drag_start_image: Option<egui::Pos2>,
-    /// Crop rect (x, y, w, h) snapshot at drag start.
-    pub(crate) drag_start_rect: Option<(u32, u32, u32, u32)>,
+    /// Active crop drag state for visual crop manipulation.
+    pub(crate) drag: Option<CropDragState>,
 }
 
 /// Steganography-related detection state and window inputs.
@@ -492,9 +499,7 @@ impl Default for BmpViewerApp {
                     width: 1,
                     height: 1,
                     keep_aspect: false,
-                    drag_mode: None,
-                    drag_start_image: None,
-                    drag_start_rect: None,
+                    drag: None,
                 },
                 tonal: TonalAdjustState {
                     brightness_input: 0,
