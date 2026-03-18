@@ -434,18 +434,31 @@ fn build_bmp_core(
 
 /// Metadata that can be preserved from a source BMP when saving as V4 or V5.
 /// This is extracted from the original loaded file and threaded through transforms.
-#[derive(Debug, Clone)]
-pub struct SourceMetadata {
-    /// Color space type from the source V4/V5 header.
-    pub cs_type: ColorSpaceType,
-    /// CIE XYZ endpoints (meaningful when `cs_type` is [`ColorSpaceType::CalibratedRgb`]).
-    pub endpoints: CieXyzTriple,
-    /// Gamma correction values (meaningful when `cs_type` is [`ColorSpaceType::CalibratedRgb`]).
-    pub gamma: GammaTriple,
-    /// Rendering intent (V5 only).
-    pub intent: u32,
-    /// ICC profile data (V5 only, when `cs_type` is [`ColorSpaceType::ProfileEmbedded`]/[`ColorSpaceType::ProfileLinked`]).
-    pub icc_profile: Option<Vec<u8>>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceMetadata {
+    /// The source image declares sRGB semantics.
+    ///
+    /// `intent` is only present when the source was a V5 bitmap.
+    SRgb { intent: Option<u32> },
+    /// The source image declares the legacy Windows color space.
+    ///
+    /// `intent` is only present when the source was a V5 bitmap.
+    WindowsColorSpace { intent: Option<u32> },
+    /// The source image carries calibrated RGB primaries and gamma values.
+    ///
+    /// `intent` is only present when the source was a V5 bitmap.
+    CalibratedRgb {
+        endpoints: CieXyzTriple,
+        gamma: GammaTriple,
+        intent: Option<u32>,
+    },
+    /// The source image is V5 and carries an embedded ICC profile payload.
+    EmbeddedProfile { profile: Vec<u8>, intent: u32 },
+    /// The source image is V5 and carries a linked ICC profile path payload.
+    ///
+    /// The payload is stored as raw bytes because BMP uses Windows ANSI here,
+    /// not UTF-8.
+    LinkedProfile { profile_path: Vec<u8>, intent: u32 },
 }
 
 impl SourceMetadata {
@@ -453,21 +466,98 @@ impl SourceMetadata {
     #[must_use]
     pub fn from_bmp(bmp: &Bmp) -> Option<Self> {
         match bmp {
-            Bmp::V4(v4) => Some(Self {
-                cs_type: v4.bmp_header.cs_type,
-                endpoints: v4.bmp_header.endpoints,
-                gamma: v4.bmp_header.gamma,
-                intent: 0,
-                icc_profile: None,
-            }),
-            Bmp::V5(v5) => Some(Self {
-                cs_type: v5.bmp_header.v4.cs_type,
-                endpoints: v5.bmp_header.v4.endpoints,
-                gamma: v5.bmp_header.v4.gamma,
-                intent: v5.bmp_header.intent,
-                icc_profile: v5.icc_profile.clone(),
-            }),
+            Bmp::V4(v4) => match v4.bmp_header.cs_type {
+                ColorSpaceType::SRgb => Some(Self::SRgb { intent: None }),
+                ColorSpaceType::WindowsColorSpace => Some(Self::WindowsColorSpace { intent: None }),
+                ColorSpaceType::CalibratedRgb => Some(Self::CalibratedRgb {
+                    endpoints: v4.bmp_header.endpoints,
+                    gamma: v4.bmp_header.gamma,
+                    intent: None,
+                }),
+                ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked | ColorSpaceType::Other(_) => None,
+            },
+            Bmp::V5(v5) => match v5.bmp_header.v4.cs_type {
+                ColorSpaceType::SRgb => Some(Self::SRgb {
+                    intent: Some(v5.bmp_header.intent),
+                }),
+                ColorSpaceType::WindowsColorSpace => Some(Self::WindowsColorSpace {
+                    intent: Some(v5.bmp_header.intent),
+                }),
+                ColorSpaceType::CalibratedRgb => Some(Self::CalibratedRgb {
+                    endpoints: v5.bmp_header.v4.endpoints,
+                    gamma: v5.bmp_header.v4.gamma,
+                    intent: Some(v5.bmp_header.intent),
+                }),
+                ColorSpaceType::ProfileEmbedded => Some(Self::EmbeddedProfile {
+                    profile: v5.icc_profile.clone().unwrap_or_default(),
+                    intent: v5.bmp_header.intent,
+                }),
+                ColorSpaceType::ProfileLinked => Some(Self::LinkedProfile {
+                    profile_path: v5.icc_profile.clone().unwrap_or_default(),
+                    intent: v5.bmp_header.intent,
+                }),
+                ColorSpaceType::Other(_) => None,
+            },
             _ => None,
+        }
+    }
+
+    const fn v4_header_fields(&self) -> (ColorSpaceType, CieXyzTriple, GammaTriple) {
+        match self {
+            Self::SRgb { .. } => (ColorSpaceType::SRgb, default_zeroed_endpoints(), default_zeroed_gamma()),
+            Self::WindowsColorSpace { .. } => (
+                ColorSpaceType::WindowsColorSpace,
+                default_zeroed_endpoints(),
+                default_zeroed_gamma(),
+            ),
+            Self::CalibratedRgb { endpoints, gamma, .. } => (ColorSpaceType::CalibratedRgb, *endpoints, *gamma),
+            Self::EmbeddedProfile { .. } | Self::LinkedProfile { .. } => {
+                (ColorSpaceType::SRgb, default_zeroed_endpoints(), default_zeroed_gamma())
+            }
+        }
+    }
+
+    fn v5_header_fields(&self) -> (ColorSpaceType, CieXyzTriple, GammaTriple, u32, Option<Vec<u8>>) {
+        match self {
+            Self::SRgb { intent } => (
+                ColorSpaceType::SRgb,
+                default_zeroed_endpoints(),
+                default_zeroed_gamma(),
+                intent.unwrap_or(0),
+                None,
+            ),
+            Self::WindowsColorSpace { intent } => (
+                ColorSpaceType::WindowsColorSpace,
+                default_zeroed_endpoints(),
+                default_zeroed_gamma(),
+                intent.unwrap_or(0),
+                None,
+            ),
+            Self::CalibratedRgb {
+                endpoints,
+                gamma,
+                intent,
+            } => (
+                ColorSpaceType::CalibratedRgb,
+                *endpoints,
+                *gamma,
+                intent.unwrap_or(0),
+                None,
+            ),
+            Self::EmbeddedProfile { profile, intent } => (
+                ColorSpaceType::ProfileEmbedded,
+                default_zeroed_endpoints(),
+                default_zeroed_gamma(),
+                *intent,
+                Some(profile.clone()),
+            ),
+            Self::LinkedProfile { profile_path, intent } => (
+                ColorSpaceType::ProfileLinked,
+                default_zeroed_endpoints(),
+                default_zeroed_gamma(),
+                *intent,
+                Some(profile_path.clone()),
+            ),
         }
     }
 }
@@ -518,17 +608,9 @@ fn build_bmp_v4(
     let pixel_offset = checked_sum(&[FileHeader::SIZE, dib_size, color_table_bytes])?;
     let file_size = checked_sum(&[pixel_offset, image_size])?;
 
-    // Determine color space metadata: use source if available, otherwise default to sRGB.
-    // For V4, ProfileEmbedded/ProfileLinked are not valid, so clamp to sRGB if source has those.
     let (cs_type, endpoints, gamma) = source.map_or_else(
         || (ColorSpaceType::SRgb, default_zeroed_endpoints(), default_zeroed_gamma()),
-        |src| {
-            let cs = match src.cs_type {
-                ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked => ColorSpaceType::SRgb,
-                other => other,
-            };
-            (cs, src.endpoints, src.gamma)
-        },
+        SourceMetadata::v4_header_fields,
     );
 
     Ok(Bmp::V4(BitmapV4Data {
@@ -571,25 +653,18 @@ fn build_bmp_v5(
     let pixel_offset = checked_sum(&[FileHeader::SIZE, dib_size, color_table_bytes])?;
     let pixel_end = checked_sum(&[pixel_offset, image_size])?;
 
-    // Determine metadata from source
-    let (cs_type, endpoints, gamma, intent) = source.map_or_else(
+    let (cs_type, endpoints, gamma, intent, icc_profile) = source.map_or_else(
         || {
             (
                 ColorSpaceType::SRgb,
                 default_zeroed_endpoints(),
                 default_zeroed_gamma(),
                 0,
+                None,
             )
         },
-        |src| (src.cs_type, src.endpoints, src.gamma, src.intent),
+        SourceMetadata::v5_header_fields,
     );
-
-    // Handle ICC profile: only include if cs_type is ProfileEmbedded or ProfileLinked
-    let icc_profile = if matches!(cs_type, ColorSpaceType::ProfileEmbedded | ColorSpaceType::ProfileLinked) {
-        source.and_then(|s| s.icc_profile.clone())
-    } else {
-        None
-    };
 
     // profile_data is offset from the beginning of the DIB header (i.e. from the start
     // of the DIB header size field, NOT from the start of the file).
@@ -1277,4 +1352,51 @@ pub fn save_bmp_ext(
     let mut writer = BufWriter::new(file);
     bmp.write_unchecked(&mut writer)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiny_image() -> DecodedImage {
+        DecodedImage::new(1, 1, vec![10, 20, 30, 255]).unwrap()
+    }
+
+    #[test]
+    fn v4_downgrades_profile_metadata_to_srgb() {
+        let source = SourceMetadata::EmbeddedProfile {
+            profile: vec![1, 2, 3, 4],
+            intent: 7,
+        };
+
+        let bmp =
+            encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::Rgb32, SaveHeaderVersion::V4, Some(&source)).unwrap();
+        let Bmp::V4(data) = bmp else {
+            panic!("expected V4 bitmap");
+        };
+
+        assert_eq!(data.bmp_header.cs_type, ColorSpaceType::SRgb);
+        assert_eq!(data.bmp_header.endpoints, default_zeroed_endpoints());
+        assert_eq!(data.bmp_header.gamma, default_zeroed_gamma());
+    }
+
+    #[test]
+    fn v5_preserves_linked_profile_metadata() {
+        let profile_path = vec![b'C', b':', b'\\', b'p', b'.', b'i', b'c', b'm', 0];
+        let source = SourceMetadata::LinkedProfile {
+            profile_path: profile_path.clone(),
+            intent: 3,
+        };
+
+        let bmp =
+            encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::Rgb32, SaveHeaderVersion::V5, Some(&source)).unwrap();
+        let Bmp::V5(data) = bmp else {
+            panic!("expected V5 bitmap");
+        };
+
+        assert_eq!(data.bmp_header.v4.cs_type, ColorSpaceType::ProfileLinked);
+        assert_eq!(data.bmp_header.intent, 3);
+        assert_eq!(data.icc_profile, Some(profile_path));
+        assert_eq!(SourceMetadata::from_bmp(&Bmp::V5(data)), Some(source));
+    }
 }
