@@ -31,7 +31,7 @@ mod pipeline;
 pub mod steganography;
 
 pub use color::{Brightness, Contrast, Grayscale, InvertColors, Sepia};
-pub use convolution::{ConvolutionCustom, ConvolutionFilter, ConvolutionPreset, Kernel};
+pub use convolution::{ConvolutionCustom, ConvolutionFilter, ConvolutionPreset, Kernel, KernelError};
 pub use geometry::{
     Crop, MirrorHorizontal, MirrorVertical, Resize, RotateAny, RotateLeft, RotateRight, RotationInterpolation, Skew,
     Translate, TranslateMode,

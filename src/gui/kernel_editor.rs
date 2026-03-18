@@ -236,7 +236,7 @@ impl BmpViewerApp {
             .parse()
             .map_err(|_| format!("Invalid bias: \"{}\"", self.transforms.kernel.bias.trim()))?;
 
-        Ok(Kernel::new(weights, n, divisor, bias))
+        Kernel::new(weights, n, divisor, bias).map_err(|err| err.to_string())
     }
 
     fn gaussian_row(size: usize) -> Vec<i32> {
