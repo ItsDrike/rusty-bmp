@@ -205,19 +205,10 @@ impl DecodedImage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CompressionDecoder {
-    Rgb,
-    Rle4,
-    Rle8,
-    BitFields,
-    Other(u32),
-}
-
 #[derive(Debug, Error)]
 pub enum DecodeError {
     #[error("unsupported compression for decode: {0:?}")]
-    UnsupportedCompression(CompressionDecoder),
+    UnsupportedCompression(Compression),
 
     #[error("invalid image dimensions: {width}x{height}")]
     InvalidDimensions { width: i32, height: i32 },
@@ -771,16 +762,6 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
         ),
     };
 
-    let decoder = match compression {
-        Compression::Rgb => CompressionDecoder::Rgb,
-        Compression::Rle4 => CompressionDecoder::Rle4,
-        Compression::Rle8 => CompressionDecoder::Rle8,
-        Compression::BitFields => CompressionDecoder::BitFields,
-        Compression::Jpeg => CompressionDecoder::Other(4),
-        Compression::Png => CompressionDecoder::Other(5),
-        Compression::Other(x) => CompressionDecoder::Other(x),
-    };
-
     if width_i32 <= 0 || height_i32 == 0 {
         return Err(DecodeError::InvalidDimensions {
             width: width_i32,
@@ -794,11 +775,11 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
 
     let height = height_i32.unsigned_abs() as usize;
 
-    let rgba = match decoder {
-        CompressionDecoder::Rgb => decode_rgb_pixels(pixel_data, width, height, top_down, bit_count, &palette)?,
-        CompressionDecoder::Rle8 => decode_rle8_pixels(pixel_data, width, height, top_down, &palette)?,
-        CompressionDecoder::Rle4 => decode_rle4_pixels(pixel_data, width, height, top_down, &palette)?,
-        CompressionDecoder::BitFields => {
+    let rgba = match compression {
+        Compression::Rgb => decode_rgb_pixels(pixel_data, width, height, top_down, bit_count, &palette)?,
+        Compression::Rle8 => decode_rle8_pixels(pixel_data, width, height, top_down, &palette)?,
+        Compression::Rle4 => decode_rle4_pixels(pixel_data, width, height, top_down, &palette)?,
+        Compression::BitFields => {
             let masks = if let Some(masks) = bitfields_masks {
                 masks
             } else {
@@ -810,7 +791,7 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
             };
             decode_bitfields_pixels(pixel_data, width, height, top_down, bit_count, masks)?
         }
-        CompressionDecoder::Other(x) => return Err(DecodeError::UnsupportedCompression(CompressionDecoder::Other(x))),
+        other => return Err(DecodeError::UnsupportedCompression(other)),
     };
 
     DecodedImage::new(
@@ -824,8 +805,10 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecodeError, DecodedImage, DecodedImageError, MAX_DECODED_RGBA_BYTES, rgba_output_len, scale_masked_channel,
+        DecodeError, DecodedImage, DecodedImageError, MAX_DECODED_RGBA_BYTES, decode_to_rgba, rgba_output_len,
+        scale_masked_channel,
     };
+    use crate::raw::{Bmp, Compression};
     use crate::runtime::encode::{EncodeError, SaveFormat, encode_rgba_to_bmp_with_format};
     use crate::runtime::quantize::QuantizeError;
 
@@ -882,6 +865,19 @@ mod tests {
         let err = encode_rgba_to_bmp_with_format(&image, SaveFormat::Rgb24)
             .expect_err("must report overflow instead of panicking");
         assert!(matches!(err, EncodeError::ArithmeticOverflow));
+    }
+
+    #[test]
+    fn decode_reports_unsupported_compression_without_magic_other_codes() {
+        let image = DecodedImage::new(1, 1, vec![12, 34, 56, 255]).expect("valid image");
+        let mut bmp = encode_rgba_to_bmp_with_format(&image, SaveFormat::Rgb24).expect("encode should succeed");
+        let Bmp::Info(info) = &mut bmp else {
+            panic!("expected Info bitmap")
+        };
+        info.bmp_header.compression = Compression::Jpeg;
+
+        let err = decode_to_rgba(&bmp).expect_err("JPEG-compressed BMP payload should be unsupported");
+        assert!(matches!(err, DecodeError::UnsupportedCompression(Compression::Jpeg)));
     }
 
     #[test]
