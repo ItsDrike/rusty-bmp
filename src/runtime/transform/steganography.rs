@@ -718,6 +718,24 @@ mod tests {
         DecodedImage::new(width, height, rgba).expect("valid patterned image")
     }
 
+    fn assert_only_expected_channels_changed(original: &DecodedImage, embedded: &DecodedImage, expected: [bool; 4]) {
+        let before = original.rgba();
+        let after = embedded.rgba();
+        assert_eq!(before.len(), after.len());
+
+        for (idx, (&prev, &next)) in before.iter().zip(after).enumerate() {
+            let channel = idx % 4;
+            if !expected[channel] {
+                assert_eq!(
+                    prev,
+                    next,
+                    "channel {channel} changed unexpectedly at pixel {}",
+                    idx / 4
+                );
+            }
+        }
+    }
+
     #[test]
     fn config_encoding_roundtrips_for_all_valid_values() {
         for raw in 0u16..6561 {
@@ -753,6 +771,25 @@ mod tests {
 
         let extracted = extract(&embedded, &info).expect("extract should succeed");
         assert_eq!(extracted, payload);
+    }
+
+    #[test]
+    fn channel_selection_is_honored_for_single_channel_configs() {
+        let image = patterned_image(10, 10);
+
+        let cases = [
+            (steg_config(8, 0, 0, 0), [true, false, false, false]),
+            (steg_config(0, 8, 0, 0), [false, true, false, false]),
+            (steg_config(0, 0, 8, 0), [false, false, true, false]),
+            (steg_config(0, 0, 0, 8), [false, false, false, true]),
+        ];
+
+        for (config, expected) in cases {
+            let payload_len = config.capacity_bytes(image.width(), image.height()) as usize;
+            let payload = vec![0xAA; payload_len];
+            let embedded = embed(&image, config, &payload).expect("embed should succeed for full-capacity payload");
+            assert_only_expected_channels_changed(&image, &embedded, expected);
+        }
     }
 
     #[test]
