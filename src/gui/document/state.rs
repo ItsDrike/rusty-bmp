@@ -185,7 +185,7 @@ impl DocumentState {
             .map_err(|err| format!("Redo failed while applying {op}: {err}"))?;
         let checkpoint_image = current.clone();
         if let Some(history) = self.history_mut() {
-            history.record_apply(op, Some(&checkpoint_image));
+            history.record_redo_apply(op, Some(&checkpoint_image));
         }
 
         let image = self
@@ -229,6 +229,10 @@ impl TransformHistory {
     pub(in crate::gui) fn record_apply(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
         self.pipeline.push(op, current_image);
         self.redo_stack.clear();
+    }
+
+    pub(in crate::gui) fn record_redo_apply(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
+        self.pipeline.push(op, current_image);
     }
 
     pub(in crate::gui) fn pop_undo(&mut self) -> Option<ImageTransform> {
@@ -275,5 +279,87 @@ impl TransformHistory {
 
     pub(in crate::gui) fn last_redo(&self) -> Option<&ImageTransform> {
         self.redo_stack.last()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use bmp::runtime::{
+        decode::DecodedImage,
+        transform::{ImageTransform, InvertColors, MirrorHorizontal},
+    };
+
+    use super::{DocumentState, LoadedDocument, TransformHistory};
+
+    fn test_image() -> DecodedImage {
+        DecodedImage::new(
+            2,
+            2,
+            vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+        )
+        .expect("valid test image")
+    }
+
+    fn loaded_state() -> DocumentState {
+        DocumentState {
+            loaded: Some(LoadedDocument {
+                original_image: test_image(),
+                transformed_image: None,
+                history: TransformHistory::default(),
+                source_metadata: None,
+                loaded_path: PathBuf::from("test.bmp"),
+            }),
+        }
+    }
+
+    #[test]
+    fn redo_keeps_remaining_undone_steps() {
+        let mut state = loaded_state();
+        let first: ImageTransform = InvertColors.into();
+        let second: ImageTransform = MirrorHorizontal.into();
+
+        assert!(
+            state
+                .apply_transform(first.clone())
+                .expect("first apply should succeed")
+                .is_some()
+        );
+        assert!(
+            state
+                .apply_transform(second.clone())
+                .expect("second apply should succeed")
+                .is_some()
+        );
+        assert_eq!(state.history().expect("history should exist").len(), 2);
+
+        assert!(state.undo().expect("first undo should succeed").is_some());
+        assert!(state.undo().expect("second undo should succeed").is_some());
+
+        let history = state.history().expect("history should exist after undo");
+        assert_eq!(history.len(), 0);
+        assert_eq!(history.last_redo(), Some(&first));
+
+        let first_redo = state.pop_redo().expect("first redo op should exist");
+        assert_eq!(first_redo, first);
+        assert!(state.apply_redo(first_redo).expect("first redo should apply").is_some());
+
+        let history = state.history().expect("history should exist after first redo");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.last_redo(), Some(&second));
+
+        let second_redo = state.pop_redo().expect("second redo op should still exist");
+        assert_eq!(second_redo, second);
+        assert!(
+            state
+                .apply_redo(second_redo)
+                .expect("second redo should apply")
+                .is_some()
+        );
+
+        let history = state.history().expect("history should exist after second redo");
+        assert_eq!(history.len(), 2);
+        assert!(!history.has_redo());
     }
 }
