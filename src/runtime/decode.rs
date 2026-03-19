@@ -809,6 +809,7 @@ mod tests {
     use super::{
         DecodeError, DecodedImage, DecodedImageError, MAX_DECODED_RGBA_BYTES, rgba_output_len, scale_masked_channel,
     };
+    use crate::runtime::encode::{EncodeError, SaveFormat, encode_rgba_to_bmp_with_format};
 
     #[test]
     fn rgba_output_len_rejects_multiplication_overflow() {
@@ -833,6 +834,19 @@ mod tests {
     fn decoded_image_constructor_rejects_i32_overflow_dimensions() {
         let err = DecodedImage::new(i32::MAX as u32 + 1, 1, vec![0; 4]).expect_err("must reject i32-overflow dims");
         assert!(matches!(err, DecodedImageError::DimensionOverflowI32 { .. }));
+    }
+
+    #[test]
+    fn encode_rgb24_rejects_stride_times_height_overflow() {
+        let image = DecodedImage {
+            width: u32::MAX,
+            height: u32::MAX,
+            rgba: std::sync::Arc::from(vec![0, 0, 0, 0]),
+        };
+
+        let err = encode_rgba_to_bmp_with_format(&image, SaveFormat::Rgb24)
+            .expect_err("must report overflow instead of panicking");
+        assert!(matches!(err, EncodeError::ArithmeticOverflow));
     }
 
     #[test]

@@ -776,9 +776,10 @@ fn encode_rgb24(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     let h = image.height() as usize;
     let rgba = image.rgba();
     let stride = row_stride(w, 24)?;
-    let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
+    let image_bytes = stride.checked_mul(h).ok_or(EncodeError::ArithmeticOverflow)?;
+    let image_size = u32::try_from(image_bytes).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
-    let mut bmp_pixels = vec![0u8; stride * h];
+    let mut bmp_pixels = vec![0u8; image_bytes];
     for y in 0..h {
         let row_start = y * stride;
         for x in 0..w {
@@ -811,9 +812,10 @@ fn encode_rgb16(image: &DecodedImage) -> Result<Bmp, EncodeError> {
     let h = image.height() as usize;
     let rgba = image.rgba();
     let stride = row_stride(w, 16)?;
-    let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
+    let image_bytes = stride.checked_mul(h).ok_or(EncodeError::ArithmeticOverflow)?;
+    let image_size = u32::try_from(image_bytes).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
-    let mut bmp_pixels = vec![0u8; stride * h];
+    let mut bmp_pixels = vec![0u8; image_bytes];
     for y in 0..h {
         let row_start = y * stride;
         for x in 0..w {
@@ -857,9 +859,10 @@ fn encode_indexed_rgb(image: &DecodedImage, bpp: BitsPerPixel) -> Result<Bmp, En
     let h = image.height() as usize;
     let bits = bpp.bit_count();
     let stride = row_stride(w, bits)?;
-    let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
+    let image_bytes = stride.checked_mul(h).ok_or(EncodeError::ArithmeticOverflow)?;
+    let image_size = u32::try_from(image_bytes).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
-    let mut bmp_pixels = vec![0u8; stride * h];
+    let mut bmp_pixels = vec![0u8; image_bytes];
     for y in 0..h {
         let row_start = y * stride;
         for x in 0..w {
@@ -1111,7 +1114,8 @@ fn encode_bitfields16(image: &DecodedImage, masks: RgbMasks) -> Result<Bmp, Enco
     let h = image.height() as usize;
     let rgba = image.rgba();
     let stride = row_stride(w, 16)?;
-    let image_size = u32::try_from(stride * h).map_err(|_| EncodeError::ArithmeticOverflow)?;
+    let image_bytes = stride.checked_mul(h).ok_or(EncodeError::ArithmeticOverflow)?;
+    let image_size = u32::try_from(image_bytes).map_err(|_| EncodeError::ArithmeticOverflow)?;
 
     // Pre-compute shifts and widths from the masks.
     let r_shift = masks.red_mask.trailing_zeros();
@@ -1125,7 +1129,7 @@ fn encode_bitfields16(image: &DecodedImage, masks: RgbMasks) -> Result<Bmp, Enco
     let g_max = (1u16 << g_bits) - 1;
     let b_max = (1u16 << b_bits) - 1;
 
-    let mut bmp_pixels = vec![0u8; stride * h];
+    let mut bmp_pixels = vec![0u8; image_bytes];
     for y in 0..h {
         let row_start = y * stride;
         for x in 0..w {
