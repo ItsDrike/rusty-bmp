@@ -1,4 +1,10 @@
-use std::collections::BTreeMap;
+//! Stateless transform pipeline model.
+//!
+//! [`TransformPipeline`] is intentionally lightweight: it stores an ordered list
+//! of [`ImageTransform`] operations and provides replay helpers.
+//!
+//! If you want cached replay for interactive editing workflows, use
+//! [`crate::runtime::transform::TransformPipelineExecutor`].
 
 use thiserror::Error;
 
@@ -6,60 +12,100 @@ use crate::runtime::decode::DecodedImage;
 
 use super::model::{ImageTransform, TransformError};
 
-const CHECKPOINT_COST_THRESHOLD: u32 = 15;
-const MAX_CHECKPOINTS: usize = 5;
-
+/// Errors from editing the transform list itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
 pub enum PipelineError {
+    /// The requested index is outside the current operation list.
+    ///
+    /// Fields:
+    /// - `index`: requested transform index
+    /// - `len`: current pipeline length
     #[error("transform index {index} out of bounds for pipeline length {len}")]
     IndexOutOfBounds { index: usize, len: usize },
 }
 
+/// Strict replay failure details.
+#[derive(Debug, Error)]
+#[error("transform at index {index} failed: {error}")]
+pub struct ReplayError {
+    /// Index of the transform that failed.
+    index: usize,
+
+    /// Operation-specific replay error.
+    #[source]
+    error: TransformError,
+}
+
+impl ReplayError {
+    pub(crate) const fn new(index: usize, error: TransformError) -> Self {
+        Self { index, error }
+    }
+
+    /// Returns the operation index that caused replay to fail.
+    #[must_use]
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns the underlying operation error.
+    #[must_use]
+    pub const fn error(&self) -> &TransformError {
+        &self.error
+    }
+}
+
+/// Description of one transform skipped during best-effort replay.
+#[derive(Debug)]
+pub struct ReplaySkip {
+    /// Index of the skipped transform.
+    pub index: usize,
+    /// Error returned by the failed transform.
+    pub error: TransformError,
+}
+
+/// Result of best-effort replay.
+#[derive(Debug)]
+pub struct ReplayReport {
+    /// Final image after applying all successful transforms.
+    pub image: DecodedImage,
+    /// Failed transforms that were skipped in order.
+    pub skips: Vec<ReplaySkip>,
+}
+
+/// Ordered list of image transforms.
+///
+/// This type is pure model state. Replaying it does **not** mutate internal
+/// caches, and all methods are deterministic for the same source image and op
+/// list.
 #[derive(Debug, Default, Clone)]
 pub struct TransformPipeline {
     ops: Vec<ImageTransform>,
-    checkpoints: BTreeMap<usize, DecodedImage>,
-    cost_since_checkpoint: u32,
 }
 
 impl TransformPipeline {
-    pub fn push(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
-        let cost = op.replay_cost();
-        self.cost_since_checkpoint += cost;
-
-        if cost > 0 && self.cost_since_checkpoint >= CHECKPOINT_COST_THRESHOLD && !self.ops.is_empty() {
-            if let Some(img) = current_image {
-                let checkpoint_idx = self.ops.len() - 1;
-                self.checkpoints.insert(checkpoint_idx, img.clone());
-
-                while self.checkpoints.len() > MAX_CHECKPOINTS {
-                    if let Some(oldest) = self.checkpoints.keys().next().copied() {
-                        self.checkpoints.remove(&oldest);
-                    }
-                }
-            }
-            self.cost_since_checkpoint = 0;
-        }
-
+    /// Appends a transform to the end of the pipeline.
+    pub fn push(&mut self, op: ImageTransform) {
         self.ops.push(op);
     }
 
+    /// Removes all transforms from the pipeline.
     pub fn clear(&mut self) {
         self.ops.clear();
-        self.checkpoints.clear();
-        self.cost_since_checkpoint = 0;
     }
 
+    /// Returns transforms in replay order.
     #[must_use]
     pub fn ops(&self) -> &[ImageTransform] {
         &self.ops
     }
 
+    /// Returns `true` when there are no transforms.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
 
+    /// Returns the number of stored transforms.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.ops.len()
@@ -78,77 +124,90 @@ impl TransformPipeline {
             });
         }
 
-        let removed = self.ops.remove(index);
-        self.checkpoints.retain(|&k, _| k < index);
-        self.recompute_cost_since_checkpoint();
-        Ok(removed)
+        Ok(self.ops.remove(index))
     }
 
+    /// Removes and returns the last transform, if any.
     pub fn pop(&mut self) -> Option<ImageTransform> {
-        let op = self.ops.pop()?;
-        let len = self.ops.len();
-        self.checkpoints.remove(&len);
-        self.recompute_cost_since_checkpoint();
-        Some(op)
+        self.ops.pop()
     }
 
-    /// Applies all operations in the pipeline.
+    /// Replays all transforms and fails on the first error.
     ///
     /// # Errors
-    /// Returns [`TransformError`] if any operation fails while replaying.
-    pub fn apply(&self, original: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        self.apply_range(original, self.ops.len())
+    /// Returns [`ReplayError`] with the failing operation index.
+    pub fn replay_strict(&self, original: &DecodedImage) -> Result<DecodedImage, ReplayError> {
+        self.replay_range_strict(original, 0, self.ops.len())
     }
 
+    /// Replays all transforms, skipping failed operations.
+    ///
+    /// The output image always includes every successful transform in order.
+    /// Failed transforms are recorded in [`ReplayReport::skips`].
     #[must_use]
-    pub fn apply_with_warnings(&self, original: &DecodedImage) -> (DecodedImage, Vec<String>) {
-        self.apply_range_with_warnings(original, self.ops.len())
+    pub fn replay_best_effort(&self, original: &DecodedImage) -> ReplayReport {
+        self.replay_range_best_effort(original, 0, self.ops.len())
     }
 
-    fn apply_range(&self, original: &DecodedImage, count: usize) -> Result<DecodedImage, TransformError> {
-        let (start_idx, mut out) = self
-            .checkpoints
-            .range(..count)
-            .next_back()
-            .map_or_else(|| (0, original.clone()), |(&idx, img)| (idx + 1, img.clone()));
-
-        for op in &self.ops[start_idx..count] {
-            out = op.apply(&out)?;
+    /// Replays a contiguous operation range in strict mode.
+    ///
+    /// `start_image` is treated as the image state immediately before
+    /// `start_idx`, and operations in `start_idx..count` are applied in order.
+    /// The first transform error aborts replay.
+    fn replay_range_strict(
+        &self,
+        start_image: &DecodedImage,
+        start_idx: usize,
+        count: usize,
+    ) -> Result<DecodedImage, ReplayError> {
+        let mut out: Option<DecodedImage> = None;
+        for (offset, op) in self.ops[start_idx..count].iter().enumerate() {
+            let input = out.as_ref().unwrap_or(start_image);
+            let next = op
+                .apply(input)
+                .map_err(|error| ReplayError::new(start_idx + offset, error))?;
+            out = Some(next);
         }
 
-        Ok(out)
+        Ok(out.unwrap_or_else(|| start_image.clone()))
     }
 
-    fn apply_range_with_warnings(&self, original: &DecodedImage, count: usize) -> (DecodedImage, Vec<String>) {
-        let (start_idx, mut out) = self
-            .checkpoints
-            .range(..count)
-            .next_back()
-            .map_or_else(|| (0, original.clone()), |(&idx, img)| (idx + 1, img.clone()));
+    /// Replays a contiguous operation range in best-effort mode.
+    ///
+    /// `start_image` is treated as the image state immediately before
+    /// `start_idx`, and operations in `start_idx..count` are attempted in order.
+    /// Failed operations are recorded in the returned report and skipped.
+    #[must_use]
+    fn replay_range_best_effort(&self, start_image: &DecodedImage, start_idx: usize, count: usize) -> ReplayReport {
+        let mut out: Option<DecodedImage> = None;
+        let mut skips = Vec::new();
 
-        let mut warnings = Vec::new();
-        for op in &self.ops[start_idx..count] {
-            match op.apply(&out) {
-                Ok(next) => out = next,
-                Err(err) => warnings.push(format!("Skipped {op} during replay: {err}")),
+        for (offset, op) in self.ops[start_idx..count].iter().enumerate() {
+            let input = out.as_ref().unwrap_or(start_image);
+            match op.apply(input) {
+                Ok(next) => out = Some(next),
+                Err(error) => {
+                    skips.push(ReplaySkip {
+                        index: start_idx + offset,
+                        error,
+                    });
+                }
             }
         }
-        (out, warnings)
-    }
 
-    fn recompute_cost_since_checkpoint(&mut self) {
-        let last_cp = self.checkpoints.keys().next_back().copied();
-        let start = last_cp.map_or(0, |i| i + 1);
-        self.cost_since_checkpoint = self.ops[start..].iter().map(ImageTransform::replay_cost).sum();
+        ReplayReport {
+            image: out.unwrap_or_else(|| start_image.clone()),
+            skips,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CHECKPOINT_COST_THRESHOLD, MAX_CHECKPOINTS, PipelineError, TransformPipeline};
+    use super::{PipelineError, TransformPipeline};
     use crate::runtime::decode::DecodedImage;
     use crate::runtime::transform::{
-        Brightness, Grayscale, RotateAny, RotationInterpolation, TransformOp, Translate, TranslateMode,
+        Brightness, Crop, Grayscale, RotateAny, RotationInterpolation, TransformOp, Translate, TranslateMode,
     };
 
     fn test_image() -> DecodedImage {
@@ -161,45 +220,53 @@ mod tests {
     }
 
     #[test]
-    fn no_checkpoint_below_threshold() {
+    fn replay_strict_replays_ops_in_order() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        for _ in 0..5 {
-            let cur = pipeline.apply(&img).unwrap_or_else(|_| img.clone());
-            pipeline.push(Brightness { delta: 1 }.into(), Some(&cur));
-        }
-        assert!(pipeline.checkpoints.is_empty());
+        let brighten = Brightness { delta: 10 };
+        pipeline.push(brighten.into());
+        pipeline.push(Grayscale.into());
+
+        let manual = Grayscale
+            .apply(&brighten.apply(&img).expect("brightness should succeed"))
+            .expect("grayscale should succeed");
+        let replayed = pipeline.replay_strict(&img).expect("strict replay should succeed");
+        assert_eq!(replayed.rgba(), manual.rgba());
     }
 
     #[test]
-    fn checkpoint_created_at_threshold() {
+    fn replay_strict_reports_failing_transform_index() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let mut cur = img;
-        for _ in 0..=CHECKPOINT_COST_THRESHOLD {
-            pipeline.push(Brightness { delta: 1 }.into(), Some(&cur));
-            cur = Brightness { delta: 1 }.apply(&cur).expect("brightness should succeed");
-        }
-        assert!(!pipeline.checkpoints.is_empty());
+        pipeline.push(Brightness { delta: 1 }.into());
+        let invalid_crop = Crop::try_new(3, 0, 1, 1).expect("non-zero crop dimensions should be accepted");
+        pipeline.push(invalid_crop.into());
+        pipeline.push(Grayscale.into());
+
+        let err = pipeline
+            .replay_strict(&img)
+            .expect_err("strict replay should fail on out-of-bounds crop");
+        assert_eq!(err.index(), 1);
     }
 
     #[test]
-    fn max_checkpoints_enforced() {
+    fn replay_best_effort_skips_failed_transforms() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let mut cur = img.clone();
-        let batches = MAX_CHECKPOINTS + 3;
+        pipeline.push(Brightness { delta: 1 }.into());
+        let invalid_crop = Crop::try_new(3, 0, 1, 1).expect("non-zero crop dimensions should be accepted");
+        pipeline.push(invalid_crop.into());
+        pipeline.push(Grayscale.into());
 
-        for _ in 0..batches {
-            for _ in 0..=CHECKPOINT_COST_THRESHOLD {
-                pipeline.push(Brightness { delta: 1 }.into(), Some(&cur));
-                cur = Brightness { delta: 1 }.apply(&cur).expect("brightness should succeed");
-            }
-        }
+        let report = pipeline.replay_best_effort(&img);
 
-        assert!(pipeline.checkpoints.len() <= MAX_CHECKPOINTS);
-        let result = pipeline.apply(&img).expect("pipeline apply should succeed");
-        assert_eq!(result.rgba(), cur.rgba());
+        assert_eq!(report.skips.len(), 1);
+        assert_eq!(report.skips[0].index, 1);
+
+        let manual = Grayscale
+            .apply(&Brightness { delta: 1 }.apply(&img).expect("brightness should succeed"))
+            .expect("grayscale should succeed");
+        assert_eq!(report.image.rgba(), manual.rgba());
     }
 
     #[test]
@@ -229,7 +296,7 @@ mod tests {
     #[test]
     fn remove_returns_error_for_out_of_bounds_index() {
         let mut pipeline = TransformPipeline::default();
-        pipeline.push(Brightness { delta: 1 }.into(), None);
+        pipeline.push(Brightness { delta: 1 }.into());
 
         let err = pipeline
             .remove(1)
@@ -243,8 +310,8 @@ mod tests {
         let mut pipeline = TransformPipeline::default();
         let first: super::ImageTransform = Brightness { delta: 1 }.into();
         let second: super::ImageTransform = Grayscale.into();
-        pipeline.push(first.clone(), None);
-        pipeline.push(second.clone(), None);
+        pipeline.push(first.clone());
+        pipeline.push(second.clone());
 
         let removed = pipeline.remove(0).expect("removing a valid index should succeed");
 

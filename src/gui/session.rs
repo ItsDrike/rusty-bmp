@@ -4,10 +4,7 @@ use std::{fs::File, path::Path};
 
 use bmp::{
     raw::Bmp,
-    runtime::{
-        decode::{DecodedImage, decode_to_rgba},
-        transform::ImageTransform,
-    },
+    runtime::{decode::decode_to_rgba, transform::ImageTransform},
 };
 use eframe::egui;
 
@@ -119,8 +116,8 @@ impl<'a> EditSession<'a> {
                 "Embedding aborted: payload no longer fits current image. The steganography transform was not applied.",
             )?;
 
-            if let Some(next) = self.document.apply_transform(op)? {
-                self.refresh_transformed_image(ctx, &next);
+            if self.document.apply_transform(op)? {
+                self.refresh_current_document_image(ctx);
             }
         }
 
@@ -130,13 +127,13 @@ impl<'a> EditSession<'a> {
     /// Undoes the most recent transform and returns any replay warning text.
     pub(in crate::gui) fn undo(&mut self, ctx: &egui::Context) -> Result<Option<String>, String> {
         match self.document.undo()? {
-            Some(change) => {
+            Some(warnings) => {
                 self.steganography.clear_overwrite_warning();
-                self.refresh_transformed_image(ctx, &change.image);
-                if change.warnings.is_empty() {
+                self.refresh_current_document_image(ctx);
+                if warnings.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(change.warnings.join(" ")))
+                    Ok(Some(warnings.join(" ")))
                 }
             }
             None => Ok(None),
@@ -157,8 +154,8 @@ impl<'a> EditSession<'a> {
             )?;
         }
 
-        if let Some(next) = self.document.apply_redo(op)? {
-            self.refresh_transformed_image(ctx, &next);
+        if self.document.apply_redo(op)? {
+            self.refresh_current_document_image(ctx);
         }
 
         Ok(())
@@ -166,27 +163,29 @@ impl<'a> EditSession<'a> {
 
     /// Removes one transform from history and rebuilds the displayed image.
     pub(in crate::gui) fn remove_transform(&mut self, ctx: &egui::Context, index: usize) -> Option<String> {
-        let change = self.document.remove_transform(index)?;
+        let warnings = self.document.remove_transform(index)?;
         self.steganography.clear_overwrite_warning();
-        self.refresh_transformed_image(ctx, &change.image);
-        if change.warnings.is_empty() {
+        self.refresh_current_document_image(ctx);
+        if warnings.is_empty() {
             None
         } else {
-            Some(change.warnings.join(" "))
+            Some(warnings.join(" "))
         }
     }
 
     /// Drops all transform history and restores the original loaded image.
     pub(in crate::gui) fn clear_transform_history(&mut self, ctx: &egui::Context) {
-        if let Some(result) = self.document.clear_transform_history() {
+        if self.document.clear_transform_history() {
             self.steganography.clear_overwrite_warning();
-            self.refresh_transformed_image(ctx, &result);
+            self.refresh_current_document_image(ctx);
         }
     }
 
-    /// Updates steg detection and the viewer texture for a newly produced image.
-    fn refresh_transformed_image(&mut self, ctx: &egui::Context, image: &DecodedImage) {
-        self.steganography.refresh_for_image(image);
-        self.viewport.set_display_image(ctx, image, "transformed".to_owned());
+    fn refresh_current_document_image(&mut self, ctx: &egui::Context) {
+        let (document, steganography, viewport) = (&self.document, &mut self.steganography, &mut self.viewport);
+        if let Some(image) = document.transformed_image() {
+            steganography.refresh_for_image(image);
+            viewport.set_display_image(ctx, image, "transformed".to_owned());
+        }
     }
 }

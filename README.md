@@ -25,7 +25,7 @@ Example:
 - Spec-driven BMP parsing and validation, not just a minimal happy-path loader
 - Desktop GUI for viewing, inspecting, transforming, and saving BMP images
 - Support for indexed, direct-color, compressed, and bitfield-based BMP variants
-- Rich transform pipeline with undo/redo, arbitrary step removal, and smart replay checkpoints
+- Rich transform pipeline with undo/redo, arbitrary step removal, and optional replay checkpoint caching
 - Configurable LSB steganography with automatic detection and safe removal
 - Multiple save targets, header versions, format conversion, and save-quality warnings
 - Clean internal split between raw BMP structures, runtime image logic, and GUI code
@@ -98,7 +98,7 @@ Edits are modeled as a transform pipeline rather than being applied and forgotte
 - replay the remaining pipeline from the original image when needed,
 - and combine reversible operations with lossy ones in a consistent way.
 
-To keep that responsive, the pipeline tracks replay cost and stores a limited number of checkpoints, so expensive histories do not always have to be recomputed from scratch.
+The runtime keeps `TransformPipeline` itself stateless and predictable. Checkpoint caching is handled by a separate executor type with configurable policy, so library users can opt into cached replay only when they want it.
 
 ### Performance
 
@@ -118,7 +118,7 @@ The project includes a fairly extensive automated test suite covering:
 - raw parse/write roundtrips,
 - decode/encode behavior,
 - transform correctness,
-- transform pipeline replay/checkpoint logic,
+- transform pipeline replay logic and executor checkpoint caching,
 - steganography,
 - and BMP fixture coverage via BMPSuite.
 

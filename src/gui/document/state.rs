@@ -5,9 +5,16 @@ use bmp::{
     runtime::{
         decode::DecodedImage,
         encode::SourceMetadata,
-        transform::{ImageTransform, TransformPipeline},
+        transform::{
+            ImageTransform, ReplayReport, ReplaySkip, TransformPipelineExecutor, TransformPipelineExecutorConfig,
+        },
     },
 };
+
+/// GUI-specific replay-cost budget before creating a checkpoint snapshot.
+const HISTORY_CHECKPOINT_COST_THRESHOLD: u32 = 15;
+/// GUI-specific cap for cached replay checkpoints.
+const HISTORY_MAX_CHECKPOINTS: usize = 5;
 
 /// Image/session data tied to the currently loaded BMP and transform pipeline.
 #[derive(Default)]
@@ -41,19 +48,23 @@ struct LoadedDocument {
     loaded_path: PathBuf,
 }
 
-#[derive(Default)]
 pub(in crate::gui) struct TransformHistory {
-    pipeline: TransformPipeline,
+    /// Undo/redo transform list with GUI-configured replay caching.
+    pipeline: TransformPipelineExecutor,
     /// Transforms that were undone, available for redo. Cleared on new transform or step removal.
     redo_stack: Vec<ImageTransform>,
 }
 
-/// Result of a document edit that produced a new image and optional replay warnings.
-pub(in crate::gui) struct DocumentImageChange {
-    /// The new image produced by the edit.
-    pub(in crate::gui) image: DecodedImage,
-    /// Warnings collected while replaying lossy transforms.
-    pub(in crate::gui) warnings: Vec<String>,
+impl Default for TransformHistory {
+    fn default() -> Self {
+        Self {
+            pipeline: TransformPipelineExecutor::with_config(TransformPipelineExecutorConfig::new(
+                HISTORY_CHECKPOINT_COST_THRESHOLD,
+                HISTORY_MAX_CHECKPOINTS,
+            )),
+            redo_stack: Vec::new(),
+        }
+    }
 }
 
 impl DocumentState {
@@ -75,18 +86,14 @@ impl DocumentState {
             .map(|doc| doc.transformed_image.as_ref().unwrap_or(&doc.original_image))
     }
 
-    pub(in crate::gui) fn original_image(&self) -> Option<&DecodedImage> {
-        self.loaded.as_ref().map(|doc| &doc.original_image)
-    }
-
-    fn replace_transformed_image(&mut self, image: DecodedImage) -> Option<DecodedImage> {
+    fn replace_transformed_image(&mut self, image: DecodedImage) -> Option<()> {
         let doc = self.loaded.as_mut()?;
         if doc.history.is_empty() {
             doc.transformed_image = None;
         } else {
-            doc.transformed_image = Some(image.clone());
+            doc.transformed_image = Some(image);
         }
-        Some(image)
+        Some(())
     }
 
     pub(in crate::gui) fn source_metadata(&self) -> Option<&SourceMetadata> {
@@ -110,24 +117,26 @@ impl DocumentState {
     }
 
     /// Applies a transform and stores the resulting image and history entry.
-    pub(in crate::gui) fn apply_transform(&mut self, op: ImageTransform) -> Result<Option<DecodedImage>, String> {
+    pub(in crate::gui) fn apply_transform(&mut self, op: ImageTransform) -> Result<bool, String> {
         let Some(current) = self.transformed_image() else {
-            return Ok(None);
+            return Ok(false);
         };
 
         let next = op
             .apply(current)
             .map_err(|err| format!("Failed to apply transform {op}: {err}"))?;
-        let checkpoint_image = current.clone();
         if let Some(history) = self.history_mut() {
-            history.record_apply(op, Some(&checkpoint_image));
+            history.record_apply(op);
         }
 
-        Ok(self.replace_transformed_image(next))
+        let () = self
+            .replace_transformed_image(next)
+            .expect("loaded document should still exist while applying a transform");
+        Ok(true)
     }
 
     /// Undoes the most recent transform, replaying from the original image when necessary.
-    pub(in crate::gui) fn undo(&mut self) -> Result<Option<DocumentImageChange>, String> {
+    pub(in crate::gui) fn undo(&mut self) -> Result<Option<Vec<String>>, String> {
         let Some(op) = self.history_mut().and_then(TransformHistory::pop_undo) else {
             return Ok(None);
         };
@@ -135,6 +144,13 @@ impl DocumentState {
         if let Some(inv) = op.inverse() {
             if let Some(history) = self.history_mut() {
                 history.push_redo(op);
+            }
+
+            if self.history().is_some_and(TransformHistory::is_empty) {
+                if let Some(doc) = self.loaded.as_mut() {
+                    doc.transformed_image = None;
+                }
+                return Ok(Some(Vec::new()));
             }
 
             let Some(current) = self.transformed_image() else {
@@ -145,28 +161,32 @@ impl DocumentState {
                 .apply(current)
                 .map_err(|err| format!("Undo failed while applying inverse: {err}"))?;
 
-            let image = self
+            let () = self
                 .replace_transformed_image(result)
                 .expect("loaded document should still exist during undo");
-            return Ok(Some(DocumentImageChange {
-                image,
-                warnings: Vec::new(),
-            }));
+            return Ok(Some(Vec::new()));
         }
 
         if let Some(history) = self.history_mut() {
             history.push_redo(op);
         }
 
-        let (Some(original), Some(history)) = (self.original_image(), self.history()) else {
-            return Ok(None);
-        };
+        let (result, warnings) = {
+            let Some(doc) = self.loaded.as_mut() else {
+                return Ok(None);
+            };
 
-        let (result, warnings) = history.apply_with_warnings(original);
-        let image = self
+            if doc.history.is_empty() {
+                doc.transformed_image = None;
+                return Ok(Some(Vec::new()));
+            }
+
+            doc.history.replay_best_effort(&doc.original_image)
+        };
+        let () = self
             .replace_transformed_image(result)
             .expect("loaded document should still exist during undo replay");
-        Ok(Some(DocumentImageChange { image, warnings }))
+        Ok(Some(warnings))
     }
 
     /// Removes and returns the next redo operation from history.
@@ -175,49 +195,52 @@ impl DocumentState {
     }
 
     /// Applies a previously popped redo operation back onto the current image.
-    pub(in crate::gui) fn apply_redo(&mut self, op: ImageTransform) -> Result<Option<DecodedImage>, String> {
+    pub(in crate::gui) fn apply_redo(&mut self, op: ImageTransform) -> Result<bool, String> {
         let Some(current) = self.transformed_image() else {
-            return Ok(None);
+            return Ok(false);
         };
 
         let next = op
             .apply(current)
             .map_err(|err| format!("Redo failed while applying {op}: {err}"))?;
-        let checkpoint_image = current.clone();
         if let Some(history) = self.history_mut() {
-            history.record_redo_apply(op, Some(&checkpoint_image));
+            history.record_redo_apply(op);
         }
 
-        let image = self
+        let () = self
             .replace_transformed_image(next)
             .expect("loaded document should still exist during redo");
-        Ok(Some(image))
+        Ok(true)
     }
 
     /// Removes a transform from history and rebuilds the image from the remaining pipeline.
-    pub(in crate::gui) fn remove_transform(&mut self, index: usize) -> Option<DocumentImageChange> {
-        let removed = self.history_mut().is_some_and(|history| history.remove(index));
-        if !removed {
-            return None;
-        }
+    pub(in crate::gui) fn remove_transform(&mut self, index: usize) -> Option<Vec<String>> {
+        let (result, warnings) = {
+            let doc = self.loaded.as_mut()?;
+            if !doc.history.remove(index) {
+                return None;
+            }
 
-        let (Some(original), Some(history)) = (self.original_image(), self.history()) else {
-            return None;
+            if doc.history.is_empty() {
+                doc.transformed_image = None;
+                return Some(Vec::new());
+            }
+
+            doc.history.replay_best_effort(&doc.original_image)
         };
-
-        let (result, warnings) = history.apply_with_warnings(original);
-        let image = self.replace_transformed_image(result)?;
-        Some(DocumentImageChange { image, warnings })
+        let () = self.replace_transformed_image(result)?;
+        Some(warnings)
     }
 
     /// Clears all transforms and restores the original loaded image.
-    pub(in crate::gui) fn clear_transform_history(&mut self) -> Option<DecodedImage> {
-        if let Some(history) = self.history_mut() {
-            history.clear();
-        }
+    pub(in crate::gui) fn clear_transform_history(&mut self) -> bool {
+        let Some(doc) = self.loaded.as_mut() else {
+            return false;
+        };
 
-        let result = self.original_image()?.clone();
-        self.replace_transformed_image(result)
+        doc.history.clear();
+        doc.transformed_image = None;
+        true
     }
 }
 
@@ -227,13 +250,13 @@ impl TransformHistory {
         self.redo_stack.clear();
     }
 
-    pub(in crate::gui) fn record_apply(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
-        self.pipeline.push(op, current_image);
+    pub(in crate::gui) fn record_apply(&mut self, op: ImageTransform) {
+        self.pipeline.push(op);
         self.redo_stack.clear();
     }
 
-    pub(in crate::gui) fn record_redo_apply(&mut self, op: ImageTransform, current_image: Option<&DecodedImage>) {
-        self.pipeline.push(op, current_image);
+    pub(in crate::gui) fn record_redo_apply(&mut self, op: ImageTransform) {
+        self.pipeline.push(op);
     }
 
     pub(in crate::gui) fn pop_undo(&mut self) -> Option<ImageTransform> {
@@ -256,9 +279,15 @@ impl TransformHistory {
         true
     }
 
-    /// Replays the stored pipeline and collects warnings for lossy steps.
-    pub(in crate::gui) fn apply_with_warnings(&self, original: &DecodedImage) -> (DecodedImage, Vec<String>) {
-        self.pipeline.apply_with_warnings(original)
+    /// Replays the stored pipeline in best-effort mode and collects warnings.
+    pub(in crate::gui) fn replay_best_effort(&mut self, original: &DecodedImage) -> (DecodedImage, Vec<String>) {
+        let ReplayReport { image, skips } = self.pipeline.replay_best_effort(original);
+        let ops = self.pipeline.ops();
+        let warnings = skips
+            .into_iter()
+            .map(|skip| format_replay_skip(&skip, ops.get(skip.index)))
+            .collect();
+        (image, warnings)
     }
 
     pub(in crate::gui) const fn is_empty(&self) -> bool {
@@ -284,6 +313,22 @@ impl TransformHistory {
     pub(in crate::gui) fn last_redo(&self) -> Option<&ImageTransform> {
         self.redo_stack.last()
     }
+}
+
+/// Formats a runtime replay skip into a GUI-facing warning message.
+///
+/// The optional transform reference is looked up from current pipeline state.
+/// If that lookup fails, the message falls back to index-based wording.
+fn format_replay_skip(skip: &ReplaySkip, op: Option<&ImageTransform>) -> String {
+    op.map_or_else(
+        || {
+            format!(
+                "Skipped transform at index {} during replay: {}",
+                skip.index, skip.error
+            )
+        },
+        |op| format!("Skipped {} during replay: {}", op, skip.error),
+    )
 }
 
 #[cfg(test)]
@@ -328,13 +373,11 @@ mod tests {
             state
                 .apply_transform(first.clone())
                 .expect("first apply should succeed")
-                .is_some()
         );
         assert!(
             state
                 .apply_transform(second.clone())
                 .expect("second apply should succeed")
-                .is_some()
         );
         assert_eq!(state.history().expect("history should exist").len(), 2);
 
@@ -347,7 +390,7 @@ mod tests {
 
         let first_redo = state.pop_redo().expect("first redo op should exist");
         assert_eq!(first_redo, first);
-        assert!(state.apply_redo(first_redo).expect("first redo should apply").is_some());
+        assert!(state.apply_redo(first_redo).expect("first redo should apply"));
 
         let history = state.history().expect("history should exist after first redo");
         assert_eq!(history.len(), 1);
@@ -355,12 +398,7 @@ mod tests {
 
         let second_redo = state.pop_redo().expect("second redo op should still exist");
         assert_eq!(second_redo, second);
-        assert!(
-            state
-                .apply_redo(second_redo)
-                .expect("second redo should apply")
-                .is_some()
-        );
+        assert!(state.apply_redo(second_redo).expect("second redo should apply"));
 
         let history = state.history().expect("history should exist after second redo");
         assert_eq!(history.len(), 2);
