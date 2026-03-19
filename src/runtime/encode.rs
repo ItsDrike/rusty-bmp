@@ -97,9 +97,13 @@ fn infer_format(comp: Compression, bpp: BitsPerPixel, rgb_masks: Option<RgbMasks
         (Compression::Rle4, BitsPerPixel::Bpp4) => SaveFormat::Rle4,
         (Compression::BitFields, BitsPerPixel::Bpp16) => match rgb_masks {
             Some(masks) if masks == RgbMasks::rgb565() => SaveFormat::BitFields16Rgb565,
-            _ => SaveFormat::BitFields16Rgb555,
+            Some(masks) if masks == RgbMasks::rgb555() => SaveFormat::BitFields16Rgb555,
+            _ => SaveFormat::Rgb32,
         },
-        (Compression::BitFields, BitsPerPixel::Bpp32) => SaveFormat::BitFields32,
+        (Compression::BitFields, BitsPerPixel::Bpp32) => match rgb_masks {
+            Some(masks) if masks == RgbMasks::rgb888() => SaveFormat::BitFields32,
+            _ => SaveFormat::Rgb32,
+        },
         _ => SaveFormat::Rgb32,
     }
 }
@@ -121,16 +125,32 @@ impl SaveFormat {
                 _ => Self::Rgb32,
             },
             Bmp::Info(info) => infer_format(info.bmp_header.compression, info.bmp_header.bit_count, info.color_masks),
-            Bmp::V4(v4) => infer_format(
-                v4.bmp_header.info.compression,
-                v4.bmp_header.info.bit_count,
-                Some(v4.bmp_header.masks.into()),
-            ),
-            Bmp::V5(v5) => infer_format(
-                v5.bmp_header.v4.info.compression,
-                v5.bmp_header.v4.info.bit_count,
-                Some(v5.bmp_header.v4.masks.into()),
-            ),
+            Bmp::V4(v4) => {
+                let info = v4.bmp_header.info;
+                let masks = v4.bmp_header.masks;
+                if matches!(
+                    (info.compression, info.bit_count),
+                    (Compression::BitFields, BitsPerPixel::Bpp16 | BitsPerPixel::Bpp32)
+                ) && masks.alpha_mask != 0
+                {
+                    Self::Rgb32
+                } else {
+                    infer_format(info.compression, info.bit_count, Some(masks.into()))
+                }
+            }
+            Bmp::V5(v5) => {
+                let info = v5.bmp_header.v4.info;
+                let masks = v5.bmp_header.v4.masks;
+                if matches!(
+                    (info.compression, info.bit_count),
+                    (Compression::BitFields, BitsPerPixel::Bpp16 | BitsPerPixel::Bpp32)
+                ) && masks.alpha_mask != 0
+                {
+                    Self::Rgb32
+                } else {
+                    infer_format(info.compression, info.bit_count, Some(masks.into()))
+                }
+            }
         }
     }
 }
@@ -1460,5 +1480,66 @@ mod tests {
             data.bmp_header.profile_data,
             BitmapV5Header::HEADER_SIZE + data.bmp_header.v4.info.image_size
         );
+    }
+
+    #[test]
+    fn from_bmp_preserves_supported_bitfields_layouts() {
+        let bmp_565 = encode_rgba_to_bmp_with_format(&tiny_image(), SaveFormat::BitFields16Rgb565).unwrap();
+        assert_eq!(SaveFormat::from_bmp(&bmp_565), SaveFormat::BitFields16Rgb565);
+
+        let bmp_555 = encode_rgba_to_bmp_with_format(&tiny_image(), SaveFormat::BitFields16Rgb555).unwrap();
+        assert_eq!(SaveFormat::from_bmp(&bmp_555), SaveFormat::BitFields16Rgb555);
+
+        let bmp_888 = encode_rgba_to_bmp_with_format(&tiny_image(), SaveFormat::BitFields32).unwrap();
+        assert_eq!(SaveFormat::from_bmp(&bmp_888), SaveFormat::BitFields32);
+    }
+
+    #[test]
+    fn from_bmp_falls_back_for_exotic_bitfields_layouts() {
+        let mut bmp_16 = encode_rgba_to_bmp_with_format(&tiny_image(), SaveFormat::BitFields16Rgb555).unwrap();
+        let Bmp::Info(info_16) = &mut bmp_16 else {
+            panic!("expected Info bitmap");
+        };
+        info_16.color_masks = Some(RgbMasks {
+            red_mask: 0x0000_0F00,
+            green_mask: 0x0000_00F0,
+            blue_mask: 0x0000_000F,
+        });
+        assert_eq!(SaveFormat::from_bmp(&bmp_16), SaveFormat::Rgb32);
+
+        let mut bmp_32 = encode_rgba_to_bmp_with_format(&tiny_image(), SaveFormat::BitFields32).unwrap();
+        let Bmp::Info(info_32) = &mut bmp_32 else {
+            panic!("expected Info bitmap");
+        };
+        info_32.color_masks = Some(RgbMasks {
+            red_mask: 0x0000_00FF,
+            green_mask: 0x0000_FF00,
+            blue_mask: 0x00FF_0000,
+        });
+        assert_eq!(SaveFormat::from_bmp(&bmp_32), SaveFormat::Rgb32);
+    }
+
+    #[test]
+    fn from_bmp_falls_back_for_bitfields_with_alpha_masks() {
+        let mut bmp_16 = encode_rgba_to_bmp_ext(
+            &tiny_image(),
+            SaveFormat::BitFields16Rgb555,
+            SaveHeaderVersion::V4,
+            None,
+        )
+        .unwrap();
+        let Bmp::V4(v4_16) = &mut bmp_16 else {
+            panic!("expected V4 bitmap");
+        };
+        v4_16.bmp_header.masks.alpha_mask = 0x0000_8000;
+        assert_eq!(SaveFormat::from_bmp(&bmp_16), SaveFormat::Rgb32);
+
+        let mut bmp_32 =
+            encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::BitFields32, SaveHeaderVersion::V4, None).unwrap();
+        let Bmp::V4(v4_32) = &mut bmp_32 else {
+            panic!("expected V4 bitmap");
+        };
+        v4_32.bmp_header.masks.alpha_mask = 0xFF00_0000;
+        assert_eq!(SaveFormat::from_bmp(&bmp_32), SaveFormat::Rgb32);
     }
 }
