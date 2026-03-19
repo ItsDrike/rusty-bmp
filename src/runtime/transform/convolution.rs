@@ -157,7 +157,7 @@ impl Kernel {
 
         for (y, col) in col_vec.iter().enumerate() {
             for (x, row) in row_vec.iter().enumerate() {
-                if *col * *row != self.weights[y * n + x] {
+                if i128::from(*col) * i128::from(*row) != i128::from(self.weights[y * n + x]) {
                     return None;
                 }
             }
@@ -335,26 +335,27 @@ fn apply_convolution_separable(
     let h = image.height() as usize;
     let rgba = image.rgba();
     let kernel_size = kernel.size();
-    let divisor = kernel.divisor();
-    let bias = kernel.bias();
+    let divisor = i128::from(kernel.divisor());
+    let bias = i128::from(kernel.bias());
     let half = (kernel_size / 2) as isize;
 
     let row_channels = w * 3;
-    let mut tmp = vec![0i32; h * row_channels];
+    let mut tmp = vec![0i128; h * row_channels];
 
     tmp.par_chunks_mut(row_channels).enumerate().for_each(|(y, row)| {
         for x in 0..w {
-            let mut sum_r: i32 = 0;
-            let mut sum_g: i32 = 0;
-            let mut sum_b: i32 = 0;
+            let mut sum_r: i128 = 0;
+            let mut sum_g: i128 = 0;
+            let mut sum_b: i128 = 0;
 
             for (k, &weight) in row_vec.iter().enumerate().take(kernel_size) {
                 let sx = (x as isize + k as isize - half).clamp(0, w as isize - 1) as usize;
                 let src = (y * w + sx) * 4;
+                let weight = i128::from(weight);
 
-                sum_r += i32::from(rgba[src]) * weight;
-                sum_g += i32::from(rgba[src + 1]) * weight;
-                sum_b += i32::from(rgba[src + 2]) * weight;
+                sum_r += i128::from(rgba[src]) * weight;
+                sum_g += i128::from(rgba[src + 1]) * weight;
+                sum_b += i128::from(rgba[src + 2]) * weight;
             }
 
             let dst = x * 3;
@@ -369,13 +370,14 @@ fn apply_convolution_separable(
 
     out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
         for x in 0..w {
-            let mut sum_r: i32 = 0;
-            let mut sum_g: i32 = 0;
-            let mut sum_b: i32 = 0;
+            let mut sum_r: i128 = 0;
+            let mut sum_g: i128 = 0;
+            let mut sum_b: i128 = 0;
 
             for (k, &weight) in col_vec.iter().enumerate().take(kernel_size) {
                 let sy = (y as isize + k as isize - half).clamp(0, h as isize - 1) as usize;
                 let src = sy * row_channels + x * 3;
+                let weight = i128::from(weight);
 
                 sum_r += tmp[src] * weight;
                 sum_g += tmp[src + 1] * weight;
@@ -383,9 +385,9 @@ fn apply_convolution_separable(
             }
 
             let dst = x * 4;
-            row[dst] = (sum_r / divisor + bias).clamp(0, 255) as u8;
-            row[dst + 1] = (sum_g / divisor + bias).clamp(0, 255) as u8;
-            row[dst + 2] = (sum_b / divisor + bias).clamp(0, 255) as u8;
+            row[dst] = normalize_channel(sum_r, divisor, bias);
+            row[dst + 1] = normalize_channel(sum_g, divisor, bias);
+            row[dst + 2] = normalize_channel(sum_b, divisor, bias);
             row[dst + 3] = rgba[(y * w + x) * 4 + 3];
         }
     });
@@ -406,8 +408,8 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
     let h = image.height() as usize;
     let rgba = image.rgba();
     let kernel_size = kernel.size();
-    let divisor = kernel.divisor();
-    let bias = kernel.bias();
+    let divisor = i128::from(kernel.divisor());
+    let bias = i128::from(kernel.bias());
     let weights = kernel.weights();
     let half = (kernel_size / 2) as isize;
     let row_bytes = w * 4;
@@ -415,33 +417,37 @@ fn apply_convolution_2d(image: &DecodedImage, kernel: &Kernel) -> DecodedImage {
 
     out.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
         for x in 0..w {
-            let mut sum_r: i32 = 0;
-            let mut sum_g: i32 = 0;
-            let mut sum_b: i32 = 0;
+            let mut sum_r: i128 = 0;
+            let mut sum_g: i128 = 0;
+            let mut sum_b: i128 = 0;
 
             for ky in 0..kernel_size {
                 for kx in 0..kernel_size {
                     let sy = (y as isize + ky as isize - half).clamp(0, h as isize - 1) as usize;
                     let sx = (x as isize + kx as isize - half).clamp(0, w as isize - 1) as usize;
                     let src = (sy * w + sx) * 4;
-                    let weight = weights[ky * kernel_size + kx];
+                    let weight = i128::from(weights[ky * kernel_size + kx]);
 
-                    sum_r += i32::from(rgba[src]) * weight;
-                    sum_g += i32::from(rgba[src + 1]) * weight;
-                    sum_b += i32::from(rgba[src + 2]) * weight;
+                    sum_r += i128::from(rgba[src]) * weight;
+                    sum_g += i128::from(rgba[src + 1]) * weight;
+                    sum_b += i128::from(rgba[src + 2]) * weight;
                 }
             }
 
             let dst = x * 4;
-            row[dst] = (sum_r / divisor + bias).clamp(0, 255) as u8;
-            row[dst + 1] = (sum_g / divisor + bias).clamp(0, 255) as u8;
-            row[dst + 2] = (sum_b / divisor + bias).clamp(0, 255) as u8;
+            row[dst] = normalize_channel(sum_r, divisor, bias);
+            row[dst + 1] = normalize_channel(sum_g, divisor, bias);
+            row[dst + 2] = normalize_channel(sum_b, divisor, bias);
             row[dst + 3] = rgba[(y * w + x) * 4 + 3];
         }
     });
 
     DecodedImage::new(image.width(), image.height(), out)
         .expect("convolution preserves source dimensions and RGBA buffer length")
+}
+
+fn normalize_channel(sum: i128, divisor: i128, bias: i128) -> u8 {
+    (sum / divisor + bias).clamp(0, 255) as u8
 }
 
 #[cfg(test)]
@@ -503,6 +509,28 @@ mod tests {
             .expect("custom convolution should always succeed");
         let result_2d = apply_convolution_2d(&image, &kernel);
         assert_eq!(result_separable.rgba(), result_2d.rgba());
+    }
+
+    #[test]
+    fn separable_convolution_handles_large_weights() {
+        let image = DecodedImage::new(1, 1, vec![255, 200, 100, 77]).expect("valid test image");
+        let kernel = Kernel::new(vec![i32::MAX; 9], 3, 1, 0).expect("valid kernel");
+
+        let result = ConvolutionCustom { kernel }
+            .apply(&image)
+            .expect("custom convolution should always succeed");
+
+        assert_eq!(result.rgba(), &[255, 255, 255, 77]);
+    }
+
+    #[test]
+    fn convolution_2d_handles_large_weights() {
+        let image = DecodedImage::new(1, 1, vec![255, 200, 100, 77]).expect("valid test image");
+        let kernel = Kernel::new(vec![i32::MAX; 9], 3, 1, 0).expect("valid kernel");
+
+        let result = apply_convolution_2d(&image, &kernel);
+
+        assert_eq!(result.rgba(), &[255, 255, 255, 77]);
     }
 
     #[test]
