@@ -57,9 +57,34 @@ pub enum StegConfigError {
 /// Metadata decoded from a detected steganography header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StegInfo {
-    pub config: StegConfig,
-    pub version: u8,
-    pub payload_len: u32,
+    config: StegConfig,
+    version: u8,
+    payload_len: u32,
+}
+
+impl StegInfo {
+    const fn new(config: StegConfig, version: u8, payload_len: u32) -> Self {
+        Self {
+            config,
+            version,
+            payload_len,
+        }
+    }
+
+    #[must_use]
+    pub const fn config(&self) -> StegConfig {
+        self.config
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> u8 {
+        self.version
+    }
+
+    #[must_use]
+    pub const fn payload_len(&self) -> u32 {
+        self.payload_len
+    }
 }
 
 #[derive(Debug, Error)]
@@ -75,6 +100,16 @@ pub enum StegError {
 
     #[error("unsupported steganography version {0}; only version 0 is supported")]
     UnsupportedVersion(u8),
+
+    #[error(
+        "steganography metadata mismatch: expected version {expected_version} with payload length {expected_payload_len}, found version {found_version} with payload length {found_payload_len}"
+    )]
+    HeaderMismatch {
+        expected_version: u8,
+        expected_payload_len: u32,
+        found_version: u8,
+        found_payload_len: u32,
+    },
 
     #[error("all channels have 0 bits configured; nothing to embed")]
     NoChannels,
@@ -510,11 +545,7 @@ fn try_read_header(image: &DecodedImage, config: StegConfig) -> Option<StegInfo>
         return None;
     }
 
-    Some(StegInfo {
-        config,
-        version,
-        payload_len,
-    })
+    Some(StegInfo::new(config, version, payload_len))
 }
 
 // -----------------------------------------------------------------------------
@@ -601,7 +632,7 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
     let mut rgba = image.rgba().to_vec();
     let total_pixels = image.pixel_count();
 
-    let bits_to_clear = HEADER_BITS + u64::from(info.payload_len) * 8;
+    let bits_to_clear = HEADER_BITS + u64::from(info.payload_len()) * 8;
     let mut cursor = BitCursor::new(config);
 
     for _ in 0..bits_to_clear {
@@ -618,16 +649,30 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
 
 /// Extract the payload from `image` using the config described in `info`.
 ///
-/// The caller should have obtained `info` from [`detect`] or the GUI.
+/// `info` is revalidated against the image header before extraction.
 ///
 /// # Errors
 /// Returns [`StegError`] if channel config is invalid or payload/header bounds
 /// checks fail.
 pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Arc<[u8]>, StegError> {
-    let config = info.config;
+    let config = info.config();
     if config.bits_per_pixel() == 0 {
         return Err(StegError::NoChannels);
     }
+
+    let Some(header_info) = try_read_header(image, config) else {
+        return Err(StegError::NotFound);
+    };
+    if header_info.version() != info.version() || header_info.payload_len() != info.payload_len() {
+        return Err(StegError::HeaderMismatch {
+            expected_version: info.version(),
+            expected_payload_len: info.payload_len(),
+            found_version: header_info.version(),
+            found_payload_len: header_info.payload_len(),
+        });
+    }
+
+    let payload_len = header_info.payload_len();
 
     let total_pixels = image.pixel_count();
     let total_bits = u64::try_from(total_pixels)
@@ -636,28 +681,23 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Arc<[u8]>, StegE
         .ok_or(StegError::ArithmeticOverflow("total bits"))?;
     let remaining_bits = total_bits.saturating_sub(HEADER_BITS);
 
-    let payload_bits = u64::from(info.payload_len)
+    let payload_bits = u64::from(payload_len)
         .checked_mul(8)
         .ok_or(StegError::ArithmeticOverflow("payload bits"))?;
 
     if payload_bits > remaining_bits {
-        return Err(StegError::PayloadTooLarge {
-            payload_len: info.payload_len,
-        });
+        return Err(StegError::PayloadTooLarge { payload_len });
     }
 
-    // Skip past the header (80 bits) - we trust the passed info
+    // Skip past the header (80 bits).
     let mut cursor = BitCursor::new(config);
-    skip_bits(&mut cursor, 80, total_pixels).ok_or(StegError::PayloadTooLarge {
-        payload_len: info.payload_len,
-    })?;
+    skip_bits(&mut cursor, 80, total_pixels).ok_or(StegError::PayloadTooLarge { payload_len })?;
 
-    let mut payload = Vec::with_capacity(info.payload_len as usize);
-    for _ in 0..info.payload_len {
+    let mut payload = Vec::with_capacity(payload_len as usize);
+    for _ in 0..payload_len {
         #[allow(clippy::cast_possible_truncation)]
-        let byte = read_bits(image.rgba(), &mut cursor, 8, total_pixels).ok_or(StegError::PayloadTooLarge {
-            payload_len: info.payload_len,
-        })? as u8;
+        let byte = read_bits(image.rgba(), &mut cursor, 8, total_pixels)
+            .ok_or(StegError::PayloadTooLarge { payload_len })? as u8;
         payload.push(byte);
     }
 
@@ -766,9 +806,9 @@ mod tests {
 
         let embedded = embed(&image, config, payload).expect("embed should succeed");
         let info = detect(&embedded).expect("detect should find embedded payload");
-        assert_eq!(info.config, config);
-        assert_eq!(info.version, 0);
-        assert_eq!(info.payload_len, u32::try_from(payload.len()).unwrap());
+        assert_eq!(info.config(), config);
+        assert_eq!(info.version(), 0);
+        assert_eq!(info.payload_len(), u32::try_from(payload.len()).unwrap());
 
         let extracted = extract(&embedded, &info).expect("extract should succeed");
         assert_eq!(extracted.as_ref(), payload);
@@ -867,26 +907,30 @@ mod tests {
     #[test]
     fn extract_rejects_no_channels_config() {
         let image = patterned_image(8, 8);
-        let info = StegInfo {
-            config: steg_config(0, 0, 0, 0),
-            version: 0,
-            payload_len: 0,
-        };
+        let info = StegInfo::new(steg_config(0, 0, 0, 0), 0, 0);
 
         let err = extract(&image, &info).expect_err("must reject no-channel config");
         assert!(matches!(err, StegError::NoChannels));
     }
 
     #[test]
-    fn extract_rejects_payload_too_large_from_header_info() {
+    fn extract_rejects_missing_header_for_supplied_info() {
         let image = patterned_image(8, 8);
-        let info = StegInfo {
-            config: steg_config(1, 1, 1, 0),
-            version: 0,
-            payload_len: u32::MAX,
-        };
+        let info = StegInfo::new(steg_config(1, 1, 1, 0), 0, u32::MAX);
 
-        let err = extract(&image, &info).expect_err("payload must be rejected if it does not fit");
-        assert!(matches!(err, StegError::PayloadTooLarge { .. }));
+        let err = extract(&image, &info).expect_err("missing header must fail revalidation");
+        assert!(matches!(err, StegError::NotFound));
+    }
+
+    #[test]
+    fn extract_rejects_header_mismatch_from_info() {
+        let image = patterned_image(12, 12);
+        let config = steg_config(2, 1, 0, 0);
+        let embedded = embed(&image, config, b"abc").expect("embed should succeed");
+        let detected = detect(&embedded).expect("detect should find embedded payload");
+        let mismatched = StegInfo::new(detected.config(), detected.version(), detected.payload_len() + 1);
+
+        let err = extract(&embedded, &mismatched).expect_err("mismatched payload length should fail");
+        assert!(matches!(err, StegError::HeaderMismatch { .. }));
     }
 }

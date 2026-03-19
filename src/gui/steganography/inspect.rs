@@ -38,27 +38,27 @@ impl BmpViewerApp {
                             .spacing([12.0, 2.0])
                             .show(ui, |ui| {
                                 ui.label("Version:");
-                                ui.monospace(info.version.to_string());
+                                ui.monospace(info.version().to_string());
                                 ui.end_row();
 
                                 ui.label("Payload size:");
-                                ui.monospace(format!("{} bytes", info.payload_len));
+                                ui.monospace(format!("{} bytes", info.payload_len()));
                                 ui.end_row();
 
                                 ui.label("Red bits:");
-                                ui.monospace(info.config.r_bits().to_string());
+                                ui.monospace(info.config().r_bits().to_string());
                                 ui.end_row();
 
                                 ui.label("Green bits:");
-                                ui.monospace(info.config.g_bits().to_string());
+                                ui.monospace(info.config().g_bits().to_string());
                                 ui.end_row();
 
                                 ui.label("Blue bits:");
-                                ui.monospace(info.config.b_bits().to_string());
+                                ui.monospace(info.config().b_bits().to_string());
                                 ui.end_row();
 
                                 ui.label("Alpha bits:");
-                                ui.monospace(info.config.a_bits().to_string());
+                                ui.monospace(info.config().a_bits().to_string());
                                 ui.end_row();
                             });
 
@@ -160,7 +160,7 @@ impl BmpViewerApp {
         }
 
         if do_remove && let Some(info) = self.steganography.detected.as_ref() {
-            return Some(RemoveSteganography { config: info.config }.into());
+            return Some(RemoveSteganography { config: info.config() }.into());
         }
 
         None
