@@ -160,7 +160,7 @@ impl BmpViewerApp {
         }
 
         if do_remove && let Some(info) = self.steganography.detected.as_ref() {
-            return Some(RemoveSteganography { config: info.config() }.into());
+            return Some(RemoveSteganography::new(info.config()).into());
         }
 
         None

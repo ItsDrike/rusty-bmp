@@ -125,10 +125,7 @@ impl BmpViewerApp {
                                 .clicked()
                             {
                                 actions.push(InspectorAction::ApplyTransform(
-                                    Brightness {
-                                        delta: self.transforms.tonal.brightness_input,
-                                    }
-                                    .into(),
+                                    Brightness::new(self.transforms.tonal.brightness_input).into(),
                                 ));
                                 self.transforms.tonal.brightness_input = 0;
                             }
@@ -144,10 +141,7 @@ impl BmpViewerApp {
                                 .clicked()
                             {
                                 actions.push(InspectorAction::ApplyTransform(
-                                    Contrast {
-                                        delta: self.transforms.tonal.contrast_input,
-                                    }
-                                    .into(),
+                                    Contrast::new(self.transforms.tonal.contrast_input).into(),
                                 ));
                                 self.transforms.tonal.contrast_input = 0;
                             }
@@ -158,34 +152,22 @@ impl BmpViewerApp {
                         ui.horizontal_wrapped(|ui| {
                             if ui.small_button("Blur").clicked() {
                                 actions.push(InspectorAction::ApplyTransform(
-                                    ConvolutionPreset {
-                                        filter: ConvolutionFilter::Blur,
-                                    }
-                                    .into(),
+                                    ConvolutionPreset::new(ConvolutionFilter::Blur).into(),
                                 ));
                             }
                             if ui.small_button("Sharpen").clicked() {
                                 actions.push(InspectorAction::ApplyTransform(
-                                    ConvolutionPreset {
-                                        filter: ConvolutionFilter::Sharpen,
-                                    }
-                                    .into(),
+                                    ConvolutionPreset::new(ConvolutionFilter::Sharpen).into(),
                                 ));
                             }
                             if ui.small_button("Edge").clicked() {
                                 actions.push(InspectorAction::ApplyTransform(
-                                    ConvolutionPreset {
-                                        filter: ConvolutionFilter::EdgeDetect,
-                                    }
-                                    .into(),
+                                    ConvolutionPreset::new(ConvolutionFilter::EdgeDetect).into(),
                                 ));
                             }
                             if ui.small_button("Emboss").clicked() {
                                 actions.push(InspectorAction::ApplyTransform(
-                                    ConvolutionPreset {
-                                        filter: ConvolutionFilter::Emboss,
-                                    }
-                                    .into(),
+                                    ConvolutionPreset::new(ConvolutionFilter::Emboss).into(),
                                 ));
                             }
                             if ui.small_button("Custom...").clicked() {

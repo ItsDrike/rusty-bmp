@@ -304,7 +304,7 @@ mod tests {
         let mut exec = TransformPipelineExecutor::with_config(cfg);
 
         for _ in 0..5 {
-            exec.push(Brightness { delta: 1 }.into());
+            exec.push(Brightness::new(1).into());
         }
 
         let _ = exec.replay_strict(&img).expect("strict replay should succeed");
@@ -318,7 +318,7 @@ mod tests {
         let mut exec = TransformPipelineExecutor::with_config(cfg);
 
         for _ in 0..3 {
-            exec.push(Brightness { delta: 1 }.into());
+            exec.push(Brightness::new(1).into());
         }
 
         let _ = exec.replay_strict(&img).expect("strict replay should succeed");
@@ -333,10 +333,8 @@ mod tests {
         let mut manual = img.clone();
 
         for _ in 0..8 {
-            exec.push(Brightness { delta: 1 }.into());
-            manual = Brightness { delta: 1 }
-                .apply(&manual)
-                .expect("brightness should succeed");
+            exec.push(Brightness::new(1).into());
+            manual = Brightness::new(1).apply(&manual).expect("brightness should succeed");
         }
 
         let replayed = exec.replay_strict(&img).expect("strict replay should succeed");
@@ -351,7 +349,7 @@ mod tests {
         let mut exec = TransformPipelineExecutor::with_config(cfg);
 
         for _ in 0..6 {
-            exec.push(Brightness { delta: 1 }.into());
+            exec.push(Brightness::new(1).into());
         }
         let _ = exec.replay_strict(&img).expect("strict replay should succeed");
         assert!(!exec.checkpoints.is_empty());
@@ -365,7 +363,7 @@ mod tests {
         let img = test_image();
         let cfg = TransformPipelineExecutorConfig::new(1, 10);
         let mut exec = TransformPipelineExecutor::with_config(cfg);
-        exec.push(Brightness { delta: 1 }.into());
+        exec.push(Brightness::new(1).into());
         let invalid_crop = Crop::try_new(3, 0, 1, 1).expect("non-zero crop dimensions should be accepted");
         exec.push(invalid_crop.into());
 
@@ -381,7 +379,7 @@ mod tests {
         let img = test_image();
         let cfg = TransformPipelineExecutorConfig::new(1, 10);
         let mut exec = TransformPipelineExecutor::with_config(cfg);
-        exec.push(Brightness { delta: 1 }.into());
+        exec.push(Brightness::new(1).into());
         let invalid_crop = Crop::try_new(3, 0, 1, 1).expect("non-zero crop dimensions should be accepted");
         exec.push(invalid_crop.into());
         exec.push(Grayscale.into());

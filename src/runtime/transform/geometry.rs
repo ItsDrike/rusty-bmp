@@ -236,31 +236,64 @@ impl TransformOp for RotateRight {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RotateAny {
-    pub angle_tenths: i32,
-    pub interpolation: RotationInterpolation,
-    pub expand: bool,
+    angle_tenths: i32,
+    interpolation: RotationInterpolation,
+    expand: bool,
 }
 
 impl RotateAny {
+    #[must_use]
+    pub const fn new(angle_tenths: i32, interpolation: RotationInterpolation, expand: bool) -> Self {
+        Self {
+            angle_tenths: Self::normalize_angle_tenths(angle_tenths),
+            interpolation,
+            expand,
+        }
+    }
+
+    #[must_use]
+    pub const fn angle_tenths(self) -> i32 {
+        self.angle_tenths
+    }
+
+    #[must_use]
+    pub const fn interpolation(self) -> RotationInterpolation {
+        self.interpolation
+    }
+
+    #[must_use]
+    pub const fn expand(self) -> bool {
+        self.expand
+    }
+
+    const fn normalize_angle_tenths(angle_tenths: i32) -> i32 {
+        let mut wrapped = angle_tenths % 3600;
+        if wrapped < -1800 {
+            wrapped += 3600;
+        } else if wrapped >= 1800 {
+            wrapped -= 3600;
+        }
+        wrapped
+    }
+
     /// Returns the rotation angle in degrees.
     ///
     /// The internal representation stores the angle in tenths of a degree
     /// (`angle_tenths`). This converts it to a floating-point degree value for
     /// use in trigonometric calculations.
     fn angle_degrees(self) -> f32 {
-        debug_assert!((-36000..=36000).contains(&self.angle_tenths));
-
-        // Safe: f32 has 24 bits of precision, which fits the expected range of angle_tenths
+        // Safe: angle_tenths is normalized to [-1800, 1799], well within f32 precision.
         #[allow(clippy::cast_precision_loss)]
-        return self.angle_tenths as f32 / 10.0;
+        let angle_tenths = self.angle_tenths() as f32;
+        angle_tenths / 10.0
     }
 }
 
 impl fmt::Display for RotateAny {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let angle = self.angle_degrees();
-        let mode = if self.expand { "Expand" } else { "Crop" };
-        write!(f, "Rotate {angle:+.1} deg ({}, {mode})", self.interpolation)
+        let mode = if self.expand() { "Expand" } else { "Crop" };
+        write!(f, "Rotate {angle:+.1} deg ({}, {mode})", self.interpolation())
     }
 }
 
@@ -280,7 +313,7 @@ impl TransformOp for RotateAny {
         let src_w = image.width() as usize;
         let src_h = image.height() as usize;
 
-        if self.expand || src_w == src_h {
+        if self.expand() || src_w == src_h {
             let turns = (angle_degrees / 90.0).round() as i32;
             let snapped = turns as f32 * 90.0;
             if (angle_degrees - snapped).abs() < 1e-4 {
@@ -304,7 +337,7 @@ impl TransformOp for RotateAny {
         let src_cx = (src_w as f32 - 1.0) * 0.5;
         let src_cy = (src_h as f32 - 1.0) * 0.5;
 
-        let (dst_w, dst_h) = if self.expand {
+        let (dst_w, dst_h) = if self.expand() {
             let abs_cos = cos.abs();
             let abs_sin = sin.abs();
             let w_f = src_w as f32 * abs_cos + src_h as f32 * abs_sin;
@@ -337,7 +370,7 @@ impl TransformOp for RotateAny {
                 let sy = -x * sin + y * cos + src_cy;
 
                 let dst = dx * 4;
-                let sample = sample_rgba(image, sx, sy, self.interpolation);
+                let sample = sample_rgba(image, sx, sy, self.interpolation());
                 row[dst..dst + 4].copy_from_slice(&sample);
             }
         });
@@ -350,7 +383,7 @@ impl TransformOp for RotateAny {
     }
 
     fn replay_cost(&self) -> u32 {
-        match self.interpolation {
+        match self.interpolation() {
             RotationInterpolation::Nearest => 3,
             RotationInterpolation::Bilinear => 5,
             RotationInterpolation::Bicubic => 8,
@@ -668,18 +701,52 @@ impl TransformOp for Skew {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Translate {
-    pub dx: i32,
-    pub dy: i32,
-    pub mode: TranslateMode,
-    pub fill: [u8; 4],
+    dx: i32,
+    dy: i32,
+    mode: TranslateMode,
+    fill: [u8; 4],
+}
+
+impl Translate {
+    #[must_use]
+    pub const fn new(dx: i32, dy: i32, mode: TranslateMode, fill: [u8; 4]) -> Self {
+        Self { dx, dy, mode, fill }
+    }
+
+    #[must_use]
+    pub const fn dx(self) -> i32 {
+        self.dx
+    }
+
+    #[must_use]
+    pub const fn dy(self) -> i32 {
+        self.dy
+    }
+
+    #[must_use]
+    pub const fn mode(self) -> TranslateMode {
+        self.mode
+    }
+
+    #[must_use]
+    pub const fn fill(self) -> [u8; 4] {
+        self.fill
+    }
 }
 
 impl fmt::Display for Translate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fill = self.fill();
         write!(
             f,
             "Translate dx={:+}, dy={:+} ({}, fill #{:02X}{:02X}{:02X}{:02X})",
-            self.dx, self.dy, self.mode, self.fill[0], self.fill[1], self.fill[2], self.fill[3]
+            self.dx(),
+            self.dy(),
+            self.mode(),
+            fill[0],
+            fill[1],
+            fill[2],
+            fill[3]
         )
     }
 }
@@ -695,25 +762,25 @@ impl TransformOp for Translate {
         let src_w_i32 = image.width_i32();
         let src_h_i32 = image.height_i32();
 
-        let (dst_w, dst_h, x_base, y_base) = match self.mode {
+        let (dst_w, dst_h, x_base, y_base) = match self.mode() {
             TranslateMode::Crop => (src_w, src_h, 0_i32, 0_i32),
             TranslateMode::Expand => (
-                src_w + self.dx.unsigned_abs() as usize,
-                src_h + self.dy.unsigned_abs() as usize,
-                (-self.dx).max(0),
-                (-self.dy).max(0),
+                src_w + self.dx().unsigned_abs() as usize,
+                src_h + self.dy().unsigned_abs() as usize,
+                (-self.dx()).max(0),
+                (-self.dy()).max(0),
             ),
         };
 
         let row_bytes = dst_w * 4;
         let mut out = vec![0_u8; row_bytes * dst_h];
-        out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&self.fill));
+        out.par_chunks_mut(4).for_each(|px| px.copy_from_slice(&self.fill()));
         let src_rgba = image.rgba();
 
         out.par_chunks_mut(row_bytes).enumerate().for_each(|(dst_y, row)| {
             for dst_x in 0..dst_w {
-                let src_x = dst_x as i32 - self.dx - x_base;
-                let src_y = dst_y as i32 - self.dy - y_base;
+                let src_x = dst_x as i32 - self.dx() - x_base;
+                let src_y = dst_y as i32 - self.dy() - y_base;
 
                 if src_x >= 0 && src_x < src_w_i32 && src_y >= 0 && src_y < src_h_i32 {
                     let src = (src_y as usize * src_w + src_x as usize) * 4;
@@ -1076,13 +1143,9 @@ mod tests {
             ],
         )
         .expect("valid image");
-        let out = RotateAny {
-            angle_tenths: 0,
-            interpolation: RotationInterpolation::Bilinear,
-            expand: true,
-        }
-        .apply(&image)
-        .expect("rotate any should always succeed");
+        let out = RotateAny::new(0, RotationInterpolation::Bilinear, true)
+            .apply(&image)
+            .expect("rotate any should always succeed");
         assert_eq!(out.rgba(), image.rgba());
     }
 
@@ -1097,13 +1160,9 @@ mod tests {
         )
         .expect("valid image");
         let expected = RotateLeft.apply(&image).expect("rotate left should always succeed");
-        let got = RotateAny {
-            angle_tenths: 900,
-            interpolation: RotationInterpolation::Nearest,
-            expand: true,
-        }
-        .apply(&image)
-        .expect("rotate any should always succeed");
+        let got = RotateAny::new(900, RotationInterpolation::Nearest, true)
+            .apply(&image)
+            .expect("rotate any should always succeed");
         assert_eq!(got.rgba(), expected.rgba());
     }
 
@@ -1189,14 +1248,9 @@ mod tests {
             ],
         )
         .expect("valid image");
-        let out = Translate {
-            dx: 0,
-            dy: 0,
-            mode: TranslateMode::Crop,
-            fill: [0, 0, 0, 0],
-        }
-        .apply(&image)
-        .expect("translate should always succeed");
+        let out = Translate::new(0, 0, TranslateMode::Crop, [0, 0, 0, 0])
+            .apply(&image)
+            .expect("translate should always succeed");
         assert_eq!(out.rgba(), image.rgba());
     }
 
@@ -1234,39 +1288,36 @@ mod tests {
 
     #[test]
     fn rotate_any_display_format() {
-        let op = RotateAny {
-            angle_tenths: -125,
-            interpolation: RotationInterpolation::Bicubic,
-            expand: false,
-        };
+        let op = RotateAny::new(-125, RotationInterpolation::Bicubic, false);
         assert_eq!(op.to_string(), "Rotate -12.5 deg (Bicubic, Crop)");
     }
 
     #[test]
+    fn rotate_any_new_normalizes_angle_tenths() {
+        assert_eq!(
+            RotateAny::new(3612, RotationInterpolation::Nearest, false).angle_tenths(),
+            12
+        );
+        assert_eq!(
+            RotateAny::new(-3612, RotationInterpolation::Nearest, false).angle_tenths(),
+            -12
+        );
+        assert_eq!(
+            RotateAny::new(1800, RotationInterpolation::Nearest, false).angle_tenths(),
+            -1800
+        );
+    }
+
+    #[test]
     fn translate_display_format() {
-        let op = Translate {
-            dx: -12,
-            dy: 7,
-            mode: TranslateMode::Expand,
-            fill: [0x10, 0x20, 0x30, 0x40],
-        };
+        let op = Translate::new(-12, 7, TranslateMode::Expand, [0x10, 0x20, 0x30, 0x40]);
         assert_eq!(op.to_string(), "Translate dx=-12, dy=+7 (Expand, fill #10203040)");
     }
 
     #[test]
     fn replay_cost_rotate_any_depends_on_interpolation() {
-        let nearest = RotateAny {
-            angle_tenths: 123,
-            interpolation: RotationInterpolation::Nearest,
-            expand: true,
-        }
-        .replay_cost();
-        let bilinear = RotateAny {
-            angle_tenths: 123,
-            interpolation: RotationInterpolation::Bilinear,
-            expand: true,
-        }
-        .replay_cost();
+        let nearest = RotateAny::new(123, RotationInterpolation::Nearest, true).replay_cost();
+        let bilinear = RotateAny::new(123, RotationInterpolation::Bilinear, true).replay_cost();
         assert!(bilinear > nearest);
     }
 
@@ -1301,19 +1352,10 @@ mod tests {
     fn smoke_construct_geometry_ops() {
         let _ = RotateLeft;
         let _ = RotateRight;
-        let _ = RotateAny {
-            angle_tenths: 15,
-            interpolation: RotationInterpolation::Nearest,
-            expand: false,
-        };
+        let _ = RotateAny::new(15, RotationInterpolation::Nearest, false);
         let _ = Resize::try_new(10, 10, RotationInterpolation::Bilinear).expect("valid resize");
         let _ = Skew::try_new(10, 20, RotationInterpolation::Bicubic, true).expect("valid skew");
-        let _ = Translate {
-            dx: 1,
-            dy: 2,
-            mode: TranslateMode::Crop,
-            fill: [0, 0, 0, 0],
-        };
+        let _ = Translate::new(1, 2, TranslateMode::Crop, [0, 0, 0, 0]);
         let _ = Crop::try_new(0, 0, 1, 1).expect("valid crop");
     }
 }

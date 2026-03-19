@@ -67,7 +67,7 @@ impl SteganographyUiState {
             return Ok(());
         };
 
-        steganography::embed(current, embed.config, &embed.payload)
+        steganography::embed(current, embed.config(), embed.payload())
             .map(|_| ())
             .map_err(|err| format!("{failure_message} ({err})"))
     }

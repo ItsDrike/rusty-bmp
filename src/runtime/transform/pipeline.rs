@@ -223,7 +223,7 @@ mod tests {
     fn replay_strict_replays_ops_in_order() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        let brighten = Brightness { delta: 10 };
+        let brighten = Brightness::new(10);
         pipeline.push(brighten.into());
         pipeline.push(Grayscale.into());
 
@@ -238,7 +238,7 @@ mod tests {
     fn replay_strict_reports_failing_transform_index() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        pipeline.push(Brightness { delta: 1 }.into());
+        pipeline.push(Brightness::new(1).into());
         let invalid_crop = Crop::try_new(3, 0, 1, 1).expect("non-zero crop dimensions should be accepted");
         pipeline.push(invalid_crop.into());
         pipeline.push(Grayscale.into());
@@ -253,7 +253,7 @@ mod tests {
     fn replay_best_effort_skips_failed_transforms() {
         let img = test_image();
         let mut pipeline = TransformPipeline::default();
-        pipeline.push(Brightness { delta: 1 }.into());
+        pipeline.push(Brightness::new(1).into());
         let invalid_crop = Crop::try_new(3, 0, 1, 1).expect("non-zero crop dimensions should be accepted");
         pipeline.push(invalid_crop.into());
         pipeline.push(Grayscale.into());
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(report.skips[0].index, 1);
 
         let manual = Grayscale
-            .apply(&Brightness { delta: 1 }.apply(&img).expect("brightness should succeed"))
+            .apply(&Brightness::new(1).apply(&img).expect("brightness should succeed"))
             .expect("grayscale should succeed");
         assert_eq!(report.image.rgba(), manual.rgba());
     }
@@ -273,30 +273,16 @@ mod tests {
     fn replay_cost_variants_stay_reasonable() {
         assert_eq!(Grayscale.replay_cost(), 1);
         assert_eq!(
-            Translate {
-                dx: 1,
-                dy: -1,
-                mode: TranslateMode::Crop,
-                fill: [0, 0, 0, 0],
-            }
-            .replay_cost(),
+            Translate::new(1, -1, TranslateMode::Crop, [0, 0, 0, 0]).replay_cost(),
             2
         );
-        assert!(
-            RotateAny {
-                angle_tenths: 123,
-                interpolation: RotationInterpolation::Bicubic,
-                expand: true,
-            }
-            .replay_cost()
-                > 1
-        );
+        assert!(RotateAny::new(123, RotationInterpolation::Bicubic, true).replay_cost() > 1);
     }
 
     #[test]
     fn remove_returns_error_for_out_of_bounds_index() {
         let mut pipeline = TransformPipeline::default();
-        pipeline.push(Brightness { delta: 1 }.into());
+        pipeline.push(Brightness::new(1).into());
 
         let err = pipeline
             .remove(1)
@@ -308,7 +294,7 @@ mod tests {
     #[test]
     fn remove_returns_removed_transform_when_index_is_valid() {
         let mut pipeline = TransformPipeline::default();
-        let first: super::ImageTransform = Brightness { delta: 1 }.into();
+        let first: super::ImageTransform = Brightness::new(1).into();
         let second: super::ImageTransform = Grayscale.into();
         pipeline.push(first.clone());
         pipeline.push(second.clone());

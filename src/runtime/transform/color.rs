@@ -144,15 +144,27 @@ impl TransformOp for Sepia {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Brightness {
-    pub delta: i16,
+    delta: i16,
+}
+
+impl Brightness {
+    #[must_use]
+    pub const fn new(delta: i16) -> Self {
+        Self { delta }
+    }
+
+    #[must_use]
+    pub const fn delta(self) -> i16 {
+        self.delta
+    }
 }
 
 impl fmt::Display for Brightness {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.delta >= 0 {
-            write!(f, "Brightness +{}", self.delta)
+        if self.delta() >= 0 {
+            write!(f, "Brightness +{}", self.delta())
         } else {
-            write!(f, "Brightness {}", self.delta)
+            write!(f, "Brightness {}", self.delta())
         }
     }
 }
@@ -169,11 +181,12 @@ impl TransformOp for Brightness {
     /// Positive values increase brightness, negative values darken the image.
     /// The alpha channel is not modified.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
+        let delta = self.delta();
         let mut out = image.rgba().to_vec();
         out.par_chunks_exact_mut(4).for_each(|px| {
-            px[0] = (i16::from(px[0]) + self.delta).clamp(0, 255) as u8;
-            px[1] = (i16::from(px[1]) + self.delta).clamp(0, 255) as u8;
-            px[2] = (i16::from(px[2]) + self.delta).clamp(0, 255) as u8;
+            px[0] = (i16::from(px[0]) + delta).clamp(0, 255) as u8;
+            px[1] = (i16::from(px[1]) + delta).clamp(0, 255) as u8;
+            px[2] = (i16::from(px[2]) + delta).clamp(0, 255) as u8;
         });
 
         DecodedImage::new(image.width(), image.height(), out).map_err(TransformError::from)
@@ -190,15 +203,27 @@ impl TransformOp for Brightness {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Contrast {
-    pub delta: i16,
+    delta: i16,
+}
+
+impl Contrast {
+    #[must_use]
+    pub const fn new(delta: i16) -> Self {
+        Self { delta }
+    }
+
+    #[must_use]
+    pub const fn delta(self) -> i16 {
+        self.delta
+    }
 }
 
 impl fmt::Display for Contrast {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.delta >= 0 {
-            write!(f, "Contrast +{}", self.delta)
+        if self.delta() >= 0 {
+            write!(f, "Contrast +{}", self.delta())
         } else {
-            write!(f, "Contrast {}", self.delta)
+            write!(f, "Contrast {}", self.delta())
         }
     }
 }
@@ -221,7 +246,7 @@ impl TransformOp for Contrast {
     ///
     /// The result is clamped to `[0, 255]`. The alpha channel is preserved.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let delta_clamped = f32::from(self.delta).clamp(-255.0, 255.0);
+        let delta_clamped = f32::from(self.delta()).clamp(-255.0, 255.0);
         let factor = 259.0 * (delta_clamped + 255.0) / (255.0 * (259.0 - delta_clamped));
 
         let mut out = image.rgba().to_vec();
@@ -277,7 +302,7 @@ mod tests {
     #[test]
     fn brightness_zero_is_identity() {
         let image = DecodedImage::new(1, 1, vec![42, 128, 200, 255]).expect("valid image");
-        let result = Brightness { delta: 0 }
+        let result = Brightness::new(0)
             .apply(&image)
             .expect("brightness should always succeed");
         assert_eq!(result.rgba(), image.rgba());
@@ -286,9 +311,7 @@ mod tests {
     #[test]
     fn contrast_zero_is_identity() {
         let image = DecodedImage::new(1, 1, vec![42, 128, 200, 255]).expect("valid image");
-        let result = Contrast { delta: 0 }
-            .apply(&image)
-            .expect("contrast should always succeed");
+        let result = Contrast::new(0).apply(&image).expect("contrast should always succeed");
         assert_eq!(result.rgba(), image.rgba());
     }
 
@@ -315,7 +338,7 @@ mod tests {
         let _ = InvertColors;
         let _ = Grayscale;
         let _ = super::Sepia;
-        let _ = Brightness { delta: 5 };
-        let _ = Contrast { delta: -7 };
+        let _ = Brightness::new(5);
+        let _ = Contrast::new(-7);
     }
 }

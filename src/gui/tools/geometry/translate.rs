@@ -135,12 +135,12 @@ impl BmpViewerApp {
         }
 
         Some(
-            Translate {
-                dx: self.transforms.translate.dx,
-                dy: self.transforms.translate.dy,
-                mode: self.transforms.translate.mode,
-                fill: self.transforms.translate.fill,
-            }
+            Translate::new(
+                self.transforms.translate.dx,
+                self.transforms.translate.dy,
+                self.transforms.translate.mode,
+                self.transforms.translate.fill,
+            )
             .into(),
         )
     }

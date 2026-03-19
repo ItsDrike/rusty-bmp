@@ -402,7 +402,7 @@ impl BmpViewerApp {
                 .kernel
                 .validate()
                 .ok()
-                .map(|kernel| ConvolutionCustom { kernel }.into())
+                .map(|kernel| ConvolutionCustom::new(kernel).into())
         } else {
             None
         }

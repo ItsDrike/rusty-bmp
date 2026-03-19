@@ -157,6 +157,6 @@ impl BmpViewerApp {
         .expect("steganography sliders restrict channel depths to 0..=8");
         let payload = Arc::from(self.steganography.text_input.as_bytes().to_vec());
 
-        Some(EmbedSteganography { config, payload }.into())
+        Some(EmbedSteganography::new(config, payload).into())
     }
 }

@@ -195,7 +195,7 @@ impl Kernel {
 ///
 /// These correspond to common image processing operations implemented
 /// using fixed convolution kernels.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConvolutionFilter {
     /// Smooths the image using a Gaussian-like blur kernel.
     Blur,
@@ -242,12 +242,24 @@ impl fmt::Display for ConvolutionFilter {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConvolutionPreset {
-    pub filter: ConvolutionFilter,
+    filter: ConvolutionFilter,
+}
+
+impl ConvolutionPreset {
+    #[must_use]
+    pub const fn new(filter: ConvolutionFilter) -> Self {
+        Self { filter }
+    }
+
+    #[must_use]
+    pub const fn filter(&self) -> ConvolutionFilter {
+        self.filter
+    }
 }
 
 impl fmt::Display for ConvolutionPreset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.filter)
+        write!(f, "{}", self.filter())
     }
 }
 
@@ -262,7 +274,7 @@ impl TransformOp for ConvolutionPreset {
     /// Edge pixels are handled using clamped border sampling, and the alpha
     /// channel is preserved unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        let kernel = self.filter.kernel();
+        let kernel = self.filter().kernel();
         if let Some((col_vec, row_vec)) = kernel.separable() {
             Ok(apply_convolution_separable(image, &kernel, &col_vec, &row_vec))
         } else {
@@ -275,18 +287,30 @@ impl TransformOp for ConvolutionPreset {
     }
 
     fn replay_cost(&self) -> u32 {
-        self.filter.kernel().replay_cost()
+        self.filter().kernel().replay_cost()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConvolutionCustom {
-    pub kernel: Kernel,
+    kernel: Kernel,
+}
+
+impl ConvolutionCustom {
+    #[must_use]
+    pub const fn new(kernel: Kernel) -> Self {
+        Self { kernel }
+    }
+
+    #[must_use]
+    pub const fn kernel(&self) -> &Kernel {
+        &self.kernel
+    }
 }
 
 impl fmt::Display for ConvolutionCustom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Custom {}x{}", self.kernel.size(), self.kernel.size())
+        write!(f, "Custom {}x{}", self.kernel().size(), self.kernel().size())
     }
 }
 
@@ -299,10 +323,10 @@ impl TransformOp for ConvolutionCustom {
     /// Edge pixels are handled using clamped border sampling, and the alpha
     /// channel is preserved unchanged.
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        if let Some((col_vec, row_vec)) = self.kernel.separable() {
-            Ok(apply_convolution_separable(image, &self.kernel, &col_vec, &row_vec))
+        if let Some((col_vec, row_vec)) = self.kernel().separable() {
+            Ok(apply_convolution_separable(image, self.kernel(), &col_vec, &row_vec))
         } else {
-            Ok(apply_convolution_2d(image, &self.kernel))
+            Ok(apply_convolution_2d(image, self.kernel()))
         }
     }
 
@@ -311,7 +335,7 @@ impl TransformOp for ConvolutionCustom {
     }
 
     fn replay_cost(&self) -> u32 {
-        self.kernel.replay_cost()
+        self.kernel().replay_cost()
     }
 }
 
@@ -484,7 +508,7 @@ mod tests {
         )
         .expect("valid test image");
         let kernel = Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0).expect("valid kernel");
-        let result = ConvolutionCustom { kernel }
+        let result = ConvolutionCustom::new(kernel)
             .apply(&image)
             .expect("custom convolution should always succeed");
         assert_eq!(result.rgba(), image.rgba());
@@ -504,7 +528,7 @@ mod tests {
         )
         .expect("valid test image");
         let kernel = ConvolutionFilter::Blur.kernel();
-        let result_separable = ConvolutionCustom { kernel: kernel.clone() }
+        let result_separable = ConvolutionCustom::new(kernel.clone())
             .apply(&image)
             .expect("custom convolution should always succeed");
         let result_2d = apply_convolution_2d(&image, &kernel);
@@ -516,7 +540,7 @@ mod tests {
         let image = DecodedImage::new(1, 1, vec![255, 200, 100, 77]).expect("valid test image");
         let kernel = Kernel::new(vec![i32::MAX; 9], 3, 1, 0).expect("valid kernel");
 
-        let result = ConvolutionCustom { kernel }
+        let result = ConvolutionCustom::new(kernel)
             .apply(&image)
             .expect("custom convolution should always succeed");
 
@@ -535,30 +559,18 @@ mod tests {
 
     #[test]
     fn convolution_display_formats() {
+        assert_eq!(ConvolutionPreset::new(ConvolutionFilter::Blur).to_string(), "Blur");
         assert_eq!(
-            ConvolutionPreset {
-                filter: ConvolutionFilter::Blur
-            }
-            .to_string(),
-            "Blur"
-        );
-        assert_eq!(
-            ConvolutionCustom {
-                kernel: Kernel::new(vec![0; 9], 3, 1, 0).expect("valid kernel")
-            }
-            .to_string(),
+            ConvolutionCustom::new(Kernel::new(vec![0; 9], 3, 1, 0).expect("valid kernel")).to_string(),
             "Custom 3x3"
         );
     }
 
     #[test]
     fn replay_cost_matches_kernel_cost() {
-        let preset = ConvolutionPreset {
-            filter: ConvolutionFilter::Sharpen,
-        };
-        let custom = ConvolutionCustom {
-            kernel: Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0).expect("valid kernel"),
-        };
+        let preset = ConvolutionPreset::new(ConvolutionFilter::Sharpen);
+        let custom =
+            ConvolutionCustom::new(Kernel::new(vec![0, 0, 0, 0, 1, 0, 0, 0, 0], 3, 1, 0).expect("valid kernel"));
         assert_eq!(preset.replay_cost(), ConvolutionFilter::Sharpen.kernel().replay_cost());
         assert_eq!(custom.replay_cost(), 6);
     }

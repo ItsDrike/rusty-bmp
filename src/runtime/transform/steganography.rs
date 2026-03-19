@@ -120,27 +120,50 @@ pub enum StegError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmbedSteganography {
-    pub config: StegConfig,
-    pub payload: Arc<[u8]>,
+    config: StegConfig,
+    payload: Arc<[u8]>,
+}
+
+impl EmbedSteganography {
+    #[must_use]
+    pub const fn new(config: StegConfig, payload: Arc<[u8]>) -> Self {
+        Self { config, payload }
+    }
+
+    #[must_use]
+    pub const fn config(&self) -> StegConfig {
+        self.config
+    }
+
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    #[must_use]
+    pub fn payload_arc(&self) -> Arc<[u8]> {
+        Arc::clone(&self.payload)
+    }
 }
 
 impl fmt::Display for EmbedSteganography {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let config = self.config();
         write!(
             f,
             "Embed Steganography ({} bytes, R{}G{}B{}A{})",
-            self.payload.len(),
-            self.config.r_bits(),
-            self.config.g_bits(),
-            self.config.b_bits(),
-            self.config.a_bits()
+            self.payload().len(),
+            config.r_bits(),
+            config.g_bits(),
+            config.b_bits(),
+            config.a_bits()
         )
     }
 }
 
 impl TransformOp for EmbedSteganography {
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        Ok(embed(image, self.config, &self.payload)?)
+        Ok(embed(image, self.config(), self.payload())?)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -154,25 +177,38 @@ impl TransformOp for EmbedSteganography {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RemoveSteganography {
-    pub config: StegConfig,
+    config: StegConfig,
+}
+
+impl RemoveSteganography {
+    #[must_use]
+    pub const fn new(config: StegConfig) -> Self {
+        Self { config }
+    }
+
+    #[must_use]
+    pub const fn config(self) -> StegConfig {
+        self.config
+    }
 }
 
 impl fmt::Display for RemoveSteganography {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let config = self.config();
         write!(
             f,
             "Remove Steganography (R{}G{}B{}A{})",
-            self.config.r_bits(),
-            self.config.g_bits(),
-            self.config.b_bits(),
-            self.config.a_bits()
+            config.r_bits(),
+            config.g_bits(),
+            config.b_bits(),
+            config.a_bits()
         )
     }
 }
 
 impl TransformOp for RemoveSteganography {
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        Ok(remove(image, self.config)?)
+        Ok(remove(image, self.config())?)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
