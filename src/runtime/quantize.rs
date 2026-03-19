@@ -35,6 +35,9 @@ const HISTOGRAM_SIZE: usize = SIDE * SIDE * SIDE;
 pub enum QuantizeError {
     #[error("max_colors must be in 2..=256, got {0}")]
     InvalidMaxColors(usize),
+
+    #[error("RGBA byte length must be a multiple of 4, got {0}")]
+    InvalidRgbaLength(usize),
 }
 
 /// Flattens a 3D histogram coordinate into a single linear array index.
@@ -379,10 +382,15 @@ fn split_cube(cube: Cube, moments: &Moments) -> Option<(Cube, Cube)> {
 ///
 /// # Errors
 /// Returns [`QuantizeError::InvalidMaxColors`] if `max_colors` is outside
-/// `2..=256`.
-pub fn quantize(rgba: &[u8], max_colors: usize) -> Result<(Vec<[u8; 4]>, Vec<u8>), QuantizeError> {
+/// `2..=256`, or [`QuantizeError::InvalidRgbaLength`] when `rgba` is not a
+/// whole number of RGBA pixels.
+pub(crate) fn quantize(rgba: &[u8], max_colors: usize) -> Result<(Vec<[u8; 4]>, Vec<u8>), QuantizeError> {
     if !(2..=256).contains(&max_colors) {
         return Err(QuantizeError::InvalidMaxColors(max_colors));
+    }
+
+    if rgba.len() % 4 != 0 {
+        return Err(QuantizeError::InvalidRgbaLength(rgba.len()));
     }
 
     let moments = build_moments(rgba);
@@ -566,5 +574,13 @@ mod tests {
 
         assert_eq!(quantize(&rgba, 1), Err(QuantizeError::InvalidMaxColors(1)));
         assert_eq!(quantize(&rgba, 257), Err(QuantizeError::InvalidMaxColors(257)));
+    }
+
+    #[test]
+    fn quantize_rejects_non_rgba_input_length() {
+        let mut rgba = rgba_from_colors(&[[0, 0, 0], [255, 255, 255]], 1);
+        rgba.push(123);
+
+        assert_eq!(quantize(&rgba, 2), Err(QuantizeError::InvalidRgbaLength(rgba.len())));
     }
 }

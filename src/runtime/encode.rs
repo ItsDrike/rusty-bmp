@@ -364,7 +364,7 @@ const fn make_info_header(
 /// Quantize the image to at most `max_colors` and return `(palette_rgbquad_entries, indices)`.
 /// Palette entries are in BMP's BGRA ordering.
 fn quantize_image(image: &DecodedImage, max_colors: usize) -> Result<(Vec<RgbQuad>, Vec<u8>), EncodeError> {
-    let (palette, indices) = quantize::quantize(image.rgba(), max_colors)?;
+    let (palette, indices) = image.quantize(max_colors)?;
     let color_table: Vec<RgbQuad> = palette
         .iter()
         .map(|c| RgbQuad {

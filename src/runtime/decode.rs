@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::raw::{BitsPerPixel, Bmp, Compression, RgbMasks, RgbaMasks};
+use crate::{
+    raw::{BitsPerPixel, Bmp, Compression, RgbMasks, RgbaMasks},
+    runtime::quantize::{self, QuantizeError},
+};
 
 #[derive(Debug, Error)]
 pub enum DecodedImageError {
@@ -136,6 +139,20 @@ impl DecodedImage {
     #[must_use]
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
+    }
+
+    /// Quantizes this image to at most `max_colors` palette entries.
+    ///
+    /// Palette fitting uses RGB channels only. Output palette entries are
+    /// always `[R, G, B, 255]`, matching paletted BMP targets in this project.
+    ///
+    /// Returns `(palette, indices)` where `indices` has one entry per pixel.
+    ///
+    /// # Errors
+    /// Returns [`QuantizeError::InvalidMaxColors`] if `max_colors` is outside
+    /// `2..=256`.
+    pub fn quantize(&self, max_colors: usize) -> Result<(Vec<[u8; 4]>, Vec<u8>), QuantizeError> {
+        quantize::quantize(self.rgba(), max_colors)
     }
 
     /// Iterates over pixels as `[r, g, b, a]` values.
@@ -810,6 +827,7 @@ mod tests {
         DecodeError, DecodedImage, DecodedImageError, MAX_DECODED_RGBA_BYTES, rgba_output_len, scale_masked_channel,
     };
     use crate::runtime::encode::{EncodeError, SaveFormat, encode_rgba_to_bmp_with_format};
+    use crate::runtime::quantize::QuantizeError;
 
     #[test]
     fn rgba_output_len_rejects_multiplication_overflow() {
@@ -834,6 +852,23 @@ mod tests {
     fn decoded_image_constructor_rejects_i32_overflow_dimensions() {
         let err = DecodedImage::new(i32::MAX as u32 + 1, 1, vec![0; 4]).expect_err("must reject i32-overflow dims");
         assert!(matches!(err, DecodedImageError::DimensionOverflowI32 { .. }));
+    }
+
+    #[test]
+    fn decoded_image_quantize_returns_one_index_per_pixel() {
+        let image = DecodedImage::new(2, 1, vec![0, 0, 0, 1, 255, 255, 255, 2]).expect("valid image");
+
+        let (palette, indices) = image.quantize(2).expect("valid palette size");
+        assert!(!palette.is_empty());
+        assert_eq!(indices.len(), image.pixel_count());
+        assert!(indices.iter().all(|&idx| usize::from(idx) < palette.len()));
+    }
+
+    #[test]
+    fn decoded_image_quantize_rejects_invalid_palette_size() {
+        let image = DecodedImage::new(1, 1, vec![0, 0, 0, 255]).expect("valid image");
+        let err = image.quantize(1).expect_err("palette size 1 should be rejected");
+        assert!(matches!(err, QuantizeError::InvalidMaxColors(1)));
     }
 
     #[test]
