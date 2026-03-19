@@ -404,24 +404,22 @@ fn scale_masked_channel(px: u32, mask: u32) -> u8 {
     }
 
     let shift = mask.trailing_zeros();
+    let raw = (px & mask) >> shift;
     let bits = mask.count_ones();
 
-    // This helper only explicitly supports channels that fit into 8 bits
-    // Anything larger would just waste those bits anyways, as we map the
-    // range into 0..=255 (u8) anyways.
-    debug_assert!(bits <= 8);
+    // `mask != 0` guarantees `bits` is in 1..=32.
+    // Keep this robust for wide channels as well, including 32-bit masks.
+    let max = if bits == u32::BITS {
+        u32::MAX
+    } else {
+        (1u32 << bits) - 1
+    };
 
-    let raw: u32 = (px & mask) >> shift; // always <= 255
-    let max: u32 = (1u32 << bits) - 1; // always <= 255
+    // Use u64 math so `raw * 255` cannot overflow for wide masks.
+    let mapped = (u64::from(raw) * 255) / u64::from(max);
 
-    // BMP masks should be contiguous
-    debug_assert_eq!(mask >> shift, max);
-
-    // Safe: This explicitly maps the range into 0..=255, u8 cast is safe
     #[allow(clippy::cast_possible_truncation)]
-    let mapped = ((raw * 255) / max) as u8;
-
-    mapped
+    return mapped as u8;
 }
 
 fn decode_bitfields_pixels(
@@ -796,7 +794,9 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DecodeError, DecodedImage, DecodedImageError, MAX_DECODED_RGBA_BYTES, rgba_output_len};
+    use super::{
+        DecodeError, DecodedImage, DecodedImageError, MAX_DECODED_RGBA_BYTES, rgba_output_len, scale_masked_channel,
+    };
 
     #[test]
     fn rgba_output_len_rejects_multiplication_overflow() {
@@ -821,5 +821,21 @@ mod tests {
     fn decoded_image_constructor_rejects_i32_overflow_dimensions() {
         let err = DecodedImage::new(i32::MAX as u32 + 1, 1, vec![0; 4]).expect_err("must reject i32-overflow dims");
         assert!(matches!(err, DecodedImageError::DimensionOverflowI32 { .. }));
+    }
+
+    #[test]
+    fn scale_masked_channel_handles_wide_32_bit_masks() {
+        assert_eq!(scale_masked_channel(0, u32::MAX), 0);
+        assert_eq!(scale_masked_channel(u32::MAX, u32::MAX), 255);
+        assert_eq!(scale_masked_channel(0x8000_0000, u32::MAX), 127);
+    }
+
+    #[test]
+    fn scale_masked_channel_handles_more_than_8_bits() {
+        let mask = 0x0fff_0000;
+
+        assert_eq!(scale_masked_channel(0, mask), 0);
+        assert_eq!(scale_masked_channel(mask, mask), 255);
+        assert_eq!(scale_masked_channel(0x0800_0000, mask), 127);
     }
 }
