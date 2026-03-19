@@ -136,6 +136,7 @@ impl BmpViewerApp {
                         && !self.transforms.crop.has_drag()
                         && !crop_drag_captured);
                 if pan_drag {
+                    // `drag_delta()` is this frame's pointer movement, so add it to the running pan offset.
                     self.viewport.pan_offset += response.drag_delta();
                 }
 
