@@ -30,6 +30,9 @@ pub enum EncodeError {
 
     #[error(transparent)]
     Bmp(#[from] crate::raw::BmpError),
+
+    #[error(transparent)]
+    Quantize(#[from] quantize::QuantizeError),
 }
 
 /// Selects the BMP pixel format used when saving.
@@ -360,8 +363,8 @@ const fn make_info_header(
 
 /// Quantize the image to at most `max_colors` and return `(palette_rgbquad_entries, indices)`.
 /// Palette entries are in BMP's BGRA ordering.
-fn quantize_image(image: &DecodedImage, max_colors: usize) -> (Vec<RgbQuad>, Vec<u8>) {
-    let (palette, indices) = quantize::quantize(image.rgba(), max_colors);
+fn quantize_image(image: &DecodedImage, max_colors: usize) -> Result<(Vec<RgbQuad>, Vec<u8>), EncodeError> {
+    let (palette, indices) = quantize::quantize(image.rgba(), max_colors)?;
     let color_table: Vec<RgbQuad> = palette
         .iter()
         .map(|c| RgbQuad {
@@ -371,7 +374,7 @@ fn quantize_image(image: &DecodedImage, max_colors: usize) -> (Vec<RgbQuad>, Vec
             reserved: 0,
         })
         .collect();
-    (color_table, indices)
+    Ok((color_table, indices))
 }
 
 // ---------------------------------------------------------------------------
@@ -836,7 +839,7 @@ fn encode_indexed_rgb(image: &DecodedImage, bpp: BitsPerPixel) -> Result<Bmp, En
         _ => unreachable!(),
     };
 
-    let (color_table, indices) = quantize_image(image, max_colors);
+    let (color_table, indices) = quantize_image(image, max_colors)?;
 
     let w = image.width() as usize;
     let h = image.height() as usize;
@@ -890,7 +893,7 @@ fn encode_indexed_rgb(image: &DecodedImage, bpp: BitsPerPixel) -> Result<Bmp, En
 // ---------------------------------------------------------------------------
 
 fn encode_rle8(image: &DecodedImage) -> Result<Bmp, EncodeError> {
-    let (color_table, indices) = quantize_image(image, 256);
+    let (color_table, indices) = quantize_image(image, 256)?;
 
     let w = image.width() as usize;
     let h = image.height() as usize;
@@ -986,7 +989,7 @@ fn encode_rle8(image: &DecodedImage) -> Result<Bmp, EncodeError> {
 // ---------------------------------------------------------------------------
 
 fn encode_rle4(image: &DecodedImage) -> Result<Bmp, EncodeError> {
-    let (color_table, indices) = quantize_image(image, 16);
+    let (color_table, indices) = quantize_image(image, 16)?;
 
     let w = image.width() as usize;
     let h = image.height() as usize;

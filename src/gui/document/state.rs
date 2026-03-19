@@ -196,8 +196,9 @@ impl DocumentState {
 
     /// Removes a transform from history and rebuilds the image from the remaining pipeline.
     pub(in crate::gui) fn remove_transform(&mut self, index: usize) -> Option<DocumentImageChange> {
-        if let Some(history) = self.history_mut() {
-            history.remove(index);
+        let removed = self.history_mut().is_some_and(|history| history.remove(index));
+        if !removed {
+            return None;
         }
 
         let (Some(original), Some(history)) = (self.original_image(), self.history()) else {
@@ -247,9 +248,12 @@ impl TransformHistory {
         self.redo_stack.pop()
     }
 
-    pub(in crate::gui) fn remove(&mut self, index: usize) {
-        self.pipeline.remove(index);
+    pub(in crate::gui) fn remove(&mut self, index: usize) -> bool {
+        if self.pipeline.remove(index).is_err() {
+            return false;
+        }
         self.redo_stack.clear();
+        true
     }
 
     /// Replays the stored pipeline and collects warnings for lossy steps.

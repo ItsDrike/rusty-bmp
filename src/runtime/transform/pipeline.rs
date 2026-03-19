@@ -1,11 +1,19 @@
 use std::collections::BTreeMap;
 
+use thiserror::Error;
+
 use crate::runtime::decode::DecodedImage;
 
 use super::model::{ImageTransform, TransformError};
 
 const CHECKPOINT_COST_THRESHOLD: u32 = 15;
 const MAX_CHECKPOINTS: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+pub enum PipelineError {
+    #[error("transform index {index} out of bounds for pipeline length {len}")]
+    IndexOutOfBounds { index: usize, len: usize },
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct TransformPipeline {
@@ -57,10 +65,23 @@ impl TransformPipeline {
         self.ops.len()
     }
 
-    pub fn remove(&mut self, index: usize) {
-        self.ops.remove(index);
+    /// Removes the transform at `index`.
+    ///
+    /// # Errors
+    /// Returns [`PipelineError::IndexOutOfBounds`] if `index` does not point to
+    /// an existing transform.
+    pub fn remove(&mut self, index: usize) -> Result<ImageTransform, PipelineError> {
+        if index >= self.ops.len() {
+            return Err(PipelineError::IndexOutOfBounds {
+                index,
+                len: self.ops.len(),
+            });
+        }
+
+        let removed = self.ops.remove(index);
         self.checkpoints.retain(|&k, _| k < index);
         self.recompute_cost_since_checkpoint();
+        Ok(removed)
     }
 
     pub fn pop(&mut self) -> Option<ImageTransform> {
@@ -124,7 +145,7 @@ impl TransformPipeline {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHECKPOINT_COST_THRESHOLD, MAX_CHECKPOINTS, TransformPipeline};
+    use super::{CHECKPOINT_COST_THRESHOLD, MAX_CHECKPOINTS, PipelineError, TransformPipeline};
     use crate::runtime::decode::DecodedImage;
     use crate::runtime::transform::{
         Brightness, Grayscale, RotateAny, RotationInterpolation, TransformOp, Translate, TranslateMode,
@@ -203,5 +224,31 @@ mod tests {
             .replay_cost()
                 > 1
         );
+    }
+
+    #[test]
+    fn remove_returns_error_for_out_of_bounds_index() {
+        let mut pipeline = TransformPipeline::default();
+        pipeline.push(Brightness { delta: 1 }.into(), None);
+
+        let err = pipeline
+            .remove(1)
+            .expect_err("removing outside the pipeline length should fail");
+        assert_eq!(err, PipelineError::IndexOutOfBounds { index: 1, len: 1 });
+        assert_eq!(pipeline.len(), 1);
+    }
+
+    #[test]
+    fn remove_returns_removed_transform_when_index_is_valid() {
+        let mut pipeline = TransformPipeline::default();
+        let first: super::ImageTransform = Brightness { delta: 1 }.into();
+        let second: super::ImageTransform = Grayscale.into();
+        pipeline.push(first.clone(), None);
+        pipeline.push(second.clone(), None);
+
+        let removed = pipeline.remove(0).expect("removing a valid index should succeed");
+
+        assert_eq!(removed, first);
+        assert_eq!(pipeline.ops(), &[second]);
     }
 }

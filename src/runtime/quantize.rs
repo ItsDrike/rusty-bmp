@@ -22,12 +22,20 @@
 //! The result is usually better palette quality than simple axis-median splits,
 //! while still being deterministic and fast enough for real-time save paths.
 
+use thiserror::Error;
+
 /// Number of quantized bits retained per RGB channel for the histogram grid.
 const BITS_PER_CHANNEL: u8 = 5;
 /// Side length of the 3D histogram including the zero border cell.
 const SIDE: usize = (1usize << BITS_PER_CHANNEL) + 1;
 /// Total number of histogram cells (`SIDE^3`).
 const HISTOGRAM_SIZE: usize = SIDE * SIDE * SIDE;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+pub enum QuantizeError {
+    #[error("max_colors must be in 2..=256, got {0}")]
+    InvalidMaxColors(usize),
+}
 
 /// Flattens a 3D histogram coordinate into a single linear array index.
 #[inline]
@@ -369,11 +377,13 @@ fn split_cube(cube: Cube, moments: &Moments) -> Option<(Cube, Cube)> {
 /// Returns `(palette, indices)` where `palette` has at most `max_colors`
 /// entries (each `[R, G, B, 255]`) and `indices` has one entry per pixel.
 ///
-/// # Panics
-/// Panics if `max_colors` is not in `2..=256`.
-#[must_use]
-pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
-    assert!((2..=256).contains(&max_colors));
+/// # Errors
+/// Returns [`QuantizeError::InvalidMaxColors`] if `max_colors` is outside
+/// `2..=256`.
+pub fn quantize(rgba: &[u8], max_colors: usize) -> Result<(Vec<[u8; 4]>, Vec<u8>), QuantizeError> {
+    if !(2..=256).contains(&max_colors) {
+        return Err(QuantizeError::InvalidMaxColors(max_colors));
+    }
 
     let moments = build_moments(rgba);
     let mut cubes = vec![Cube::full()];
@@ -449,12 +459,12 @@ pub fn quantize(rgba: &[u8], max_colors: usize) -> (Vec<[u8; 4]>, Vec<u8>) {
         indices[pixel_idx] = tags[histogram_index(r, g, b)];
     }
 
-    (palette, indices)
+    Ok((palette, indices))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::quantize;
+    use super::{QuantizeError, quantize};
 
     fn rgba_from_colors(colors: &[[u8; 3]], repeats: usize) -> Vec<u8> {
         let mut rgba = Vec::with_capacity(colors.len() * repeats * 4);
@@ -488,7 +498,7 @@ mod tests {
         ];
         let rgba = rgba_from_colors(&colors, 3);
 
-        let (palette, indices) = quantize(&rgba, colors.len());
+        let (palette, indices) = quantize(&rgba, colors.len()).expect("palette size should be valid");
         let reconstructed = reconstruct_rgba(&palette, &indices);
 
         assert_eq!(reconstructed, rgba);
@@ -499,7 +509,7 @@ mod tests {
         let colors = [[16, 32, 48], [48, 80, 112], [160, 32, 96], [224, 192, 32]];
         let rgba = rgba_from_colors(&colors, 4);
 
-        let (palette, indices) = quantize(&rgba, 256);
+        let (palette, indices) = quantize(&rgba, 256).expect("palette size should be valid");
         let reconstructed = reconstruct_rgba(&palette, &indices);
 
         assert_eq!(reconstructed, rgba);
@@ -531,7 +541,7 @@ mod tests {
         ];
         let rgba = rgba_from_colors(&colors, 2);
 
-        let (palette, indices) = quantize(&rgba, 8);
+        let (palette, indices) = quantize(&rgba, 8).expect("palette size should be valid");
 
         assert!(!palette.is_empty());
         assert!(palette.len() <= 8);
@@ -544,9 +554,17 @@ mod tests {
         let colors = [[8, 16, 24], [24, 40, 56], [40, 72, 104], [88, 120, 152], [200, 24, 88]];
         let rgba = rgba_from_colors(&colors, 5);
 
-        let first = quantize(&rgba, 4);
-        let second = quantize(&rgba, 4);
+        let first = quantize(&rgba, 4).expect("palette size should be valid");
+        let second = quantize(&rgba, 4).expect("palette size should be valid");
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn quantize_rejects_invalid_palette_sizes() {
+        let rgba = rgba_from_colors(&[[0, 0, 0], [255, 255, 255]], 1);
+
+        assert_eq!(quantize(&rgba, 1), Err(QuantizeError::InvalidMaxColors(1)));
+        assert_eq!(quantize(&rgba, 257), Err(QuantizeError::InvalidMaxColors(257)));
     }
 }

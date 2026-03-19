@@ -37,5 +37,5 @@ pub use geometry::{
     RotationInterpolation, Skew, Translate, TranslateMode,
 };
 pub use model::{ImageTransform, TransformError, TransformOp};
-pub use pipeline::TransformPipeline;
+pub use pipeline::{PipelineError, TransformPipeline};
 pub use steganography::{EmbedSteganography, RemoveSteganography};
