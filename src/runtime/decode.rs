@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use thiserror::Error;
 
 use crate::raw::{BitsPerPixel, Bmp, Compression, RgbMasks, RgbaMasks};
@@ -27,7 +29,7 @@ pub enum DecodedImageError {
 pub struct DecodedImage {
     width: u32,
     height: u32,
-    rgba: Vec<u8>,
+    rgba: Arc<[u8]>,
 }
 
 impl DecodedImage {
@@ -38,6 +40,16 @@ impl DecodedImage {
     /// arithmetic overflows while computing expected buffer size, or the RGBA
     /// buffer length does not match `width * height * 4`.
     pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, DecodedImageError> {
+        Self::from_arc(width, height, Arc::from(rgba))
+    }
+
+    /// Creates a decoded RGBA image from shared immutable pixel storage.
+    ///
+    /// # Errors
+    /// Returns [`DecodedImageError`] when dimensions are zero/out-of-range,
+    /// arithmetic overflows while computing expected buffer size, or the RGBA
+    /// buffer length does not match `width * height * 4`.
+    pub fn from_arc(width: u32, height: u32, rgba: Arc<[u8]>) -> Result<Self, DecodedImageError> {
         if width == 0 || height == 0 {
             return Err(DecodedImageError::InvalidDimensions { width, height });
         }
@@ -171,7 +183,7 @@ impl DecodedImage {
 
     /// Consumes the image and returns its RGBA byte buffer.
     #[must_use]
-    pub fn into_rgba(self) -> Vec<u8> {
+    pub fn into_rgba(self) -> Arc<[u8]> {
         self.rgba
     }
 }
@@ -693,7 +705,7 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
             i32::from(data.bmp_header.height),
             data.bmp_header.bit_count,
             Compression::Rgb,
-            data.bitmap_array.as_slice(),
+            data.bitmap_array.as_ref(),
             data.color_table
                 .iter()
                 .map(|c| [c.red, c.green, c.blue, 255])
@@ -706,7 +718,7 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
             data.bmp_header.height,
             data.bmp_header.bit_count,
             data.bmp_header.compression,
-            data.bitmap_array.as_slice(),
+            data.bitmap_array.as_ref(),
             data.color_table
                 .iter()
                 .map(|c| [c.red, c.green, c.blue, 255])
@@ -719,7 +731,7 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
             data.bmp_header.info.height,
             data.bmp_header.info.bit_count,
             data.bmp_header.info.compression,
-            data.bitmap_array.as_slice(),
+            data.bitmap_array.as_ref(),
             data.color_table
                 .iter()
                 .map(|c| [c.red, c.green, c.blue, 255])
@@ -732,7 +744,7 @@ pub fn decode_to_rgba(bmp: &Bmp) -> Result<DecodedImage, DecodeError> {
             data.bmp_header.v4.info.height,
             data.bmp_header.v4.info.bit_count,
             data.bmp_header.v4.info.compression,
-            data.bitmap_array.as_slice(),
+            data.bitmap_array.as_ref(),
             data.color_table
                 .iter()
                 .map(|c| [c.red, c.green, c.blue, 255])

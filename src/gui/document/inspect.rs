@@ -137,7 +137,7 @@ fn write_decode_stats(out: &mut String, decoded: &DecodedImage, encoded_pixel_by
     }
 }
 
-const fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
+fn encoded_pixel_bytes(bmp: &Bmp) -> usize {
     match bmp {
         Bmp::Core(data) => data.bitmap_array.len(),
         Bmp::Info(data) => data.bitmap_array.len(),
@@ -290,7 +290,7 @@ pub(super) fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> Bmp
             let _ = writeln!(
                 &mut out,
                 "ICC profile bytes loaded: {}",
-                format_bytes(data.icc_profile.as_ref().map_or(0, Vec::len) as u64)
+                format_bytes(data.icc_profile.as_ref().map_or(0, |profile| profile.len()) as u64)
             );
         }
     }

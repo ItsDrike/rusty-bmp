@@ -1,5 +1,7 @@
 //! Shared steganography UI state and confirmation helpers.
 
+use std::sync::Arc;
+
 use bmp::runtime::{
     decode::DecodedImage,
     steganography::{self, StegInfo},
@@ -33,7 +35,7 @@ pub(in crate::gui) struct SteganographyUiState {
     // --- Inspect window: cached extracted payload ---
     /// Result of the last explicit "Extract" action in the inspect window.
     /// `None` = not yet extracted; `Some(Ok(bytes))` = payload; `Some(Err(msg))` = error.
-    pub(in crate::gui) extracted: Option<Result<Vec<u8>, String>>,
+    pub(in crate::gui) extracted: Option<Result<Arc<[u8]>, String>>,
 }
 
 impl Default for SteganographyUiState {
@@ -101,7 +103,7 @@ impl SteganographyUiState {
     }
 
     /// Stores the most recent extract result shown by the inspect dialog.
-    pub(in crate::gui) fn set_extracted(&mut self, result: Result<Vec<u8>, String>) {
+    pub(in crate::gui) fn set_extracted(&mut self, result: Result<Arc<[u8]>, String>) {
         self.extracted = Some(result);
     }
 

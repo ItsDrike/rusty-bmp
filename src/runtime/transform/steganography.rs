@@ -17,6 +17,7 @@
 //! it describes.  Detection therefore requires trying all 6561 valid configs.
 
 use std::fmt;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -85,7 +86,7 @@ pub enum StegError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmbedSteganography {
     pub config: StegConfig,
-    pub payload: Vec<u8>,
+    pub payload: Arc<[u8]>,
 }
 
 impl fmt::Display for EmbedSteganography {
@@ -622,7 +623,7 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
 /// # Errors
 /// Returns [`StegError`] if channel config is invalid or payload/header bounds
 /// checks fail.
-pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegError> {
+pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Arc<[u8]>, StegError> {
     let config = info.config;
     if config.bits_per_pixel() == 0 {
         return Err(StegError::NoChannels);
@@ -660,7 +661,7 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Vec<u8>, StegErr
         payload.push(byte);
     }
 
-    Ok(payload)
+    Ok(Arc::from(payload))
 }
 
 /// Brute-force all 6561 valid `StegConfig` combinations to find a valid
@@ -770,7 +771,7 @@ mod tests {
         assert_eq!(info.payload_len, u32::try_from(payload.len()).unwrap());
 
         let extracted = extract(&embedded, &info).expect("extract should succeed");
-        assert_eq!(extracted, payload);
+        assert_eq!(extracted.as_ref(), payload);
     }
 
     #[test]

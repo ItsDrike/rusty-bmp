@@ -1,5 +1,7 @@
 //! "Embed steganography" window and its UI flow.
 
+use std::sync::Arc;
+
 use eframe::egui;
 
 use bmp::runtime::{
@@ -153,7 +155,7 @@ impl BmpViewerApp {
             self.steganography.a_bits,
         )
         .expect("steganography sliders restrict channel depths to 0..=8");
-        let payload = self.steganography.text_input.as_bytes().to_vec();
+        let payload = Arc::from(self.steganography.text_input.as_bytes().to_vec());
 
         Some(EmbedSteganography { config, payload }.into())
     }

@@ -1,4 +1,4 @@
-use std::{fs::File, io::BufWriter, path::Path};
+use std::{fs::File, io::BufWriter, path::Path, sync::Arc};
 
 use thiserror::Error;
 
@@ -389,9 +389,12 @@ fn build_bmp_info(
     compression: Compression,
     image_size: u32,
     color_masks: Option<RgbMasks>,
-    color_table: Vec<RgbQuad>,
-    bitmap_array: Vec<u8>,
+    color_table: impl Into<Arc<[RgbQuad]>>,
+    bitmap_array: impl Into<Arc<[u8]>>,
 ) -> Result<Bmp, EncodeError> {
+    let color_table = color_table.into();
+    let bitmap_array = bitmap_array.into();
+
     let dib_size = BitmapInfoHeader::HEADER_SIZE;
     let masks_size: u32 = if color_masks.is_some() { 12 } else { 0 };
     let color_table_len = u32::try_from(color_table.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
@@ -422,9 +425,12 @@ fn build_bmp_core(
     height: u32,
     bpp: BitsPerPixel,
     image_size: u32,
-    color_table: Vec<RgbTriple>,
-    bitmap_array: Vec<u8>,
+    color_table: impl Into<Arc<[RgbTriple]>>,
+    bitmap_array: impl Into<Arc<[u8]>>,
 ) -> Result<Bmp, EncodeError> {
+    let color_table = color_table.into();
+    let bitmap_array = bitmap_array.into();
+
     if width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
         return Err(EncodeError::CoreDimensionOverflow { width, height });
     }
@@ -476,12 +482,12 @@ pub enum SourceMetadata {
         intent: Option<u32>,
     },
     /// The source image is V5 and carries an embedded ICC profile payload.
-    EmbeddedProfile { profile: Vec<u8>, intent: u32 },
+    EmbeddedProfile { profile: Arc<[u8]>, intent: u32 },
     /// The source image is V5 and carries a linked ICC profile path payload.
     ///
     /// The payload is stored as raw bytes because BMP uses Windows ANSI here,
     /// not UTF-8.
-    LinkedProfile { profile_path: Vec<u8>, intent: u32 },
+    LinkedProfile { profile_path: Arc<[u8]>, intent: u32 },
 }
 
 impl SourceMetadata {
@@ -540,7 +546,7 @@ impl SourceMetadata {
         }
     }
 
-    fn v5_header_fields(&self) -> (ColorSpaceType, CieXyzTriple, GammaTriple, u32, Option<Vec<u8>>) {
+    fn v5_header_fields(&self) -> (ColorSpaceType, CieXyzTriple, GammaTriple, u32, Option<Arc<[u8]>>) {
         match self {
             Self::SRgb { intent } => (
                 ColorSpaceType::SRgb,
@@ -619,10 +625,13 @@ fn build_bmp_v4(
     compression: Compression,
     image_size: u32,
     rgba_masks: RgbaMasks,
-    color_table: Vec<RgbQuad>,
-    bitmap_array: Vec<u8>,
+    color_table: impl Into<Arc<[RgbQuad]>>,
+    bitmap_array: impl Into<Arc<[u8]>>,
     source: Option<&SourceMetadata>,
 ) -> Result<Bmp, EncodeError> {
+    let color_table = color_table.into();
+    let bitmap_array = bitmap_array.into();
+
     let dib_size = BitmapV4Header::HEADER_SIZE;
     // V4 does NOT have separate color masks - they are embedded in the header
     let color_table_len = u32::try_from(color_table.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
@@ -665,10 +674,13 @@ fn build_bmp_v5(
     compression: Compression,
     image_size: u32,
     rgba_masks: RgbaMasks,
-    color_table: Vec<RgbQuad>,
-    bitmap_array: Vec<u8>,
+    color_table: impl Into<Arc<[RgbQuad]>>,
+    bitmap_array: impl Into<Arc<[u8]>>,
     source: Option<&SourceMetadata>,
 ) -> Result<Bmp, EncodeError> {
+    let color_table = color_table.into();
+    let bitmap_array = bitmap_array.into();
+
     let dib_size = BitmapV5Header::HEADER_SIZE;
     let color_table_len = u32::try_from(color_table.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
     let color_table_bytes = color_table_len.checked_mul(4).ok_or(EncodeError::ArithmeticOverflow)?;
@@ -1212,7 +1224,7 @@ fn wrap_with_header(
                     flipped[dst_start..dst_start + stride]
                         .copy_from_slice(&info.bitmap_array[src_start..src_start + stride]);
                 }
-                flipped
+                Arc::from(flipped)
             } else {
                 // already bottom-up (RLE)
                 info.bitmap_array
@@ -1388,7 +1400,7 @@ mod tests {
     #[test]
     fn v4_downgrades_profile_metadata_to_srgb() {
         let source = SourceMetadata::EmbeddedProfile {
-            profile: vec![1, 2, 3, 4],
+            profile: Arc::from(vec![1, 2, 3, 4]),
             intent: 7,
         };
 
@@ -1407,7 +1419,7 @@ mod tests {
     fn v5_preserves_linked_profile_metadata() {
         let profile_path = vec![b'C', b':', b'\\', b'p', b'.', b'i', b'c', b'm', 0];
         let source = SourceMetadata::LinkedProfile {
-            profile_path: profile_path.clone(),
+            profile_path: Arc::from(profile_path.clone()),
             intent: 3,
         };
 
@@ -1419,7 +1431,7 @@ mod tests {
 
         assert_eq!(data.bmp_header.v4.cs_type, ColorSpaceType::ProfileLinked);
         assert_eq!(data.bmp_header.intent, 3);
-        assert_eq!(data.icc_profile, Some(profile_path));
+        assert_eq!(data.icc_profile, Some(Arc::from(profile_path)));
         assert_eq!(SourceMetadata::from_bmp(&Bmp::V5(data)), Some(source));
     }
 
@@ -1465,7 +1477,7 @@ mod tests {
     #[test]
     fn v5_profile_data_offset_is_relative_to_dib_start() {
         let source = SourceMetadata::EmbeddedProfile {
-            profile: vec![1, 2, 3, 4],
+            profile: Arc::from(vec![1, 2, 3, 4]),
             intent: 7,
         };
 

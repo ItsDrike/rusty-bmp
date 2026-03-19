@@ -1,4 +1,7 @@
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    sync::Arc,
+};
 
 use crate::raw::{
     BitmapCoreHeader, BitmapHeader, BitmapInfoHeader, BitmapV4Header, BitmapV5Header, FileHeader, RgbMasks,
@@ -76,9 +79,9 @@ pub struct BitmapCoreData {
 
     pub bmp_header: BitmapCoreHeader,
 
-    pub color_table: Vec<RgbTriple>,
+    pub color_table: Arc<[RgbTriple]>,
 
-    pub bitmap_array: Vec<u8>,
+    pub bitmap_array: Arc<[u8]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -91,9 +94,9 @@ pub struct BitmapInfoData {
     // we want to support BI_ALPHABITFIELDS
     pub color_masks: Option<RgbMasks>,
 
-    pub color_table: Vec<RgbQuad>,
+    pub color_table: Arc<[RgbQuad]>,
 
-    pub bitmap_array: Vec<u8>,
+    pub bitmap_array: Arc<[u8]>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapV4Data {
@@ -101,9 +104,9 @@ pub struct BitmapV4Data {
 
     pub bmp_header: BitmapV4Header,
 
-    pub color_table: Vec<RgbQuad>,
+    pub color_table: Arc<[RgbQuad]>,
 
-    pub bitmap_array: Vec<u8>,
+    pub bitmap_array: Arc<[u8]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -112,11 +115,11 @@ pub struct BitmapV5Data {
 
     pub bmp_header: BitmapV5Header,
 
-    pub color_table: Vec<RgbQuad>,
+    pub color_table: Arc<[RgbQuad]>,
 
-    pub bitmap_array: Vec<u8>,
+    pub bitmap_array: Arc<[u8]>,
 
-    pub icc_profile: Option<Vec<u8>>,
+    pub icc_profile: Option<Arc<[u8]>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -528,8 +531,8 @@ impl Bmp {
                     Self::Core(BitmapCoreData {
                         file_header,
                         bmp_header: header,
-                        color_table: color_table_vec,
-                        bitmap_array: pixel_data,
+                        color_table: Arc::from(color_table_vec),
+                        bitmap_array: Arc::from(pixel_data),
                     })
                 } else {
                     unreachable!()
@@ -541,8 +544,8 @@ impl Bmp {
                         file_header,
                         bmp_header: header,
                         color_masks: masks,
-                        color_table: color_table_vec,
-                        bitmap_array: pixel_data,
+                        color_table: Arc::from(color_table_vec),
+                        bitmap_array: Arc::from(pixel_data),
                     })
                 } else {
                     unreachable!()
@@ -555,8 +558,8 @@ impl Bmp {
                     Self::V4(BitmapV4Data {
                         file_header,
                         bmp_header: header,
-                        color_table: color_table_vec,
-                        bitmap_array: pixel_data,
+                        color_table: Arc::from(color_table_vec),
+                        bitmap_array: Arc::from(pixel_data),
                     })
                 } else {
                     unreachable!()
@@ -610,7 +613,7 @@ impl Bmp {
                         .read_exact(&mut data)
                         .map_err(|e| StructuralError::from_io(e, IoStage::ReadingIccProfile))?;
 
-                    Some(data)
+                    Some(Arc::from(data))
                 } else {
                     None
                 };
@@ -619,8 +622,8 @@ impl Bmp {
                     Self::V5(BitmapV5Data {
                         file_header,
                         bmp_header: header,
-                        color_table: color_table_vec,
-                        bitmap_array: pixel_data,
+                        color_table: Arc::from(color_table_vec),
+                        bitmap_array: Arc::from(pixel_data),
                         icc_profile,
                     })
                 } else {
@@ -806,7 +809,7 @@ impl Bmp {
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
-                for entry in &data.color_table {
+                for entry in data.color_table.iter() {
                     entry
                         .write(&mut writer)
                         .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?;
@@ -833,7 +836,7 @@ impl Bmp {
                         .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorMasks))?;
                 }
 
-                for entry in &data.color_table {
+                for entry in data.color_table.iter() {
                     entry
                         .write_unchecked(&mut writer)
                         .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?;
@@ -854,7 +857,7 @@ impl Bmp {
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
-                for entry in &data.color_table {
+                for entry in data.color_table.iter() {
                     entry
                         .write_unchecked(&mut writer)
                         .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?;
@@ -875,7 +878,7 @@ impl Bmp {
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
-                for entry in &data.color_table {
+                for entry in data.color_table.iter() {
                     entry
                         .write_unchecked(&mut writer)
                         .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorTable))?;
@@ -967,8 +970,8 @@ mod tests {
                 colors_important: 0,
             },
             color_masks: None,
-            color_table: Vec::new(),
-            bitmap_array: vec![0, 0, 0, 0],
+            color_table: Arc::from(Vec::<RgbQuad>::new()),
+            bitmap_array: Arc::from(vec![0, 0, 0, 0]),
         });
 
         assert!(bmp.validate().is_ok());
@@ -1015,9 +1018,9 @@ mod tests {
                 profile_size: 4,
                 reserved: [0; 4],
             },
-            color_table: Vec::new(),
-            bitmap_array: vec![0, 0, 0, 0],
-            icc_profile: Some(vec![1, 2, 3, 4]),
+            color_table: Arc::from(Vec::<RgbQuad>::new()),
+            bitmap_array: Arc::from(vec![0, 0, 0, 0]),
+            icc_profile: Some(Arc::from(vec![1, 2, 3, 4])),
         });
 
         assert!(bmp.validate().is_ok());
