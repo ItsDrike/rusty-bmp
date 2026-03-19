@@ -88,7 +88,9 @@ fn preserves_steg_payload(
 
     let roundtrip = decode_to_rgba(&encoded).map_err(|e| format!("failed to decode save-check roundtrip: {e}"))?;
 
-    let Some(round_info) = steganography::detect(&roundtrip) else {
+    let Some(round_info) = steganography::detect(&roundtrip)
+        .map_err(|e| format!("failed to detect payload after save-check roundtrip: {e}"))?
+    else {
         return Ok(false);
     };
 

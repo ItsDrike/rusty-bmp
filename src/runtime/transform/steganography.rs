@@ -172,7 +172,7 @@ impl fmt::Display for RemoveSteganography {
 
 impl TransformOp for RemoveSteganography {
     fn apply(&self, image: &DecodedImage) -> Result<DecodedImage, TransformError> {
-        Ok(remove(image, self.config))
+        Ok(remove(image, self.config)?)
     }
 
     fn inverse(&self) -> Option<ImageTransform> {
@@ -480,11 +480,16 @@ fn write_header(
 }
 
 /// Try to read and validate the 80-bit header using `config` as the decoding
-/// parameters.  Returns `Some(StegInfo)` on success, `None` on any mismatch.
+/// parameters.
 ///
-/// Fails early: returns `None` as soon as the first byte of the magic is
+/// Returns:
+/// - `Ok(Some(StegInfo))` for a valid, supported header,
+/// - `Ok(None)` if no matching header is present for this config,
+/// - `Err(StegError)` if a matching header is present but invalid/unsupported.
+///
+/// Fails early: returns `Ok(None)` as soon as the first byte of the magic is
 /// wrong ('S' = 0x53).
-fn try_read_header(image: &DecodedImage, config: StegConfig) -> Option<StegInfo> {
+fn try_read_header(image: &DecodedImage, config: StegConfig) -> Result<Option<StegInfo>, StegError> {
     let rgba = image.rgba();
     let total_pixels = image.pixel_count();
     let mut cursor = BitCursor::new(config);
@@ -501,51 +506,74 @@ fn try_read_header(image: &DecodedImage, config: StegConfig) -> Option<StegInfo>
 
     // Fail early: check one byte of magic at a time.
     // 'S' = 0x53
-    if read_u8()? != b'S' {
-        return None;
+    let Some(s) = read_u8() else {
+        return Ok(None);
+    };
+    if s != b'S' {
+        return Ok(None);
     }
     // 'T' = 0x54
-    if read_u8()? != b'T' {
-        return None;
+    let Some(t) = read_u8() else {
+        return Ok(None);
+    };
+    if t != b'T' {
+        return Ok(None);
     }
     // 'E' = 0x45
-    if read_u8()? != b'E' {
-        return None;
+    let Some(e) = read_u8() else {
+        return Ok(None);
+    };
+    if e != b'E' {
+        return Ok(None);
     }
     // 'G' = 0x47
-    if read_u8()? != b'G' {
-        return None;
+    let Some(g) = read_u8() else {
+        return Ok(None);
+    };
+    if g != b'G' {
+        return Ok(None);
     }
 
     // version: 3 bits.
     #[allow(clippy::cast_possible_truncation)]
-    let version = read_n(3)? as u8;
+    let Some(version_raw) = read_n(3) else {
+        return Ok(None);
+    };
+    let version = version_raw as u8;
     if version != 0 {
-        return None;
+        return Err(StegError::UnsupportedVersion(version));
     }
 
     // config: 13 bits.
     #[allow(clippy::cast_possible_truncation)]
-    let config_raw = read_n(13)? as u16;
+    let Some(config_raw) = read_n(13) else {
+        return Ok(None);
+    };
+    let config_raw = config_raw as u16;
     // Validate: must decode back to a valid config AND must match the config
     // we are currently using for this brute-force attempt.
-    let decoded_config = StegConfig::decode_config_bits(config_raw)?;
+    let Some(decoded_config) = StegConfig::decode_config_bits(config_raw) else {
+        return Ok(None);
+    };
     if decoded_config != config {
-        return None;
+        return Ok(None);
     }
 
     // payload_len: 32 bits.
     #[allow(clippy::cast_possible_truncation)]
-    let payload_len = read_n(32)? as u32;
+    let Some(payload_len_raw) = read_n(32) else {
+        return Ok(None);
+    };
+    let payload_len = payload_len_raw as u32;
 
     // Sanity: the payload must fit in the remaining capacity.
     let total_bits = total_pixels as u64 * u64::from(config.bits_per_pixel());
     let remaining_bits = total_bits.saturating_sub(bits_consumed);
     if u64::from(payload_len) * 8 > remaining_bits {
-        return None;
+        return Err(StegError::PayloadTooLarge { payload_len });
     }
 
-    Some(StegInfo::new(config, version, payload_len))
+    Ok(Some(StegInfo::new(config, version, payload_len)))
 }
 
 // -----------------------------------------------------------------------------
@@ -615,18 +643,21 @@ pub fn embed(image: &DecodedImage, config: StegConfig, payload: &[u8]) -> Result
 
 /// Remove embedded steganography from `image` for the given `config`.
 ///
-/// If a valid header is present for `config`, only the exact bit range used by
-/// that header plus payload is zeroed. If no valid header is found, the image
-/// is returned unchanged.
-#[must_use]
+/// Only the exact bit range used by the validated header plus payload is
+/// zeroed.
+///
+/// # Errors
+/// Returns [`StegError::NotFound`] when no matching header is present, and
+/// returns validation errors (for example unsupported version or inconsistent
+/// payload length) when a matching header is malformed.
 #[allow(clippy::missing_panics_doc)]
-pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
+pub fn remove(image: &DecodedImage, config: StegConfig) -> Result<DecodedImage, StegError> {
     if config.bits_per_pixel() == 0 {
-        return image.clone();
+        return Err(StegError::NoChannels);
     }
 
-    let Some(info) = try_read_header(image, config) else {
-        return image.clone();
+    let Some(info) = try_read_header(image, config)? else {
+        return Err(StegError::NotFound);
     };
 
     let mut rgba = image.rgba().to_vec();
@@ -643,8 +674,8 @@ pub fn remove(image: &DecodedImage, config: StegConfig) -> DecodedImage {
         cursor.advance();
     }
 
-    DecodedImage::new(image.width(), image.height(), rgba)
-        .expect("remove preserves source dimensions and RGBA buffer length")
+    Ok(DecodedImage::new(image.width(), image.height(), rgba)
+        .expect("remove preserves source dimensions and RGBA buffer length"))
 }
 
 /// Extract the payload from `image` using the config described in `info`.
@@ -660,7 +691,7 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Arc<[u8]>, StegE
         return Err(StegError::NoChannels);
     }
 
-    let Some(header_info) = try_read_header(image, config) else {
+    let Some(header_info) = try_read_header(image, config)? else {
         return Err(StegError::NotFound);
     };
     if header_info.version() != info.version() || header_info.payload_len() != info.payload_len() {
@@ -704,18 +735,34 @@ pub fn extract(image: &DecodedImage, info: &StegInfo) -> Result<Arc<[u8]>, StegE
     Ok(Arc::from(payload))
 }
 
-/// Brute-force all 6561 valid `StegConfig` combinations to find a valid
-/// steganography header in `image`.
+/// Brute-force all 6561 valid `StegConfig` combinations to detect
+/// steganography in `image`.
 ///
-/// Returns the first `StegInfo` that passes all header checks, or `None` if
-/// the image does not appear to contain steganography.
-#[must_use]
+/// Returns:
+/// - `Ok(Some(StegInfo))` for a valid supported header,
+/// - `Ok(None)` when no header is present,
+/// - `Err(StegError)` when a header-like marker exists but is malformed or
+///   unsupported.
+///
+/// # Errors
+/// Returns [`StegError`] when a header-like marker is found but fails
+/// validation (for example unsupported version or impossible payload length).
 #[allow(clippy::missing_panics_doc)]
-pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
+pub fn detect(image: &DecodedImage) -> Result<Option<StegInfo>, StegError> {
     // Need at least enough pixels to hold the header.
     // Even in the best case (all channels, 8 bits each = 32 bits/pixel), that
     // is ceil(80/32) = 3 pixels.  We'll let the individual reads handle the
     // capacity check.
+
+    let mut best_error: Option<(u8, StegError)> = None;
+
+    let error_priority = |err: &StegError| -> u8 {
+        match err {
+            StegError::UnsupportedVersion(_) => 2,
+            StegError::PayloadTooLarge { .. } => 1,
+            _ => 0,
+        }
+    };
 
     for a_bits in 0u8..=8 {
         for b_bits in 0u8..=8 {
@@ -726,19 +773,56 @@ pub fn detect(image: &DecodedImage) -> Option<StegInfo> {
                     if config.bits_per_pixel() == 0 {
                         continue;
                     }
-                    if let Some(info) = try_read_header(image, config) {
-                        return Some(info);
+                    match try_read_header(image, config) {
+                        Ok(Some(info)) => return Ok(Some(info)),
+                        Ok(None) => {}
+                        Err(err) => {
+                            let priority = error_priority(&err);
+                            if best_error
+                                .as_ref()
+                                .is_none_or(|(best_priority, _)| priority > *best_priority)
+                            {
+                                best_error = Some((priority, err));
+                            }
+                        }
                     }
                 }
             }
         }
     }
-    None
+
+    if let Some((_, err)) = best_error {
+        return Err(err);
+    }
+
+    Ok(None)
+}
+
+/// Lenient convenience wrapper around [`detect`].
+///
+/// Returns only a successfully decoded header and ignores malformed/unsupported
+/// matches.
+#[must_use]
+pub fn detect_best_effort(image: &DecodedImage) -> Option<StegInfo> {
+    detect(image).ok().flatten()
+}
+
+/// Lenient convenience wrapper around [`remove`].
+///
+/// Returns the stripped image on success, or the original image unchanged on
+/// any validation error.
+#[must_use]
+#[allow(clippy::missing_panics_doc)]
+pub fn remove_if_present(image: &DecodedImage, config: StegConfig) -> DecodedImage {
+    remove(image, config).unwrap_or_else(|_| image.clone())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BitCursor, StegConfig, StegError, StegInfo, detect, embed, extract, remove, write_bit};
+    use super::{
+        BitCursor, StegConfig, StegError, StegInfo, detect, detect_best_effort, embed, extract, remove,
+        remove_if_present, write_bit,
+    };
     use crate::runtime::decode::DecodedImage;
 
     fn steg_config(r_bits: u8, g_bits: u8, b_bits: u8, a_bits: u8) -> StegConfig {
@@ -805,7 +889,9 @@ mod tests {
         let payload = b"steganography test payload";
 
         let embedded = embed(&image, config, payload).expect("embed should succeed");
-        let info = detect(&embedded).expect("detect should find embedded payload");
+        let info = detect(&embedded)
+            .expect("detect should parse embedded payload")
+            .expect("detect should find embedded payload");
         assert_eq!(info.config(), config);
         assert_eq!(info.version(), 0);
         assert_eq!(info.payload_len(), u32::try_from(payload.len()).unwrap());
@@ -846,7 +932,11 @@ mod tests {
     #[test]
     fn detect_returns_none_when_no_header_is_present() {
         let clean = patterned_image(8, 8);
-        assert!(detect(&clean).is_none());
+        assert!(
+            detect(&clean)
+                .expect("clean image detection should not produce header parse errors")
+                .is_none()
+        );
     }
 
     #[test]
@@ -855,9 +945,13 @@ mod tests {
         let config = steg_config(3, 2, 1, 0);
         let payload = b"hidden";
         let embedded = embed(&image, config, payload).expect("embed should succeed");
-        let stripped = remove(&embedded, config);
+        let stripped = remove(&embedded, config).expect("remove should succeed on matching embedded image");
 
-        assert!(detect(&stripped).is_none());
+        assert!(
+            detect(&stripped)
+                .expect("stripped image detection should not produce header parse errors")
+                .is_none()
+        );
 
         let mut expected = embedded.rgba().to_vec();
         let mut cursor = BitCursor::new(config);
@@ -871,13 +965,50 @@ mod tests {
     }
 
     #[test]
-    fn remove_leaves_image_unchanged_when_no_valid_header_exists() {
+    fn remove_rejects_when_no_valid_header_exists() {
         let image = patterned_image(12, 12);
         let config = steg_config(2, 1, 0, 0);
 
-        let stripped = remove(&image, config);
+        let err = remove(&image, config).expect_err("strict remove should fail when no header is present");
+        assert!(matches!(err, StegError::NotFound));
+    }
+
+    #[test]
+    fn remove_if_present_leaves_image_unchanged_when_no_valid_header_exists() {
+        let image = patterned_image(12, 12);
+        let config = steg_config(2, 1, 0, 0);
+
+        let stripped = remove_if_present(&image, config);
         assert_eq!(stripped.rgba(), image.rgba());
         assert_eq!(stripped.dimensions(), image.dimensions());
+    }
+
+    #[test]
+    fn detect_best_effort_swallows_invalid_header_errors() {
+        let image = patterned_image(12, 12);
+        let config = steg_config(2, 1, 0, 0);
+        let embedded = embed(&image, config, b"abc").expect("embed should succeed");
+
+        let mut corrupted_rgba = embedded.rgba().to_vec();
+        let mut cursor = BitCursor::new(config);
+
+        // Skip magic (32 bits).
+        for _ in 0..32 {
+            cursor.advance();
+        }
+        // Write version = 1 (bits 0b001, LSB-first).
+        write_bit(corrupted_rgba.as_mut_slice(), &cursor, 1);
+        cursor.advance();
+        write_bit(corrupted_rgba.as_mut_slice(), &cursor, 0);
+        cursor.advance();
+        write_bit(corrupted_rgba.as_mut_slice(), &cursor, 0);
+
+        let corrupted = DecodedImage::new(embedded.width(), embedded.height(), corrupted_rgba)
+            .expect("corruption preserves dimensions and RGBA size");
+
+        let strict = detect(&corrupted).expect_err("strict detect should surface unsupported version");
+        assert!(matches!(strict, StegError::UnsupportedVersion(1)));
+        assert!(detect_best_effort(&corrupted).is_none());
     }
 
     #[test]
@@ -927,7 +1058,9 @@ mod tests {
         let image = patterned_image(12, 12);
         let config = steg_config(2, 1, 0, 0);
         let embedded = embed(&image, config, b"abc").expect("embed should succeed");
-        let detected = detect(&embedded).expect("detect should find embedded payload");
+        let detected = detect(&embedded)
+            .expect("detect should parse embedded payload")
+            .expect("detect should find embedded payload");
         let mismatched = StegInfo::new(detected.config(), detected.version(), detected.payload_len() + 1);
 
         let err = extract(&embedded, &mismatched).expect_err("mismatched payload length should fail");

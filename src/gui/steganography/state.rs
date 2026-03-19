@@ -74,7 +74,7 @@ impl SteganographyUiState {
 
     /// Replaces all session-coupled steg state for a newly loaded image.
     pub(in crate::gui) fn reset_for_loaded_image(&mut self, image: &DecodedImage) {
-        self.detected = steganography::detect(image);
+        self.detected = steganography::detect_best_effort(image);
         self.extracted = None;
         self.overwrite_warned = false;
         self.transform_confirm_pending = None;
@@ -82,7 +82,7 @@ impl SteganographyUiState {
 
     /// Refreshes detection and extraction state after the displayed image changes.
     pub(in crate::gui) fn refresh_for_image(&mut self, image: &DecodedImage) {
-        self.detected = steganography::detect(image);
+        self.detected = steganography::detect_best_effort(image);
         self.extracted = None;
     }
 
