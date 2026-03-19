@@ -369,7 +369,7 @@ fn build_bmp_info(
     color_table: Vec<RgbQuad>,
     bitmap_array: Vec<u8>,
 ) -> Result<Bmp, EncodeError> {
-    let dib_size = 4 + BitmapInfoHeader::HEADER_SIZE;
+    let dib_size = BitmapInfoHeader::HEADER_SIZE;
     let masks_size: u32 = if color_masks.is_some() { 12 } else { 0 };
     let color_table_len = u32::try_from(color_table.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
     let color_table_bytes = color_table_len.checked_mul(4).ok_or(EncodeError::ArithmeticOverflow)?;
@@ -406,7 +406,7 @@ fn build_bmp_core(
         return Err(EncodeError::CoreDimensionOverflow { width, height });
     }
 
-    let dib_size = 4 + BitmapCoreHeader::HEADER_SIZE;
+    let dib_size = BitmapCoreHeader::HEADER_SIZE;
     let color_table_len = u32::try_from(color_table.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
     let color_table_bytes = color_table_len
         .checked_mul(3) // RgbTriple = 3 bytes
@@ -600,7 +600,7 @@ fn build_bmp_v4(
     bitmap_array: Vec<u8>,
     source: Option<&SourceMetadata>,
 ) -> Result<Bmp, EncodeError> {
-    let dib_size = 4 + BitmapV4Header::HEADER_SIZE;
+    let dib_size = BitmapV4Header::HEADER_SIZE;
     // V4 does NOT have separate color masks - they are embedded in the header
     let color_table_len = u32::try_from(color_table.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
     let color_table_bytes = color_table_len.checked_mul(4).ok_or(EncodeError::ArithmeticOverflow)?;
@@ -646,7 +646,7 @@ fn build_bmp_v5(
     bitmap_array: Vec<u8>,
     source: Option<&SourceMetadata>,
 ) -> Result<Bmp, EncodeError> {
-    let dib_size = 4 + BitmapV5Header::HEADER_SIZE;
+    let dib_size = BitmapV5Header::HEADER_SIZE;
     let color_table_len = u32::try_from(color_table.len()).map_err(|_| EncodeError::ArithmeticOverflow)?;
     let color_table_bytes = color_table_len.checked_mul(4).ok_or(EncodeError::ArithmeticOverflow)?;
 
@@ -1398,5 +1398,67 @@ mod tests {
         assert_eq!(data.bmp_header.intent, 3);
         assert_eq!(data.icc_profile, Some(profile_path));
         assert_eq!(SourceMetadata::from_bmp(&Bmp::V5(data)), Some(source));
+    }
+
+    #[test]
+    fn encoder_uses_canonical_pixel_offsets() {
+        let info = encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::Rgb24, SaveHeaderVersion::Info, None).unwrap();
+        let Bmp::Info(info) = info else {
+            panic!("expected Info bitmap");
+        };
+        assert_eq!(
+            info.file_header.pixel_data_offset,
+            FileHeader::SIZE + BitmapInfoHeader::HEADER_SIZE
+        );
+
+        let core = encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::Rgb24, SaveHeaderVersion::Core, None).unwrap();
+        let Bmp::Core(core) = core else {
+            panic!("expected Core bitmap");
+        };
+        assert_eq!(
+            core.file_header.pixel_data_offset,
+            FileHeader::SIZE + BitmapCoreHeader::HEADER_SIZE
+        );
+
+        let v4 = encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::Rgb24, SaveHeaderVersion::V4, None).unwrap();
+        let Bmp::V4(v4) = v4 else {
+            panic!("expected V4 bitmap");
+        };
+        assert_eq!(
+            v4.file_header.pixel_data_offset,
+            FileHeader::SIZE + BitmapV4Header::HEADER_SIZE
+        );
+
+        let v5 = encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::Rgb24, SaveHeaderVersion::V5, None).unwrap();
+        let Bmp::V5(v5) = v5 else {
+            panic!("expected V5 bitmap");
+        };
+        assert_eq!(
+            v5.file_header.pixel_data_offset,
+            FileHeader::SIZE + BitmapV5Header::HEADER_SIZE
+        );
+    }
+
+    #[test]
+    fn v5_profile_data_offset_is_relative_to_dib_start() {
+        let source = SourceMetadata::EmbeddedProfile {
+            profile: vec![1, 2, 3, 4],
+            intent: 7,
+        };
+
+        let bmp =
+            encode_rgba_to_bmp_ext(&tiny_image(), SaveFormat::Rgb32, SaveHeaderVersion::V5, Some(&source)).unwrap();
+        let Bmp::V5(data) = bmp else {
+            panic!("expected V5 bitmap");
+        };
+
+        assert_eq!(
+            data.file_header.pixel_data_offset,
+            FileHeader::SIZE + BitmapV5Header::HEADER_SIZE
+        );
+        assert_eq!(
+            data.bmp_header.profile_data,
+            BitmapV5Header::HEADER_SIZE + data.bmp_header.v4.info.image_size
+        );
     }
 }

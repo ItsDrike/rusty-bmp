@@ -177,8 +177,7 @@ impl Bmp {
         extra_size: u32,
     ) -> Result<u32, StructuralError> {
         FileHeader::SIZE
-            .checked_add(4)
-            .and_then(|x| x.checked_add(dib_header_size))
+            .checked_add(dib_header_size)
             .and_then(|x| x.checked_add(extra_size))
             .and_then(|x| {
                 let color_table_entries_u32 = u32::try_from(color_table_entries).ok()?;
@@ -363,8 +362,7 @@ impl Bmp {
                             })?;
 
                         let min_profile_offset = u64::from(FileHeader::SIZE)
-                            .checked_add(4)
-                            .and_then(|x| x.checked_add(u64::from(BitmapV5Header::HEADER_SIZE)))
+                            .checked_add(u64::from(BitmapV5Header::HEADER_SIZE))
                             .and_then(|x| x.checked_add((data.color_table.len() as u64).checked_mul(4)?))
                             .ok_or_else(|| {
                                 StructuralError::ArithmeticOverflow("ICC profile min offset calculation".to_owned())
@@ -915,5 +913,113 @@ impl Bmp {
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raw::{
+        BitsPerPixel, CieXyz, CieXyzTriple, FixedPoint2Dot30, FixedPoint16Dot16, GammaTriple, RgbaMasks,
+    };
+
+    fn zero_endpoints() -> CieXyzTriple {
+        let zero = CieXyz {
+            x: FixedPoint2Dot30::from_raw(0),
+            y: FixedPoint2Dot30::from_raw(0),
+            z: FixedPoint2Dot30::from_raw(0),
+        };
+        CieXyzTriple {
+            red: zero,
+            green: zero,
+            blue: zero,
+        }
+    }
+
+    fn zero_gamma() -> GammaTriple {
+        GammaTriple {
+            red: FixedPoint16Dot16::from_raw(0),
+            green: FixedPoint16Dot16::from_raw(0),
+            blue: FixedPoint16Dot16::from_raw(0),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_canonical_info_pixel_offset() {
+        let bmp = Bmp::Info(BitmapInfoData {
+            file_header: FileHeader {
+                signature: *b"BM",
+                file_size: 58,
+                reserved_1: [0; 2],
+                reserved_2: [0; 2],
+                pixel_data_offset: FileHeader::SIZE + BitmapInfoHeader::HEADER_SIZE,
+            },
+            bmp_header: BitmapInfoHeader {
+                width: 1,
+                height: 1,
+                planes: 1,
+                bit_count: BitsPerPixel::Bpp24,
+                compression: Compression::Rgb,
+                image_size: 4,
+                x_resolution_ppm: 0,
+                y_resolution_ppm: 0,
+                colors_used: 0,
+                colors_important: 0,
+            },
+            color_masks: None,
+            color_table: Vec::new(),
+            bitmap_array: vec![0, 0, 0, 0],
+        });
+
+        assert!(bmp.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_v5_profile_at_minimum_metadata_boundary() {
+        // DIB starts at byte 14. With a V5 header (124 bytes), the first valid
+        // profile byte is at absolute offset 138.
+        let bmp = Bmp::V5(BitmapV5Data {
+            file_header: FileHeader {
+                signature: *b"BM",
+                file_size: 146,
+                reserved_1: [0; 2],
+                reserved_2: [0; 2],
+                pixel_data_offset: 142,
+            },
+            bmp_header: BitmapV5Header {
+                v4: BitmapV4Header {
+                    info: BitmapInfoHeader {
+                        width: 1,
+                        height: 1,
+                        planes: 1,
+                        bit_count: BitsPerPixel::Bpp32,
+                        compression: Compression::Rgb,
+                        image_size: 4,
+                        x_resolution_ppm: 0,
+                        y_resolution_ppm: 0,
+                        colors_used: 0,
+                        colors_important: 0,
+                    },
+                    masks: RgbaMasks {
+                        red_mask: 0,
+                        green_mask: 0,
+                        blue_mask: 0,
+                        alpha_mask: 0,
+                    },
+                    cs_type: ColorSpaceType::ProfileEmbedded,
+                    endpoints: zero_endpoints(),
+                    gamma: zero_gamma(),
+                },
+                intent: 0,
+                profile_data: BitmapV5Header::HEADER_SIZE,
+                profile_size: 4,
+                reserved: [0; 4],
+            },
+            color_table: Vec::new(),
+            bitmap_array: vec![0, 0, 0, 0],
+            icc_profile: Some(vec![1, 2, 3, 4]),
+        });
+
+        assert!(bmp.validate().is_ok());
     }
 }
