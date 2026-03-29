@@ -14,7 +14,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 /// - If `start == 0`, behavior matches the underlying stream.
 /// - If `start > 0`, `SeekFrom::Start(0)` seeks to the window start.
 #[derive(Debug)]
-pub struct BoundedStream<R> {
+pub struct BoundedStream<R: Seek> {
     inner: R,
     abs_start: u64,
     abs_end: u64,
@@ -40,6 +40,7 @@ impl<R: Seek> BoundedStream<R> {
     ///
     /// This operation never expands the window.
     pub fn cap_to_stream_end(mut self) -> io::Result<Self> {
+        // Find the stream end by seeking there, then seek back to where we were
         let cur = self.inner.stream_position()?;
         let end = self.inner.seek(SeekFrom::End(0))?;
         self.inner.seek(SeekFrom::Start(cur))?;
@@ -57,8 +58,8 @@ impl<R: Seek> BoundedStream<R> {
     ///
     /// Fails if:
     ///
-    /// - The current position is beyond the upper bound.
-    /// - The current position is before the existing lower bound.
+    /// - The position is beyond the upper bound.
+    /// - The position is before the existing lower bound.
     ///
     /// This operation never expands the window.
     pub fn shrink_start(mut self, pos: SeekFrom) -> io::Result<Self> {
@@ -70,7 +71,9 @@ impl<R: Seek> BoundedStream<R> {
 
     /// Shrinks the upper bound to the position resolved from `pos`.
     ///
-    /// Fails if the new bound would exceed the existing upper bound.
+    /// Fails if:
+    /// - The position is beyond the upper bound.
+    /// - The position is before the existing lower bound.
     ///
     /// This operation never expands the window.
     pub fn shrink_end(mut self, pos: SeekFrom) -> io::Result<Self> {
@@ -126,13 +129,13 @@ impl<R: Seek> BoundedStream<R> {
     fn check_bounds(&self, absolute: u64) -> io::Result<()> {
         if absolute < self.abs_start {
             return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
+                io::ErrorKind::InvalidInput,
                 "position before start bound",
             ));
         }
 
         if absolute > self.abs_end {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "position after end bound"));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "position after end bound"));
         }
 
         Ok(())
@@ -163,7 +166,9 @@ impl<R: Read + Seek> Read for BoundedStream<R> {
     /// Reading at the upper bound behaves like EOF and returns `Ok(0)`.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let remaining = self.remaining()?;
-        let max_read = buf.len().min(usize::try_from(remaining).unwrap_or(usize::MAX));
+
+        #[expect(clippy::cast_possible_truncation)]
+        let max_read = buf.len().min(remaining.min(usize::MAX as u64) as usize);
 
         if max_read == 0 {
             return Ok(0);
