@@ -250,7 +250,7 @@ impl Bmp {
         match self {
             Self::Core(data) => {
                 data.file_header.validate()?;
-                let header = BitmapHeader::Core(data.bmp_header);
+                let header = BitmapHeader::Core(data.bmp_header.clone());
                 header.validate()?;
 
                 let color_table_size_header = Self::header_color_table_size(&header)?;
@@ -267,7 +267,7 @@ impl Bmp {
             }
             Self::Info(data) => {
                 data.file_header.validate()?;
-                let header = BitmapHeader::Info(data.bmp_header);
+                let header = BitmapHeader::Info(data.bmp_header.clone());
                 header.validate()?;
                 Self::validate_info_masks(&header, data.color_masks.as_ref())?;
 
@@ -287,7 +287,7 @@ impl Bmp {
             }
             Self::V4(data) => {
                 data.file_header.validate()?;
-                let header = BitmapHeader::V4(data.bmp_header);
+                let header = BitmapHeader::V4(data.bmp_header.clone());
                 header.validate()?;
 
                 let color_table_size_header = Self::header_color_table_size(&header)?;
@@ -305,7 +305,7 @@ impl Bmp {
             }
             Self::V5(data) => {
                 data.file_header.validate()?;
-                let header = BitmapHeader::V5(data.bmp_header);
+                let header = BitmapHeader::V5(data.bmp_header.clone());
                 header.validate()?;
 
                 let color_table_size_header = Self::header_color_table_size(&header)?;
@@ -450,7 +450,7 @@ impl Bmp {
         // No other variant has support for this, as V4+ embeds the masks into
         // the DIB header directly, and V2 / CORE doesn't have bitfields support
         // at all.
-        let masks = if let BitmapHeader::Info(header) = bmp_header
+        let masks = if let BitmapHeader::Info(header) = &bmp_header
             && header.compression == Compression::BitFields
         {
             let masks = RgbMasks::read_unchecked(&mut reader)
@@ -622,7 +622,7 @@ impl Bmp {
     fn validate_write_layout(&self) -> Result<(), BmpError> {
         match self {
             Self::Core(data) => {
-                let header = BitmapHeader::Core(data.bmp_header);
+                let header = BitmapHeader::Core(data.bmp_header.clone());
                 let pixel_data_size_header = Self::header_pixel_data_size(&header)?;
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
@@ -647,7 +647,7 @@ impl Bmp {
                 }
             }
             Self::Info(data) => {
-                let header = BitmapHeader::Info(data.bmp_header);
+                let header = BitmapHeader::Info(data.bmp_header.clone());
                 let pixel_data_size_header = Self::header_pixel_data_size(&header)?;
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
@@ -672,7 +672,7 @@ impl Bmp {
                 }
             }
             Self::V4(data) => {
-                let header = BitmapHeader::V4(data.bmp_header);
+                let header = BitmapHeader::V4(data.bmp_header.clone());
                 let pixel_data_size_header = Self::header_pixel_data_size(&header)?;
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
@@ -697,7 +697,7 @@ impl Bmp {
                 }
             }
             Self::V5(data) => {
-                let header = BitmapHeader::V5(data.bmp_header);
+                let header = BitmapHeader::V5(data.bmp_header.clone());
                 let pixel_data_size_header = Self::header_pixel_data_size(&header)?;
                 Self::validate_pixel_data_size(data.bitmap_array.len(), pixel_data_size_header)?;
 
@@ -784,7 +784,7 @@ impl Bmp {
                 data.file_header
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
-                BitmapHeader::Core(data.bmp_header)
+                BitmapHeader::Core(data.bmp_header.clone())
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
@@ -805,7 +805,7 @@ impl Bmp {
                 data.file_header
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
-                BitmapHeader::Info(data.bmp_header)
+                BitmapHeader::Info(data.bmp_header.clone())
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
@@ -832,7 +832,7 @@ impl Bmp {
                 data.file_header
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
-                BitmapHeader::V4(data.bmp_header)
+                BitmapHeader::V4(data.bmp_header.clone())
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
@@ -853,7 +853,7 @@ impl Bmp {
                 data.file_header
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
-                BitmapHeader::V5(data.bmp_header)
+                BitmapHeader::V5(data.bmp_header.clone())
                     .write_unchecked(&mut writer)
                     .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 

@@ -203,7 +203,7 @@ pub(super) fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> Bmp
             );
         }
         Bmp::Info(data) => {
-            let h = data.bmp_header;
+            let h = &data.bmp_header;
             let compression_line = format!("{} ({:?})", compression_name(h.compression), h.compression);
             write_common_section(
                 &mut out,
@@ -228,7 +228,7 @@ pub(super) fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> Bmp
             }
         }
         Bmp::V4(data) => {
-            let h = data.bmp_header.info;
+            let h = &data.bmp_header.info;
             let m = data.bmp_header.masks;
             let compression_line = format!("{} ({:?})", compression_name(h.compression), h.compression);
             write_common_section(
@@ -253,7 +253,7 @@ pub(super) fn format_bmp_info_sections(bmp: &Bmp, decoded: &DecodedImage) -> Bmp
             let _ = writeln!(&mut out, "Color space: {:?}", data.bmp_header.cs_type);
         }
         Bmp::V5(data) => {
-            let h = data.bmp_header.v4.info;
+            let h = &data.bmp_header.v4.info;
             let m = data.bmp_header.v4.masks;
             let compression_line = format!("{} ({:?})", compression_name(h.compression), h.compression);
             write_common_section(

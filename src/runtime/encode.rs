@@ -129,7 +129,7 @@ impl SaveFormat {
             },
             Bmp::Info(info) => infer_format(info.bmp_header.compression, info.bmp_header.bit_count, info.color_masks),
             Bmp::V4(v4) => {
-                let info = v4.bmp_header.info;
+                let info = &v4.bmp_header.info;
                 let masks = v4.bmp_header.masks;
                 if matches!(
                     (info.compression, info.bit_count),
@@ -142,7 +142,7 @@ impl SaveFormat {
                 }
             }
             Bmp::V5(v5) => {
-                let info = v5.bmp_header.v4.info;
+                let info = &v5.bmp_header.v4.info;
                 let masks = v5.bmp_header.v4.masks;
                 if matches!(
                     (info.compression, info.bit_count),

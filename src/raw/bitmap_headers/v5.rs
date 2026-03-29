@@ -20,7 +20,7 @@ use crate::raw::{bitmap_headers::BitmapV4Header, error::ValidationError, helpers
 /// Note:
 /// This is a fairly commonly used format for storing modern BMPs, though not as
 /// common as the INFO or V4 header variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapV5Header {
     /// This format fully contains all fields from the V4 header.
     ///

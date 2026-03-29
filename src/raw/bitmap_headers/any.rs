@@ -9,6 +9,7 @@ use crate::raw::{
     types::{BitsPerPixel, Compression},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BitmapHeader {
     Core(BitmapCoreHeader),
     Info(BitmapInfoHeader),
