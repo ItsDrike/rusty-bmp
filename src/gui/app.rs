@@ -1,6 +1,10 @@
 //! Top-level GUI application state and the `eframe::App` update loop.
 
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, TryRecvError},
+    time::Duration,
+};
 
 use bmp::runtime::transform::ImageTransform;
 use eframe::egui;
@@ -15,12 +19,24 @@ use super::{
     tools::TransformToolState,
 };
 
+struct PendingOpenTask {
+    rx: Receiver<Option<PathBuf>>,
+}
+
+enum OpenPoll {
+    None,
+    Selected(PathBuf),
+    Cancelled,
+    Failed(String),
+}
+
 #[derive(Default)]
 /// Root UI state for the interactive BMP viewer application.
 pub(super) struct BmpViewerApp {
     pub(in crate::gui) path_input: String,
     /// UI feedback/status message shown in toolbar.
     pub(in crate::gui) status: String,
+    pending_open: Option<PendingOpenTask>,
     pub(in crate::gui) document: DocumentState,
     pub(in crate::gui) inspection: DocumentInspection,
     pub(in crate::gui) viewport: ViewportState,
@@ -58,13 +74,50 @@ impl BmpViewerApp {
 
     /// Opens a file picker and loads the selected BMP.
     pub(in crate::gui) fn pick_and_load(&mut self, ctx: &egui::Context) {
-        if let Some(path) = FileDialog::new()
-            .add_filter("Bitmap image", &["bmp", "dib"])
-            .set_title("Open BMP file")
-            .pick_file()
-        {
-            self.path_input = path.display().to_string();
-            self.load_path(ctx, &path);
+        if self.pending_open.is_some() {
+            "A file picker is already open".clone_into(&mut self.status);
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let path = FileDialog::new()
+                .add_filter("Bitmap image", &["bmp", "dib"])
+                .set_title("Open BMP file")
+                .pick_file();
+            let _ = tx.send(path);
+        });
+
+        self.pending_open = Some(PendingOpenTask { rx });
+        ctx.request_repaint();
+    }
+
+    fn poll_pending_open(&mut self, ctx: &egui::Context) -> OpenPoll {
+        let Some(task) = self.pending_open.as_mut() else {
+            return OpenPoll::None;
+        };
+
+        let picked = match task.rx.try_recv() {
+            Ok(path) => Some(path),
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(33));
+                None
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.pending_open = None;
+                return OpenPoll::Failed("Failed to open file picker: worker disconnected".to_owned());
+            }
+        };
+
+        let Some(path) = picked else {
+            return OpenPoll::None;
+        };
+
+        self.pending_open = None;
+
+        match path {
+            Some(path) => OpenPoll::Selected(path),
+            None => OpenPoll::Cancelled,
         }
     }
 
@@ -117,6 +170,17 @@ impl BmpViewerApp {
 
 impl eframe::App for BmpViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        match self.poll_pending_open(ctx) {
+            OpenPoll::None | OpenPoll::Cancelled => {}
+            OpenPoll::Selected(path) => {
+                self.path_input = path.display().to_string();
+                self.load_path(ctx, &path);
+            }
+            OpenPoll::Failed(err) => {
+                self.status = err;
+            }
+        }
+
         match self.save.poll_pending(ctx) {
             SavePoll::None => {}
             SavePoll::Saved { path, format, header } => {
