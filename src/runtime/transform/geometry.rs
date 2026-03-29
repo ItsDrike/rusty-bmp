@@ -1033,16 +1033,16 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
 
     match interpolation {
         RotationInterpolation::Nearest => {
-            #[allow(clippy::cast_sign_loss)]
-            let xi = x.round() as u32;
-            #[allow(clippy::cast_sign_loss)]
-            let yi = y.round() as u32;
+            let xi = round_non_negative_to_u32(x);
+            let yi = round_non_negative_to_u32(y);
             // SAFETY: coordinates are clamped to `[0, w-1] x [0, h-1]` above.
             unsafe { image.pixel_unchecked(xi, yi) }
         }
         RotationInterpolation::Bilinear => {
-            let x0 = x.floor() as i32;
-            let y0 = y.floor() as i32;
+            // `x` and `y` are clamped to non-negative values above, so
+            // truncation toward zero is equivalent to floor here.
+            let x0 = x as i32;
+            let y0 = y as i32;
             let x1 = (x0 + 1).min(w - 1);
             let y1 = (y0 + 1).min(h - 1);
 
@@ -1064,13 +1064,15 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
             for c in 0..4 {
                 let a = f32::from(p00[c]) * (1.0 - tx) + f32::from(p10[c]) * tx;
                 let b = f32::from(p01[c]) * (1.0 - tx) + f32::from(p11[c]) * tx;
-                out[c] = (a * (1.0 - ty) + b * ty).round().clamp(0.0, 255.0) as u8;
+                out[c] = round_to_u8_clamped(a * (1.0 - ty) + b * ty);
             }
             out
         }
         RotationInterpolation::Bicubic => {
-            let x0 = x.floor() as i32;
-            let y0 = y.floor() as i32;
+            // `x` and `y` are clamped to non-negative values above, so
+            // truncation toward zero is equivalent to floor here.
+            let x0 = x as i32;
+            let y0 = y as i32;
             let tx = x - x0 as f32;
             let ty = y - y0 as f32;
 
@@ -1087,31 +1089,83 @@ fn sample_rgba(image: &DecodedImage, x: f32, y: f32, interpolation: RotationInte
                 cubic_weight(2.0 - ty),
             ];
 
-            let mut out = [0_u8; 4];
-            for (c, out_chan) in out.iter_mut().enumerate() {
-                let mut sum = 0.0f32;
-                for (j, &w_y) in wy.iter().enumerate() {
-                    let sy = (y0 + j as i32 - 1).clamp(0, h - 1);
-                    for (i, &w_x) in wx.iter().enumerate() {
-                        let sx = (x0 + i as i32 - 1).clamp(0, w - 1);
-                        #[allow(clippy::cast_sign_loss)]
-                        let (sx, sy) = (sx as u32, sy as u32);
-                        // SAFETY: `(sx, sy)` is clamped to image bounds.
-                        let px = unsafe { image.pixel_unchecked(sx, sy) };
-                        sum += f32::from(px[c]) * w_x * w_y;
-                    }
+            let sy0 = (y0 - 1).clamp(0, h - 1);
+            let sy1 = y0.clamp(0, h - 1);
+            let sy2 = (y0 + 1).clamp(0, h - 1);
+            let sy3 = (y0 + 2).clamp(0, h - 1);
+            let sx0 = (x0 - 1).clamp(0, w - 1);
+            let sx1 = x0.clamp(0, w - 1);
+            let sx2 = (x0 + 1).clamp(0, w - 1);
+            let sx3 = (x0 + 2).clamp(0, w - 1);
+
+            #[allow(clippy::cast_sign_loss)]
+            let sy = [sy0 as u32, sy1 as u32, sy2 as u32, sy3 as u32];
+            #[allow(clippy::cast_sign_loss)]
+            let sx = [sx0 as u32, sx1 as u32, sx2 as u32, sx3 as u32];
+
+            let mut sum_r = 0.0f32;
+            let mut sum_g = 0.0f32;
+            let mut sum_b = 0.0f32;
+            let mut sum_a = 0.0f32;
+
+            for (j, &w_y) in wy.iter().enumerate() {
+                for (i, &w_x) in wx.iter().enumerate() {
+                    // SAFETY: `(sx, sy)` coordinates are clamped to image bounds.
+                    let px = unsafe { image.pixel_unchecked(sx[i], sy[j]) };
+                    let wxy = w_x * w_y;
+                    sum_r += f32::from(px[0]) * wxy;
+                    sum_g += f32::from(px[1]) * wxy;
+                    sum_b += f32::from(px[2]) * wxy;
+                    sum_a += f32::from(px[3]) * wxy;
                 }
-                *out_chan = sum.round().clamp(0.0, 255.0) as u8;
             }
-            out
+
+            [
+                round_to_u8_clamped(sum_r),
+                round_to_u8_clamped(sum_g),
+                round_to_u8_clamped(sum_b),
+                round_to_u8_clamped(sum_a),
+            ]
         }
     }
+}
+
+/// Rounds a non-negative finite float to the nearest `u32`.
+///
+/// This is a fast-path equivalent of `round()` for values already clamped into
+/// the `u32` numeric range.
+#[inline]
+#[must_use]
+fn round_non_negative_to_u32(value: f32) -> u32 {
+    debug_assert!(value.is_finite());
+    debug_assert!(value >= 0.0);
+    debug_assert!(value <= u32::MAX as f32);
+
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    return (value + 0.5) as u32;
+}
+
+/// Rounds a finite channel sample and clamps it into the `u8` range.
+///
+/// The fast path avoids `roundf`/`clamp` calls in hot interpolation loops.
+#[inline]
+#[must_use]
+fn round_to_u8_clamped(value: f32) -> u8 {
+    if value <= 0.0 {
+        return 0;
+    }
+    if value >= 255.0 {
+        return 255;
+    }
+
+    (value + 0.5) as u8
 }
 
 /// Cubic interpolation kernel used for bicubic sampling.
 ///
 /// Implements a Catmull-Rom style cubic filter (`a = -0.5`),
 /// commonly used for smooth image resampling.
+#[must_use]
 fn cubic_weight(t: f32) -> f32 {
     let a = -0.5f32;
     let x = t.abs();
