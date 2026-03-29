@@ -20,7 +20,9 @@ type SpotCase = (&'static str, [u8; 4], [u8; 4], [u8; 4]);
 fn decode_bmpsuite(rel_path: &str) -> DecodedImage {
     let path = support::bmpsuite_root().join(rel_path);
     let mut file = File::open(&path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
-    let bmp = Bmp::read_checked(&mut file).unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
+    let bmp = Bmp::read_unchecked(&mut file).unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
+    bmp.validate()
+        .unwrap_or_else(|err| panic!("failed to validate {}: {err}", path.display()));
     decode_to_rgba(&bmp).unwrap_or_else(|err| panic!("failed to decode {}: {err}", path.display()))
 }
 
@@ -116,7 +118,8 @@ fn encode_decode_roundtrip_preserves_pixels() {
     bmp.write_unchecked(&mut bytes).expect("write encoded bmp");
     bytes.set_position(0);
 
-    let reparsed = Bmp::read_checked(&mut bytes).expect("read encoded bmp");
+    let reparsed = Bmp::read_unchecked(&mut bytes).expect("read encoded bmp");
+    reparsed.validate().expect("validate encoded bmp");
     let decoded = decode_to_rgba(&reparsed).expect("decode encoded bmp");
 
     assert_eq!(decoded.width(), source.width());
@@ -142,7 +145,10 @@ fn roundtrip_format(source: &DecodedImage, format: SaveFormat) -> DecodedImage {
         .unwrap_or_else(|e| panic!("write {format:?} failed: {e}"));
     buf.set_position(0);
 
-    let reparsed = Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read {format:?} failed: {e}"));
+    let reparsed = Bmp::read_unchecked(&mut buf).unwrap_or_else(|e| panic!("read {format:?} failed: {e}"));
+    reparsed
+        .validate()
+        .unwrap_or_else(|e| panic!("validate {format:?} failed: {e}"));
     decode_to_rgba(&reparsed).unwrap_or_else(|e| panic!("decode {format:?} failed: {e}"))
 }
 
@@ -326,7 +332,7 @@ fn roundtrip_rle4_gradient() {
 }
 
 // ---------------------------------------------------------------------------
-// All formats should produce a valid BMP that passes read_checked
+// All formats should produce a valid BMP that passes parse + validate
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -339,7 +345,10 @@ fn all_formats_produce_valid_bmp() {
         bmp.write_unchecked(&mut buf)
             .unwrap_or_else(|e| panic!("write {fmt:?} failed: {e}"));
         buf.set_position(0);
-        Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read_checked {fmt:?} failed: {e}"));
+        let reparsed = Bmp::read_unchecked(&mut buf).unwrap_or_else(|e| panic!("read_unchecked {fmt:?} failed: {e}"));
+        reparsed
+            .validate()
+            .unwrap_or_else(|e| panic!("validate {fmt:?} failed: {e}"));
     }
 }
 
@@ -363,7 +372,10 @@ fn roundtrip_header_version(
         .unwrap_or_else(|e| panic!("write {format:?}/{header:?} failed: {e}"));
     buf.set_position(0);
 
-    let reparsed = Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read {format:?}/{header:?} failed: {e}"));
+    let reparsed = Bmp::read_unchecked(&mut buf).unwrap_or_else(|e| panic!("read {format:?}/{header:?} failed: {e}"));
+    reparsed
+        .validate()
+        .unwrap_or_else(|e| panic!("validate {format:?}/{header:?} failed: {e}"));
     let decoded = decode_to_rgba(&reparsed).unwrap_or_else(|e| panic!("decode {format:?}/{header:?} failed: {e}"));
     (reparsed, decoded)
 }
@@ -544,7 +556,11 @@ fn all_header_versions_all_formats_produce_valid_bmp() {
             bmp.write_unchecked(&mut buf)
                 .unwrap_or_else(|e| panic!("write {fmt:?}/{header:?} failed: {e}"));
             buf.set_position(0);
-            Bmp::read_checked(&mut buf).unwrap_or_else(|e| panic!("read_checked {fmt:?}/{header:?} failed: {e}"));
+            let reparsed = Bmp::read_unchecked(&mut buf)
+                .unwrap_or_else(|e| panic!("read_unchecked {fmt:?}/{header:?} failed: {e}"));
+            reparsed
+                .validate()
+                .unwrap_or_else(|e| panic!("validate {fmt:?}/{header:?} failed: {e}"));
         }
     }
 }

@@ -45,8 +45,11 @@ fn assert_roundtrip_equivalent(original: &Bmp, rel_path: &str) {
         .unwrap_or_else(|err| panic!("failed to write {rel_path}: {err}"));
 
     serialized.set_position(0);
-    let reparsed = Bmp::read_checked(&mut serialized)
+    let reparsed = Bmp::read_unchecked(&mut serialized)
         .unwrap_or_else(|err| panic!("failed to re-parse roundtrip {rel_path}: {err}"));
+    reparsed
+        .validate()
+        .unwrap_or_else(|err| panic!("failed to validate roundtrip {rel_path}: {err}"));
 
     assert_eq!(original, &reparsed, "{rel_path}");
 }

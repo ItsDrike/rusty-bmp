@@ -42,7 +42,9 @@ pub fn require_suite_generated() {
 
 pub fn parse_bmp(path: &Path) -> Result<Bmp, bmp::raw::BmpError> {
     let mut file = File::open(path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
-    Bmp::read_checked(&mut file)
+    let bmp = Bmp::read_unchecked(&mut file)?;
+    bmp.validate()?;
+    Ok(bmp)
 }
 
 pub fn to_rel_suite_path(path: &Path) -> String {

@@ -183,7 +183,8 @@ use bmp::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut file = File::open("image.bmp")?;
-    let bmp = Bmp::read_checked(&mut file)?;
+    let bmp = Bmp::read_unchecked(&mut file)?;
+    bmp.validate()?;
     let decoded = decode_to_rgba(&bmp)?;
 
     println!("{}x{}", decoded.width(), decoded.height());

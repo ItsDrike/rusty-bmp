@@ -46,7 +46,10 @@ impl<'a> LoadSession<'a> {
     pub(in crate::gui) fn load_path(&mut self, ctx: &egui::Context, path: &Path) -> Result<String, String> {
         let mut file = File::open(path).map_err(|err| format!("Failed to open {}: {err}", path.display()))?;
 
-        let bmp = Bmp::read_checked(&mut file).map_err(|err| format!("Parse failed for {}: {err}", path.display()))?;
+        let bmp =
+            Bmp::read_unchecked(&mut file).map_err(|err| format!("Parse failed for {}: {err}", path.display()))?;
+        bmp.validate()
+            .map_err(|err| format!("Validation failed for {}: {err}", path.display()))?;
 
         let decoded = decode_to_rgba(&bmp).map_err(|err| format!("Decode failed for {}: {err}", path.display()))?;
 

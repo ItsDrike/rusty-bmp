@@ -28,19 +28,6 @@ enum ColorTable {
 }
 
 impl ColorTable {
-    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        match self {
-            Self::Core(_) => {}
-            Self::InfoOrLater(color_table) => {
-                for rgb_quad in color_table {
-                    rgb_quad.validate()?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     pub(crate) fn read_unchecked<R: Read>(reader: &mut R, header: &BitmapHeader) -> Result<Self, StructuralError> {
         let entry_count = header.color_table_size()? as usize;
         if entry_count > MAX_COLOR_TABLE_ENTRIES {
@@ -418,15 +405,23 @@ impl Bmp {
         Ok(())
     }
 
-    /// Reads a BMP payload and performs validation before returning the parsed structure.
+    /// Reads a BMP payload with only the structural checks required for safe parsing.
+    ///
+    /// This does not perform semantic/spec validation. Call [`Self::validate`] explicitly
+    /// if strict BMP compliance checks are desired.
+    ///
+    /// Hint: You will almost always want to call validate, as otherwise, you cannot even
+    /// trust that the file which was read was in fact a BMP, and working with it in any
+    /// capacity could easily result in issues. The reason we don't do this automatically
+    /// is mostly semantic and for the few edge cases where you might just wish to analyze
+    /// a potentially invalid BMP.
     ///
     /// # Errors
-    /// Returns [`BmpError`] for malformed structures, invalid field combinations, out-of-bounds
-    /// offsets/sizes, or I/O failures while reading.
-    pub fn read_checked<R: Read + Seek>(reader: &mut R) -> Result<Self, BmpError> {
+    /// Returns [`StructuralError`] for malformed structures, out-of-bounds offsets/sizes,
+    /// arithmetic overflows, memory-safety limits, or I/O failures while reading.
+    pub fn read_unchecked<R: Read + Seek>(reader: &mut R) -> Result<Self, StructuralError> {
         let file_header =
             FileHeader::read_unchecked(reader).map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
-        file_header.validate()?;
 
         // Use a custom bounded reader that's limited to the specified file size.
         // The construction of this reader will fail if the specified file_size
@@ -450,7 +445,6 @@ impl Bmp {
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
 
         let bmp_header = BitmapHeader::read_unchecked(&mut reader)?;
-        bmp_header.validate()?;
 
         // The V3 / INFO header supports having embedded color masks.
         // No other variant has support for this, as V4+ embeds the masks into
@@ -461,62 +455,41 @@ impl Bmp {
         {
             let masks = RgbMasks::read_unchecked(&mut reader)
                 .map_err(|e| StructuralError::from_io(e, IoStage::ReadingColorMasks))?;
-            masks
-                .validate_for_bpp(header.bit_count)
-                .map_err(ValidationError::from)?;
             Some(masks)
         } else {
             None
         };
 
         let color_table = ColorTable::read_unchecked(&mut reader, &bmp_header)?;
-        color_table.validate()?;
-
-        let pixel_data_pos = u64::from(file_header.pixel_data_offset);
-
-        // Check if there are some further data embedded in the BMP before the pixel
-        // data. If yes, it could be the ICC color profiles (though these usually come
-        // after the bitmap array, the spec does allow them to be here too),
-        // alternatively, it could also be some custom metadata that a specific
-        // application chose to embed into the BMP without violating the standard.
-        //
-        // We might want to collect the information about what's in this gap, even if
-        // we can't interpret it as it's non-standard. Though, we should only do so if
-        // this actually isn't the ICC profile, as that would then just duplicate data.
-        // Though differentiating that + handling this cleanly might become messy.
-        //
-        // let gap_pos = reader.stream_position()?;
-        // let metadata_size = pixel_data_pos - gap_pos;
-
-        let min_pixel_offset = u64::from(FileHeader::SIZE);
-        if pixel_data_pos < min_pixel_offset {
-            return Err(
-                ValidationError::PixelDataLayout(PixelDataLayoutError::OverlapsMetadata {
-                    pixel_offset_header: file_header.pixel_data_offset,
-                    min_offset: FileHeader::SIZE,
-                })
-                .into(),
-            );
-        }
-        if pixel_data_pos > u64::from(file_header.file_size) {
-            return Err(ValidationError::PixelDataLayout(PixelDataLayoutError::ExceedsFileSize {
-                pixel_end: pixel_data_pos,
-                file_size: file_header.file_size,
-            })
-            .into());
-        }
-
-        reader
-            .seek(SeekFrom::Start(pixel_data_pos))
-            .map_err(|e| StructuralError::from_io(e, IoStage::ReadingPixelData))?;
 
         let pixel_data_size = bmp_header.pixel_data_size()? as usize;
         if pixel_data_size > MAX_PIXEL_BYTES {
             return Err(StructuralError::StructureUnsafe(format!(
                 "Pixel data contains {pixel_data_size} entries, which is higher than the allowed safe maximum: {MAX_PIXEL_BYTES}"
-            ))
-            .into());
+            )));
         }
+
+        let pixel_data_pos = u64::from(file_header.pixel_data_offset);
+
+        // TODO: Check if there are some further data embedded in the BMP before the
+        // pixel data. If yes, it could be the ICC color profiles (though these usually
+        // come after the bitmap array, the spec does technically allow them to be here
+        // too), alternatively, it could also be some custom metadata that a specific
+        // application chose to embed into the BMP without violating the standard.
+        //
+        // We might want to collect the information about what's in this gap, even if
+        // we can't interpret it as it's non-standard. Though, we should only do so if
+        // this actually isn't the ICC profile, as that would then just duplicate data
+        // and potentially be misleading. Though differentiating that + handling this
+        // cleanly might become messy. Especially if the ICC profile data is somewhere
+        // in the middle of this gap for example.
+        //
+        // let gap_pos = reader.stream_position()?;
+        // let metadata_size = pixel_data_pos - gap_pos;
+
+        reader
+            .seek(SeekFrom::Start(pixel_data_pos))
+            .map_err(|e| StructuralError::from_io(e, IoStage::ReadingPixelData))?;
 
         let mut pixel_data = vec![0u8; pixel_data_size];
         reader
@@ -527,46 +500,58 @@ impl Bmp {
             BitmapHeader::Core(header) => {
                 debug_assert_eq!(masks, None); // core always uses BI_RGB
 
-                if let ColorTable::Core(color_table_vec) = color_table {
-                    Self::Core(BitmapCoreData {
-                        file_header,
-                        bmp_header: header,
-                        color_table: Arc::from(color_table_vec),
-                        bitmap_array: Arc::from(pixel_data),
-                    })
-                } else {
+                // The color table variant is decided based on the header variant
+                // that we passed in, so in here, it is guaranteed to be Core.
+                let ColorTable::Core(color_table_vec) = color_table else {
                     unreachable!()
-                }
+                };
+
+                Self::Core(BitmapCoreData {
+                    file_header,
+                    bmp_header: header,
+                    color_table: Arc::from(color_table_vec),
+                    bitmap_array: Arc::from(pixel_data),
+                })
             }
             BitmapHeader::Info(header) => {
-                if let ColorTable::InfoOrLater(color_table_vec) = color_table {
-                    Self::Info(BitmapInfoData {
-                        file_header,
-                        bmp_header: header,
-                        color_masks: masks,
-                        color_table: Arc::from(color_table_vec),
-                        bitmap_array: Arc::from(pixel_data),
-                    })
-                } else {
+                // The color table variant is decided based on the header variant
+                // that we passed in, so in here, it is guaranteed to be Core.
+                let ColorTable::InfoOrLater(color_table_vec) = color_table else {
                     unreachable!()
-                }
+                };
+
+                Self::Info(BitmapInfoData {
+                    file_header,
+                    bmp_header: header,
+                    color_masks: masks,
+                    color_table: Arc::from(color_table_vec),
+                    bitmap_array: Arc::from(pixel_data),
+                })
             }
             BitmapHeader::V4(header) => {
                 debug_assert_eq!(masks, None); // embedded into header directly
 
-                if let ColorTable::InfoOrLater(color_table_vec) = color_table {
-                    Self::V4(BitmapV4Data {
-                        file_header,
-                        bmp_header: header,
-                        color_table: Arc::from(color_table_vec),
-                        bitmap_array: Arc::from(pixel_data),
-                    })
-                } else {
+                // The color table variant is decided based on the header variant
+                // that we passed in, so in here, it is guaranteed to be Core.
+                let ColorTable::InfoOrLater(color_table_vec) = color_table else {
                     unreachable!()
-                }
+                };
+
+                Self::V4(BitmapV4Data {
+                    file_header,
+                    bmp_header: header,
+                    color_table: Arc::from(color_table_vec),
+                    bitmap_array: Arc::from(pixel_data),
+                })
             }
             BitmapHeader::V5(header) => {
                 debug_assert_eq!(masks, None); // embedded into header directly
+
+                // The color table variant is decided based on the header variant
+                // that we passed in, so in here, it is guaranteed to be Core.
+                let ColorTable::InfoOrLater(color_table_vec) = color_table else {
+                    unreachable!()
+                };
 
                 let icc_profile = if matches!(
                     header.v4.cs_type,
@@ -582,8 +567,7 @@ impl Bmp {
                     if size > MAX_ICC_PROFILE_BYTES {
                         return Err(StructuralError::StructureUnsafe(format!(
                             "ICC profile contains {size} bytes, which is higher than the allowed safe maximum: {MAX_ICC_PROFILE_BYTES}"
-                        ))
-                        .into());
+                        )));
                     }
 
                     // TODO: Maybe also validate that the offset isn't within the color table / color
@@ -593,16 +577,9 @@ impl Bmp {
                     // this. In theory, if the color table bytes do resolve to a valid ICC profile
                     // too, there's not real reason to prevent that, even if it's really dumb and
                     // unlikely. Safety-wise, this isn't important.
-                    let profile_end = offset.checked_add(size as u64).ok_or_else(|| {
+                    offset.checked_add(size as u64).ok_or_else(|| {
                         StructuralError::ArithmeticOverflow("ICC profile end calculation".to_owned())
                     })?;
-                    if profile_end > u64::from(file_header.file_size) {
-                        return Err(ValidationError::IccProfile(IccProfileError::ExceedsFileSize {
-                            profile_end,
-                            file_size: file_header.file_size,
-                        })
-                        .into());
-                    }
 
                     reader
                         .seek(SeekFrom::Start(offset))
@@ -618,21 +595,23 @@ impl Bmp {
                     None
                 };
 
-                if let ColorTable::InfoOrLater(color_table_vec) = color_table {
-                    Self::V5(BitmapV5Data {
-                        file_header,
-                        bmp_header: header,
-                        color_table: Arc::from(color_table_vec),
-                        bitmap_array: Arc::from(pixel_data),
-                        icc_profile,
-                    })
-                } else {
-                    unreachable!()
-                }
+                Self::V5(BitmapV5Data {
+                    file_header,
+                    bmp_header: header,
+                    color_table: Arc::from(color_table_vec),
+                    bitmap_array: Arc::from(pixel_data),
+                    icc_profile,
+                })
             }
         };
 
         // Leave the reader at the end of the BMP file
+        // TODO: Should we check that the reader is at the file end by the time we're done reading
+        // instead? The answer is likely no, there is no real reason to prevent reads of BMPs that
+        // have gaps from the final embedded data and the file end in terms of structural
+        // coherency, and the standard doesn't seem to say anything about this being wrong anyways.
+        // But if this is the case, we might want to consider whether we want to retrieve the data
+        // in this gap too, some programs might be using it to store some metadata.
         reader
             .seek(SeekFrom::End(0))
             .map_err(|e| StructuralError::from_io(e, IoStage::ReadingFileHeader))?;
@@ -1024,5 +1003,50 @@ mod tests {
         });
 
         assert!(bmp.validate().is_ok());
+    }
+
+    #[test]
+    fn read_unchecked_defers_signature_validation() {
+        use std::io::Cursor;
+
+        let bmp = Bmp::Info(BitmapInfoData {
+            file_header: FileHeader {
+                signature: *b"BM",
+                file_size: 58,
+                reserved_1: [0; 2],
+                reserved_2: [0; 2],
+                pixel_data_offset: FileHeader::SIZE + BitmapInfoHeader::HEADER_SIZE,
+            },
+            bmp_header: BitmapInfoHeader {
+                width: 1,
+                height: 1,
+                planes: 1,
+                bit_count: BitsPerPixel::Bpp24,
+                compression: Compression::Rgb,
+                image_size: 4,
+                x_resolution_ppm: 0,
+                y_resolution_ppm: 0,
+                colors_used: 0,
+                colors_important: 0,
+            },
+            color_masks: None,
+            color_table: Arc::from(Vec::<RgbQuad>::new()),
+            bitmap_array: Arc::from(vec![0, 0, 0, 0]),
+        });
+
+        let mut encoded = Cursor::new(Vec::<u8>::new());
+        bmp.write_unchecked(&mut encoded).expect("serialize test bmp");
+        let mut bytes = encoded.into_inner();
+        bytes[0] = b'Z';
+        bytes[1] = b'Z';
+
+        let mut cursor = Cursor::new(bytes);
+        let parsed = Bmp::read_unchecked(&mut cursor).expect("read_unchecked should not enforce file signature");
+        assert!(matches!(
+            parsed.validate(),
+            Err(BmpError::Validation(ValidationError::InvalidFileSignature([
+                b'Z', b'Z'
+            ])))
+        ));
     }
 }
