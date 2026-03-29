@@ -64,11 +64,20 @@ pub enum StructuralError {
     #[error("Arithmetic overflow: {0}")]
     ArithmeticOverflow(String),
 
+    #[error("Stored pixel data size ({stored_size}) doesn't match the encoded size {header_size}")]
+    PixelDataSizeMismatch { stored_size: usize, header_size: usize },
+
     #[error("Given BMP structure cannot be processed safely: {0}")]
     StructureUnsafe(String),
 
     #[error("unsupported BMP structure: {0}")]
     UnsupportedStructure(String),
+
+    #[error(transparent)]
+    PixelDataLayout(#[from] PixelDataLayoutError),
+
+    #[error(transparent)]
+    IccProfile(#[from] IccProfileError),
 }
 
 impl StructuralError {

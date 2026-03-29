@@ -43,6 +43,17 @@ impl RgbTriple {
     }
 }
 
+impl From<RgbTriple> for RgbQuad {
+    fn from(rgb: RgbTriple) -> Self {
+        Self {
+            blue: rgb.blue,
+            green: rgb.green,
+            red: rgb.red,
+            reserved: 0,
+        }
+    }
+}
+
 /// Describes a color consisting of relative intensities of red, green, and blue.
 ///
 /// In the Microsoft documentation (wingdi.h), this is referred to as the

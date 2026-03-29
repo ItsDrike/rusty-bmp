@@ -1369,7 +1369,7 @@ pub fn save_bmp_with_format(path: &Path, image: &DecodedImage, format: SaveForma
     let bmp = encode_rgba_to_bmp_with_format(image, format)?;
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
-    bmp.write_unchecked(&mut writer)?;
+    bmp.write_unchecked(&mut writer).map_err(crate::raw::BmpError::from)?;
     Ok(())
 }
 
@@ -1389,7 +1389,7 @@ pub fn save_bmp_ext(
     let bmp = encode_rgba_to_bmp_ext(image, format, header_version, source)?;
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
-    bmp.write_unchecked(&mut writer)?;
+    bmp.write_unchecked(&mut writer).map_err(crate::raw::BmpError::from)?;
     Ok(())
 }
 
