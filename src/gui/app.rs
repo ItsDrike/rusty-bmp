@@ -115,10 +115,7 @@ impl BmpViewerApp {
 
         self.pending_open = None;
 
-        match path {
-            Some(path) => OpenPoll::Selected(path),
-            None => OpenPoll::Cancelled,
-        }
+        path.map_or(OpenPoll::Cancelled, OpenPoll::Selected)
     }
 
     /// Applies a transform immediately and surfaces any failure through the status line.
